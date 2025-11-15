@@ -3851,6 +3851,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             } else if (AstTypedef* const defp = VN_CAST(foundp->nodep(), Typedef)) {
                 // EOM
+                if (m_ds.m_dotPos != DP_FINAL) {
+                    UINFO(3, indent() << "iface typedef non-final segment node=" << nodep
+                                       << " dotPos=" << m_ds.m_dotPos
+                                       << " dotText=" << m_ds.m_dotText);
+                }
                 if(m_ds.m_dotPos == DP_FINAL) {
                   UINFO(3, indent() << "iface type " << nodep << " " << "Typedef " << nodep->name() << " " << m_ds.m_dotPos);
 
