@@ -2518,6 +2518,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
     //  *::user4()              -> See LinkDotState
     const VNUser3InUse m_inuser3;
 
+    // DATA
+    static std::unordered_map<AstRefDType*, const AstCell*> s_ifaceTypedefContext;
+
     // TYPES
     enum DotPosition : uint8_t {
         // Must match ascii() method below
@@ -2683,6 +2686,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
     void checkNoDot(AstNode* nodep) {
         if (VL_UNLIKELY(m_ds.m_dotPos != DP_NONE)) {
             UINFO(9, indent() << "ds=" << m_ds.ascii());
+
+            if (m_ds.m_dotPos == DP_FINAL && (VN_IS(nodep, NodeDType)) && nodep->fileline()->language() >= V3LangCode::L1800_2023) {
+               UINFO(3, indent() << "iface param type " << nodep << " " << "ParamTypeDType " << nodep->name() << " " << m_ds.m_dotPos);
+               return;
+            }
+
             nodep->v3error("Syntax error: Not expecting "
                            << nodep->type() << " under a " << nodep->backp()->type()
                            << " in dotted expression\n"
@@ -3407,7 +3416,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
         iterateChildren(nodep);
     }
     void visit(AstParseRef* nodep) override {
-        if (nodep->user3SetOnce()) return;
+        if (nodep->user3SetOnce()) {
+            if (nodep->user2() && m_statep->forParamed()) {
+                UINFO(3, indent() << "parseRef revisit user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
+                nodep->user2(false);
+
+                UINFO(3, indent() << "parseRef revisit typedef node=" << nodep << " name=" << nodep->name() << " step=" << m_statep->stepNumber());
+
+            } else {
+                UINFO(3, indent() << "parseRef skip user3 user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
+                return;
+            }
+        }
         LINKDOT_VISIT_START();
         UINFO(9, indent() << "visit " << nodep);
         UINFO(9, indent() << m_ds.ascii());
@@ -3830,27 +3850,177 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                 }
             } else if (AstTypedef* const defp = VN_CAST(foundp->nodep(), Typedef)) {
-                ok = m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE;
-                if (ok) {
-                    AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
-                    // Don't check if typedef is to a <type T>::<reference> as might not be
-                    // resolved yet
-                    if (m_ds.m_dotPos == DP_NONE) checkDeclOrder(nodep, defp);
-                    refp->typedefp(defp);
-                    if (VN_IS(nodep->backp(), SelExtract)) {
-                        m_packedArrayDtp = refp;
-                    } else {
-                        replaceWithCheckBreak(nodep, refp);
-                        VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                    }
+                // EOM
+                if(m_ds.m_dotPos == DP_FINAL) {
+                  UINFO(3, indent() << "iface type " << nodep << " " << "Typedef " << nodep->name() << " " << m_ds.m_dotPos);
+
+                  AstVar* enclosingVarp = nullptr;
+                  for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+                      if (AstVar* const varp = VN_CAST(curp, Var)) { enclosingVarp = varp; break; }
+                      if (VN_IS(curp, NodeModule)) break;
+                  }
+                  UASSERT_OBJ(enclosingVarp, nodep,
+                              "Expected localparam owner for interface typedef reference");
+
+                  UINFO(3, indent() << "iface typedef LHS "
+                     << enclosingVarp << " " << enclosingVarp->prettyName()
+                     << " dtype=" << enclosingVarp->dtypep());
+
+                  AstNodeDType* const subTypep = defp->subDTypep();
+                  UASSERT_OBJ(subTypep, defp, "Typedef missing required child dtype");
+
+                  AstRefDType* const typedefRefp = new AstRefDType{nodep->fileline(), nodep->name()};
+                  if (m_statep->forPrimary()) {
+                    nodep->user2(true);
+                    UINFO(3, indent() << "iface typedef mark revisit node=" << nodep << " step=" << m_statep->stepNumber());
+                  }
+                  UINFO(3, indent() << "iface typedef dtype ref " << typedefRefp << " unresolved name=" << nodep->name());
+                  UINFO(3, indent() << "iface typedef original def " << defp);
+
+                  const AstCell* contextCellp = nullptr;
+                  if (m_cellp) {
+                      contextCellp = m_cellp;
+                  } else if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                      contextCellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+                  }
+                  if (!contextCellp) {
+                      if (AstIfaceRefDType* const ifaceRefp
+                              = LinkDotState::ifaceRefFromArray(enclosingVarp->childDTypep())) {
+                          contextCellp = ifaceRefp->cellp();
+                      }
+                  }
+                  if (contextCellp) {
+                      typedefRefp->user2p(const_cast<AstCell*>(contextCellp));
+                      s_ifaceTypedefContext[typedefRefp] = contextCellp;
+                      UINFO(3, indent() << "iface typedef remember cell=" << contextCellp
+                                         << " mod=" << (contextCellp->modp() ? contextCellp->modp()
+                                                                              : nullptr));
+                  }
+
+                  // Create new param dtype node for localparam.  it references the typedef dtype via the new AstRefDType.
+                  AstParamTypeDType* const newTypep = new AstParamTypeDType{enclosingVarp->fileline(), enclosingVarp->varType(),VFwdType::NONE, enclosingVarp->name(), VFlagChildDType{}, typedefRefp};
+                  UINFO(3, indent() << "iface typedef new paramtype " << newTypep << " name=" << newTypep->name() << " child=" << typedefRefp);
+
+                  // get the current symbol table entry
+                  VSymEnt* const symEntp = enclosingVarp->user1u().toSymEnt();
+                  UASSERT_OBJ(symEntp, enclosingVarp,
+                              "Localparam missing symbol table entry for interface typedef");
+                  VSymEnt* const parentSymp = symEntp->parentp();
+                  UASSERT_OBJ(parentSymp, nodep, "Symbol entry without parent scope");
+                  UINFO(3, indent() << "iface typedef sym " << symEntp
+                   << " node=" << (symEntp ? symEntp->nodep() : nullptr));
+                  UINFO(3, indent() << "iface typedef parent " << parentSymp
+                   << " node=" << (parentSymp ? parentSymp->nodep() : nullptr)
+                   << " typedef=" << typedefRefp->typedefp());
+
+                  // create new symbol table entry for localparam
+                  VSymEnt* const newSymEntp = new VSymEnt{m_statep->symsp(), newTypep};
+                  newSymEntp->parentp(parentSymp);
+                  newSymEntp->fallbackp(symEntp->fallbackp());
+                  newSymEntp->classOrPackagep(symEntp->classOrPackagep());
+                  newSymEntp->exported(symEntp->exported());
+                  newSymEntp->imported(symEntp->imported());
+                  UINFO(3, indent() << "iface typedef new syment " << newSymEntp << " name=" << enclosingVarp->name() << " parent=" << parentSymp);
+
+                  // set the new symbol table entry
+                  newTypep->user1p(newSymEntp);
+                  parentSymp->reinsert(enclosingVarp->name(), newSymEntp);
+                  UINFO(3, indent() << "iface typedef reinsert sym name=" << enclosingVarp->name() << " parent=" << parentSymp << " newSym=" << newSymEntp);
+
+                  // do the node swap in the tree
+                  enclosingVarp->replaceWith(newTypep);
+                  UINFO(3, indent() << "iface typedef replace var node=" << enclosingVarp << " -> type=" << newTypep);
+                  VL_DO_DANGLING(pushDeletep(enclosingVarp), enclosingVarp);
+
+                  ok = true;
+
+                  // clear the buffer so nothing stale.
+                  m_ds.m_dotText.clear();
                 }
+                else {
+                  ok = m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE;
+                  if (ok) {
+                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
+                     // Don't check if typedef is to a <type T>::<reference> as might not be
+                     // resolved yet
+                     if (m_ds.m_dotPos == DP_NONE) checkDeclOrder(nodep, defp);
+                     refp->typedefp(defp);
+                     if (VN_IS(nodep->backp(), SelExtract)) {
+                           m_packedArrayDtp = refp;
+                     } else {
+                           replaceWithCheckBreak(nodep, refp);
+                           VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                     }
+                  }
+               }
             } else if (AstParamTypeDType* const defp = VN_CAST(foundp->nodep(), ParamTypeDType)) {
-                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE);
+                // EOM
+                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE || m_ds.m_dotPos == DP_FINAL);
                 if (ok) {
+
+                  if(m_ds.m_dotPos == DP_FINAL) {
+                    UINFO(3, indent() << "iface param type " << nodep << " " << "ParamTypeDType " << nodep->name() << " " << m_ds.m_dotPos);
+
+                     // this is a bit of a hack to work around the parser (for now).  Walk back up the tree to find the AstVar (LHS) and we will ultimately replace it with a data type Ast node.
+                     AstVar* enclosingVarp = nullptr;
+                     for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+                        AstVar* const varp = VN_CAST(curp, Var);
+                        if (varp) {
+                           enclosingVarp = varp;
+                           break;
+                        }
+                        if (VN_IS(curp, NodeModule)) break;  // hit module boundary, stop searching
+                     }
+
+                     UINFO(3, indent() << "iface param LHS "
+                     << enclosingVarp << " " << enclosingVarp->prettyName()
+                     << " dtype=" << enclosingVarp->dtypep());
+
+                     // Exit if we didnt find a Var node
+                     UASSERT_OBJ(enclosingVarp, nodep, "Expected localparam owner for interface type reference");
+
+                     // ok, if the AstParamTypeDType doesnt have a child then isnt that an error?
+                     UASSERT_OBJ(defp->getChildDTypep(), defp, "ParamTypeDType missing required child dtype");
+
+                     AstNodeDType* const childClonep = defp->getChildDTypep()->cloneTree(false);
+
+                     AstParamTypeDType* const newTypep = new AstParamTypeDType{enclosingVarp->fileline(),
+                            enclosingVarp->varType(),
+                            defp->fwdType(),
+                            enclosingVarp->name(),
+                            VFlagChildDType{},
+                            childClonep};
+
+                    // we also have to update the Symbol Table entry for the type.  So lets get the Symbol Table entry.
+                    VSymEnt* symEntp = enclosingVarp->user1u().toSymEnt();
+                    UINFO(3, indent() << "iface param sym " << symEntp << " node=" << (symEntp ? symEntp->nodep() : nullptr));
+
+                    // note, in the future the AstVar that we are replacing with the new type will be deleted, so if we dont do this and there is a reference to the AstVar in the symbol table, it will be pointing to a deleted node (garbage).
+                    VSymEnt* const parentSymp = symEntp->parentp();
+                    UASSERT_OBJ(parentSymp, nodep, "Symbol entry without parent scope");
+
+                    VSymEnt* const newSymEntp = new VSymEnt{m_statep->symsp(), newTypep};
+                    newSymEntp->parentp(parentSymp);
+                    newSymEntp->fallbackp(symEntp->fallbackp());
+                    newSymEntp->classOrPackagep(symEntp->classOrPackagep());
+                    newSymEntp->exported(symEntp->exported());
+                    newSymEntp->imported(symEntp->imported());
+
+                    newTypep->user1p(newSymEntp);
+                    parentSymp->reinsert(enclosingVarp->name(), newSymEntp);
+
+                    // swap the node in the tree with the new type
+                    enclosingVarp->replaceWith(newTypep);
+
+                    // schedule for deletino
+                    VL_DO_DANGLING(pushDeletep(enclosingVarp), enclosingVarp);
+                  }
+                  else {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
                     replaceWithCheckBreak(nodep, refp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                  }
                 }
             }
             if (!ok) {
@@ -4958,6 +5128,52 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
         if (nodep->typeofp()) {  // Really is a typeof not a reference
         } else if (!nodep->typedefp() && !nodep->subDTypep()) {
+            // EOM
+            const AstCell* contextCellp = nullptr;
+            if (m_cellp) {
+                contextCellp = m_cellp;
+            } else if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                contextCellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+            } else if (AstNode* const storedp = nodep->user2p()) {
+                contextCellp = VN_CAST(storedp, Cell);
+            }
+
+            // EOM
+            if (m_statep->forPrimary() && contextCellp) {
+                UINFO(3, indent() << "iface typedef defer primary node=" << nodep
+                                   << " name=" << nodep->name() << " cell=" << contextCellp);
+                nodep->user3(0);
+                s_ifaceTypedefContext[nodep] = contextCellp;
+                return;
+            }
+
+            if (!contextCellp) {
+                const auto it = s_ifaceTypedefContext.find(nodep);
+                if (it != s_ifaceTypedefContext.end()) contextCellp = it->second;
+            }
+
+            AstTypedef* specializedTypedefp = nullptr;
+            VSymEnt* specializedSymp = nullptr;
+            if (m_statep->forParamed() && contextCellp) {
+                AstNodeModule* const instModp = const_cast<AstCell*>(contextCellp)->modp();
+                UINFO(4, indent() << "iface typedef paramed context cell=" << contextCellp
+                                   << " mod=" << instModp);
+                if (AstIface* const instIfacep = VN_CAST(instModp, Iface)) {
+                    for (AstNode* stmtp = instIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstTypedef* const tdefp = VN_CAST(stmtp, Typedef)) {
+                            if (tdefp->name() == nodep->name()) {
+                                specializedTypedefp = tdefp;
+                                if (LinkDotState::existsNodeSym(specializedTypedefp)) {
+                                    specializedSymp
+                                        = LinkDotState::getNodeSym(specializedTypedefp);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             const VSymEnt* foundp;
             if (nodep->classOrPackagep()) {
                 foundp = m_statep->getNodeSym(nodep->classOrPackagep())->findIdFlat(nodep->name());
@@ -4966,7 +5182,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else {
                 foundp = m_curSymp->findIdFlat(nodep->name());
             }
-            if (AstTypedef* const defp = foundp ? VN_CAST(foundp->nodep(), Typedef) : nullptr) {
+
+            if (specializedTypedefp) {
+                nodep->typedefp(specializedTypedefp);
+                if (specializedSymp) nodep->classOrPackagep(specializedSymp->classOrPackagep());
+                // EOM
+                s_ifaceTypedefContext.erase(nodep);
+                UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
+                                   << " -> " << specializedTypedefp);
+            } else if (AstTypedef* const defp = foundp ? VN_CAST(foundp->nodep(), Typedef) : nullptr) {
                 // Don't check if typedef is to a <type T>::<reference> as might not be resolved
                 // yet
                 if (!nodep->classOrPackagep() && !defp->isUnderClass())
@@ -5008,6 +5232,16 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 }
             }
         }
+         // EOM
+         if (nodep->typedefp()) {
+            UINFO(3, indent() << "ref dtype typedef node=" << nodep
+                              << " name=" << nodep->name()
+                              << " typedef=" << nodep->typedefp()
+                              << " step=" << m_statep->stepNumber());
+            if (nodep->classOrPackagep()) {
+               UINFO(4, indent() << "ref dtype typedef class/package " << nodep);
+            }
+         }
         iterateChildren(nodep);
     }
     void visit(AstDpiExport* nodep) override {
@@ -5146,6 +5380,7 @@ public:
     LinkDotResolveVisitor(AstNetlist* rootp, LinkDotState* statep)
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
+        UINFO(3, "LinkDotResolveVisitor running step=" << m_statep->stepNumber());
         iterate(rootp);
         std::map<std::string, AstNodeModule*> modulesToRevisit = std::move(m_modulesToRevisit);
         m_lastDeferredp = nullptr;
@@ -5157,6 +5392,8 @@ public:
     }
     ~LinkDotResolveVisitor() override = default;
 };
+
+std::unordered_map<AstRefDType*, const AstCell*> LinkDotResolveVisitor::s_ifaceTypedefContext;
 
 //######################################################################
 // Link class functions
