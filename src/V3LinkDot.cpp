@@ -71,11 +71,56 @@
 #include "V3Parse.h"
 #include "V3Randomize.h"
 #include "V3String.h"
+#include "V3Const.h"
 #include "V3SymTable.h"
 
 #include <vector>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
+
+namespace {
+
+class ParamRefConstifier final : public VNVisitor {
+public:
+    void run(AstNode* nodep) { iterate(nodep); }
+
+private:
+    void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+    void visit(AstVarRef* nodep) override {
+        AstVar* const varp = nodep->varp();
+        if (!varp) return;
+        if (!varp->isParam()) return;
+        if (!varp->valuep()) return;
+        UINFO(4, "param ref constify var=" << varp << " name=" << varp->name());
+        AstNode* const valueClonep = varp->valuep()->cloneTree(false);
+        AstNodeExpr* const valueExprp = VN_CAST(valueClonep, NodeExpr);
+        if (!valueExprp) {
+            if (valueClonep) valueClonep->deleteTree();
+            return;
+        }
+        UINFO(4, "param ref constify replacing with=" << valueExprp);
+        nodep->replaceWith(valueExprp);
+        VL_DO_DANGLING(pushDeletep(nodep), nodep);
+    }
+};
+
+inline AstNodeModule* resolveLiveModule(AstNodeModule* modp) {
+    while (modp && modp->dead()) {
+        AstNodeModule* const clonep = modp->clonep();
+        if (!clonep || clonep == modp) break;
+        modp = clonep;
+    }
+    return modp;
+}
+
+inline void substituteParamRefsWithValues(AstNode* nodep) {
+    if (!nodep) return;
+    ParamRefConstifier substituter;
+    substituter.run(nodep);
+}
+
+}  // namespace
 
 // ######################################################################
 //  Matcher classes (for suggestion matching)
@@ -861,6 +906,48 @@ public:
 };
 
 LinkDotState* LinkDotState::s_errorThisp = nullptr;
+
+//======================================================================
+
+inline const AstCell* resolveLiveCell(const AstCell* cellp) {
+    if (!cellp) return nullptr;
+    const AstCell* current = cellp;
+    int depth = 0;
+    while (current) {
+        AstNodeModule* const modp = current->modp();
+        AstNodeModule* const liveModp = resolveLiveModule(modp);
+        const AstCell* const clonep = (liveModp == modp) ? nullptr : current->clonep();
+        UINFO(3, "resolveLiveCell stage1 chase depth=" << depth << " cell=" << current
+                                                        << " mod=" << modp
+                                                        << " liveMod=" << liveModp
+                                                        << " clone=" << clonep);
+        if (!clonep || clonep == current || liveModp == modp) break;
+        current = clonep;
+        ++depth;
+    }
+    const AstCell* const chasedResult = current;
+    if (chasedResult && chasedResult->modp() && chasedResult->modp()->dead()
+        && LinkDotState::existsNodeSym(const_cast<AstCell*>(chasedResult))) {
+        VSymEnt* const symp = LinkDotState::getNodeSym(const_cast<AstCell*>(chasedResult));
+        VSymEnt* const parentSymp = symp ? symp->parentp() : nullptr;
+        AstCell* refreshedCellp = nullptr;
+        if (parentSymp) {
+            if (VSymEnt* const refreshedSymp = parentSymp->findIdFlat(chasedResult->name())) {
+                refreshedCellp = VN_CAST(refreshedSymp->nodep(), Cell);
+            }
+        }
+        UINFO(3, "resolveLiveCell stage2 remap chased=" << chasedResult
+                                                          << " refreshed=" << refreshedCellp);
+        if (refreshedCellp && refreshedCellp != chasedResult) {
+            UINFO(3, "resolveLiveCell stage3 update cell=" << cellp << " -> " << refreshedCellp);
+            return resolveLiveCell(refreshedCellp);
+        }
+    }
+    if (chasedResult != cellp) {
+        UINFO(3, "resolveLiveCell resolved cell " << cellp << " -> " << chasedResult);
+    }
+    return chasedResult;
+}
 
 //======================================================================
 
@@ -2519,7 +2606,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
     const VNUser3InUse m_inuser3;
 
     // DATA
-    static std::unordered_map<AstRefDType*, const AstCell*> s_ifaceTypedefContext;
+    struct IfaceTypedefContextEntry {
+        const AstCell* cellp = nullptr;
+        VSymEnt* symp = nullptr;
+    };
+    static std::unordered_map<AstRefDType*, IfaceTypedefContextEntry> s_ifaceTypedefContext;
 
     // TYPES
     enum DotPosition : uint8_t {
@@ -3098,6 +3189,231 @@ class LinkDotResolveVisitor final : public VNVisitor {
         VL_RESTORER(m_pinSymp);
         {
             m_cellp = nodep;
+            if (m_statep->forParamed() && VN_IS(nodep->modp(), Iface)) {
+                struct DeferredTypedefEntry {
+                    AstRefDType* typedefRefp;
+                    const AstCell* cachedCellp;
+                    VSymEnt* cachedSymp;
+                    AstCell* storedCellp;
+                    const AstCell* liveCachedCellp;
+                    const AstCell* liveStoredCellp;
+                    VSymEnt* liveCachedSymp;
+                    const AstCell* recoveredCellp;
+                    VSymEnt* recoveredSymp;
+                };
+                std::vector<DeferredTypedefEntry> deferredEntries;
+                deferredEntries.reserve(s_ifaceTypedefContext.size());
+                bool reported = false;
+                const auto updateCacheEntry = [&](AstRefDType* key, const IfaceTypedefContextEntry& value) {
+                    const auto it = s_ifaceTypedefContext.find(key);
+                    if (it != s_ifaceTypedefContext.end()) {
+                        it->second = value;
+                    } else {
+                        s_ifaceTypedefContext.emplace(key, value);
+                    }
+                };
+                for (const auto& entry : s_ifaceTypedefContext) {
+                    AstRefDType* const typedefRefp = entry.first;
+                    const IfaceTypedefContextEntry& cachedEntry = entry.second;
+                    const AstCell* const cachedCellp = cachedEntry.cellp;
+                    VSymEnt* const cachedSymp = cachedEntry.symp;
+                    AstCell* const storedCellp = VN_CAST(typedefRefp->user2p(), Cell);
+                    if (!reported) {
+                        reported = true;
+                        UINFO(3, indent() << "iface typedef paramed entering cell=" << nodep
+                                           << " mod=" << nodep->modp());
+                    }
+                    UINFO(3, indent() << "iface typedef stage1 lookup ref=" << typedefRefp
+                                       << " cached=" << cachedCellp
+                                       << " cachedSym=" << cachedSymp
+                                       << " stored=" << storedCellp);
+                     if (cachedSymp) {
+                        UINFO(3, indent() << "iface typedef stage1 cached sym parent=" << cachedSymp->parentp()
+                                          << " fallback=" << cachedSymp->fallbackp()
+                                          << " node=" << cachedSymp->nodep());
+                     }
+                    const AstCell* const liveCachedCellp
+                        = cachedCellp ? resolveLiveCell(cachedCellp) : nullptr;
+                    const AstCell* const liveStoredCellp
+                        = storedCellp ? resolveLiveCell(storedCellp) : nullptr;
+                    VSymEnt* liveCachedSymp = cachedSymp;
+                    UINFO(3, indent() << "iface typedef stage1 live cached cell="
+                                       << liveCachedCellp << " stored=" << liveStoredCellp
+                                       << " cachedSym=" << liveCachedSymp);
+                    AstNode* const cachedSymNodeStage1
+                        = liveCachedSymp ? liveCachedSymp->nodep() : nullptr;
+                    const bool cachedSymStale
+                        = liveCachedSymp
+                          && (cachedSymNodeStage1 == nullptr
+                              || cachedSymNodeStage1 == reinterpret_cast<AstNode*>(1));
+                    if (cachedSymStale) {
+                        UINFO(3, indent() << "iface typedef stage1 cached sym stale node="
+                                           << cachedSymNodeStage1 << ", refreshing");
+                        const auto cacheIt = s_ifaceTypedefContext.find(typedefRefp);
+                        const AstCell* contextCellp = cachedCellp;
+                        if (cacheIt != s_ifaceTypedefContext.end()) {
+                            UINFO(3, indent() << "iface typedef stage1 cached entry cell="
+                                               << cacheIt->second.cellp << " sym="
+                                               << cacheIt->second.symp);
+                            contextCellp = cacheIt->second.cellp ? cacheIt->second.cellp : contextCellp;
+                        }
+                        UINFO(3, indent() << "iface typedef stage1 refresh context cell="
+                                           << contextCellp);
+                        const AstCell* const liveContextCellp = resolveLiveCell(contextCellp);
+                        UINFO(3, indent() << "iface typedef stage1 live context cell="
+                                           << liveContextCellp);
+                        if (liveContextCellp && LinkDotState::existsNodeSym(
+                                                   const_cast<AstCell*>(liveContextCellp))) {
+                            liveCachedSymp
+                                = LinkDotState::getNodeSym(const_cast<AstCell*>(liveContextCellp));
+                            const bool specializedContext
+                                = liveContextCellp && liveContextCellp != cachedCellp;
+                            UINFO(3, indent()
+                                           << "iface typedef stage1 refreshed cached sym="
+                                           << liveCachedSymp << " for cell=" << liveContextCellp);
+                            if (specializedContext) {
+                                UINFO(3, indent()
+                                               << "iface typedef stage1 specialized context cell="
+                                               << liveContextCellp << " from cached="
+                                               << cachedCellp);
+                            }
+                            updateCacheEntry(typedefRefp, {liveContextCellp, liveCachedSymp});
+                            UINFO(3, indent() << "iface typedef stage1 cache updated (refresh) cell="
+                                               << liveContextCellp << " sym=" << liveCachedSymp);
+                        } else {
+                            UINFO(3, indent()
+                                           << "iface typedef stage1 refresh failed liveCell="
+                                           << liveContextCellp << " symExists="
+                                           << (liveContextCellp && LinkDotState::existsNodeSym(
+                                                   const_cast<AstCell*>(liveContextCellp))));
+                            const AstCell* const clearedCellp
+                                = liveContextCellp ? liveContextCellp : contextCellp;
+                            updateCacheEntry(typedefRefp, {clearedCellp, nullptr});
+                            UINFO(3, indent()
+                                           << "iface typedef stage1 cache cleared pending specialized cell="
+                                           << clearedCellp);
+                            liveCachedSymp = nullptr;
+                        }
+                    }
+                    if (!liveCachedSymp && liveCachedCellp
+                        && LinkDotState::existsNodeSym(const_cast<AstCell*>(liveCachedCellp))) {
+                        liveCachedSymp
+                            = LinkDotState::getNodeSym(const_cast<AstCell*>(liveCachedCellp));
+                        UINFO(3, indent() << "iface typedef stage1 recovered cached sym from live cell="
+                                           << liveCachedSymp << " cell=" << liveCachedCellp);
+                        updateCacheEntry(typedefRefp, {liveCachedCellp, liveCachedSymp});
+                        UINFO(3, indent() << "iface typedef stage1 cache updated (fallback) cell="
+                                           << liveCachedCellp << " sym=" << liveCachedSymp);
+                    }
+                    const AstCell* recoveredCellp = liveCachedCellp;
+                    VSymEnt* recoveredSymp = liveCachedSymp;
+                    if (!recoveredSymp && recoveredCellp && nodep && recoveredCellp != nodep) {
+                        const AstNodeModule* const cachedModp = recoveredCellp->modp();
+                        const AstNodeModule* const visitingModp = nodep->modp();
+                        const bool cachedModDead = cachedModp && cachedModp->dead();
+                        const bool sameCellName = nodep->name() == recoveredCellp->name();
+                        const bool sameOrigModName
+                            = cachedModp && visitingModp
+                              && cachedModp->origName() == visitingModp->origName();
+                        if (cachedModDead && sameCellName && sameOrigModName
+                            && visitingModp && !visitingModp->dead()) {
+                            VSymEnt* specializedSymp = m_curSymp;
+                            if (!specializedSymp
+                                && LinkDotState::existsNodeSym(nodep)) {
+                                specializedSymp = LinkDotState::getNodeSym(nodep);
+                            }
+                            recoveredCellp = nodep;
+                            recoveredSymp = specializedSymp;
+                            if (specializedSymp) liveCachedSymp = specializedSymp;
+                            updateCacheEntry(typedefRefp,
+                                             {nodep, specializedSymp ? specializedSymp : nullptr});
+                            UINFO(3, indent()
+                                           << "iface typedef stage1 adopted specialized cell="
+                                           << nodep << " sym=" << specializedSymp
+                                           << " from cached dead cell=" << cachedCellp);
+                        }
+                    }
+                    AstNode* const cachedSymNodep
+                        = cachedSymp ? cachedSymp->nodep() : nullptr;
+                    const bool cachedSymUsable
+                        = cachedSymNodep && cachedSymNodep != reinterpret_cast<AstNode*>(1);
+                    if ((recoveredCellp == nullptr
+                         || (recoveredCellp->modp() && recoveredCellp->modp()->dead()))
+                        && cachedSymUsable) {
+                        if (const AstCell* const symCellp = VN_CAST(cachedSymNodep, Cell)) {
+                            UINFO(3, indent() << "iface typedef stage1 recover via sym ref="
+                                               << cachedSymp << " cell=" << symCellp);
+                            const AstCell* const liveSymCellp = resolveLiveCell(symCellp);
+                            if (liveSymCellp) {
+                                recoveredCellp = liveSymCellp;
+                                if (LinkDotState::existsNodeSym(
+                                        const_cast<AstCell*>(recoveredCellp))) {
+                                    recoveredSymp = LinkDotState::getNodeSym(
+                                        const_cast<AstCell*>(recoveredCellp));
+                                }
+                                UINFO(3, indent()
+                                               << "iface typedef stage1 recover resolved cell="
+                                               << recoveredCellp << " sym=" << recoveredSymp);
+                            } else {
+                                UINFO(3, indent()
+                                               << "iface typedef stage1 recover sym target unresolved" << symCellp);
+                            }
+                        } else {
+                            UINFO(3, indent() << "iface typedef stage1 recover sym node not cell"
+                                               << cachedSymNodep);
+                        }
+                    } else if ((recoveredCellp == nullptr
+                                || (recoveredCellp->modp() && recoveredCellp->modp()->dead()))
+                               && cachedSymp && !cachedSymUsable) {
+                        UINFO(3, indent()
+                                       << "iface typedef stage1 recover skipping stale sym="
+                                       << cachedSymp << " node=" << cachedSymNodep);
+                    }
+                    deferredEntries.push_back({typedefRefp, cachedCellp, cachedSymp, storedCellp,
+                                               liveCachedCellp, liveStoredCellp, liveCachedSymp,
+                                               recoveredCellp, recoveredSymp});
+                }
+                for (const DeferredTypedefEntry& entry : deferredEntries) {
+                    const bool cachedMatches = entry.liveCachedCellp == nodep;
+                    const bool storedMatches = entry.liveStoredCellp == nodep;
+                    const bool recoveredMatches = entry.recoveredCellp == nodep;
+                    UINFO(3, indent() << "iface typedef stage2 compare ref=" << entry.typedefRefp
+                                       << " liveCached=" << entry.liveCachedCellp
+                                       << (cachedMatches ? " (match)" : " (diff)")
+                                       << " liveStored=" << entry.liveStoredCellp
+                                       << (storedMatches ? " (match)" : " (diff)")
+                                       << " recovered=" << entry.recoveredCellp
+                                       << (recoveredMatches ? " (match-recovered)" : " (diff)"));
+                    if (!cachedMatches && !storedMatches && recoveredMatches) {
+                        UINFO(3, indent() << "iface typedef stage2 recovered match sym="
+                                           << entry.recoveredSymp);
+                    }
+                }
+                for (const DeferredTypedefEntry& entry : deferredEntries) {
+                    const bool cachedMatches = entry.liveCachedCellp == nodep;
+                    const bool storedMatches = entry.liveStoredCellp == nodep;
+                    const bool recoveredMatches = entry.recoveredCellp == nodep;
+                    const bool matchesNode = cachedMatches || storedMatches || recoveredMatches;
+                    const bool staleCached = entry.cachedCellp && entry.cachedCellp != nodep;
+                    const bool staleStored = entry.storedCellp && entry.storedCellp != nodep;
+                    const bool staleRecovered = entry.recoveredCellp && entry.recoveredCellp != nodep;
+                    const bool staleUser2 = entry.typedefRefp->user2p() != nodep;
+                    if (matchesNode && (staleCached || staleStored || staleRecovered || staleUser2)) {
+                        const AstCell* const targetCellp
+                            = recoveredMatches ? entry.recoveredCellp
+                                               : (cachedMatches ? entry.liveCachedCellp
+                                                                : entry.liveStoredCellp);
+                        VSymEnt* const targetSymp
+                            = recoveredMatches ? entry.recoveredSymp : entry.liveCachedSymp;
+                        UINFO(3, indent() << "iface typedef stage3 update ref="
+                                           << entry.typedefRefp << " -> cell=" << targetCellp
+                                           << " sym=" << targetSymp);
+                        entry.typedefRefp->user2p(const_cast<AstCell*>(targetCellp));
+                        updateCacheEntry(entry.typedefRefp,
+                                         {targetCellp, targetSymp ? targetSymp : m_curSymp});
+                    }
+                }
+            }
             if (VN_IS(nodep->modp(), NotFoundModule)) {
                 // Prevent warnings about missing pin connects
                 if (nodep->pinsp()) nodep->pinsp()->unlinkFrBackWithNext()->deleteTree();
@@ -3896,14 +4212,27 @@ class LinkDotResolveVisitor final : public VNVisitor {
                   }
                   if (contextCellp) {
                       typedefRefp->user2p(const_cast<AstCell*>(contextCellp));
-                      s_ifaceTypedefContext[typedefRefp] = contextCellp;
+                      VSymEnt* const contextSymp
+                          = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
+                                ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
+                                : nullptr;
+                      s_ifaceTypedefContext[typedefRefp] = {contextCellp, contextSymp};
                       UINFO(3, indent() << "iface typedef remember cell=" << contextCellp
                                          << " mod=" << (contextCellp->modp() ? contextCellp->modp()
-                                                                              : nullptr));
+                                                                              : nullptr)
+                                         << " sym=" << contextSymp);
+                      UINFO(3, indent() << "iface typedef cache init cell=" << contextCellp
+                                         << " sym=" << contextSymp);
                   }
 
                   // Create new param dtype node for localparam.  it references the typedef dtype via the new AstRefDType.
-                  AstParamTypeDType* const newTypep = new AstParamTypeDType{enclosingVarp->fileline(), enclosingVarp->varType(),VFwdType::NONE, enclosingVarp->name(), VFlagChildDType{}, typedefRefp};
+                  AstParamTypeDType* const newTypep = new AstParamTypeDType{
+                     enclosingVarp->fileline(),
+                     enclosingVarp->varType(),
+                     VFwdType::NONE,
+                     enclosingVarp->name(),
+                     VFlagChildDType{},
+                     typedefRefp};
                   UINFO(3, indent() << "iface typedef new paramtype " << newTypep << " name=" << newTypep->name() << " child=" << typedefRefp);
 
                   // get the current symbol table entry
@@ -5147,31 +5476,103 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (m_statep->forPrimary() && contextCellp) {
                 UINFO(3, indent() << "iface typedef defer primary node=" << nodep
                                    << " name=" << nodep->name() << " cell=" << contextCellp);
+                nodep->user2p(const_cast<AstCell*>(contextCellp));
                 nodep->user3(0);
-                s_ifaceTypedefContext[nodep] = contextCellp;
+                VSymEnt* const contextSymp
+                = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
+                      ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
+                      : nullptr;
+            s_ifaceTypedefContext[nodep] = {contextCellp, contextSymp};
                 return;
             }
 
             if (!contextCellp) {
                 const auto it = s_ifaceTypedefContext.find(nodep);
-                if (it != s_ifaceTypedefContext.end()) contextCellp = it->second;
+                if (it != s_ifaceTypedefContext.end()) {
+                    contextCellp = it->second.cellp;
+                }
             }
-
+            if (!contextCellp) {
+                if (AstNode* const storedp = nodep->user2p()) {
+                    contextCellp = VN_CAST(storedp, Cell);
+                }
+            }
+            if (contextCellp) {
+                const AstCell* const liveCellp = resolveLiveCell(contextCellp);
+                if (liveCellp != contextCellp) {
+                    UINFO(3, indent() << "iface typedef context cell refresh dead cell="
+                                       << contextCellp << " -> " << liveCellp);
+                    contextCellp = liveCellp;
+                    nodep->user2p(const_cast<AstCell*>(contextCellp));
+                    VSymEnt* const contextSymp
+                        = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
+                              ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
+                              : nullptr;
+                    s_ifaceTypedefContext[nodep] = {contextCellp, contextSymp};
+                }
+            }
+            if (contextCellp && contextCellp->modp() && contextCellp->modp()->dead()
+                && LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))) {
+                VSymEnt* const symp = LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp));
+                if (symp && symp->parentp()) {
+                    if (VSymEnt* const refreshedSymp
+                        = symp->parentp()->findIdFlat(contextCellp->name())) {
+                        if (const AstCell* const refreshedCellp
+                            = VN_CAST(refreshedSymp->nodep(), Cell)) {
+                            UINFO(3, indent() << "iface typedef context cell sym remap old="
+                                               << contextCellp << " -> " << refreshedCellp);
+                            contextCellp = refreshedCellp;
+                            nodep->user2p(const_cast<AstCell*>(contextCellp));
+                            VSymEnt* const refreshedSym
+                                = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
+                                      ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
+                                      : nullptr;
+                            s_ifaceTypedefContext[nodep] = {contextCellp, refreshedSym};
+                        }
+                    }
+                }
+            }
+            // EOM debug context clone
+            if (contextCellp) {
+                if (AstNode* const cloneNodep = contextCellp->clonep()) {
+                    if (const AstCell* const cloneCellp = VN_CAST(cloneNodep, Cell)) {
+                        UINFO(3, indent() << "iface typedef context cell clone=" << cloneCellp
+                                           << " mod=" << cloneCellp->modp()
+                                           << " name="
+                                           << (cloneCellp->modp() ? cloneCellp->modp()->name() : "<null>")
+                                           << " dead="
+                                           << (cloneCellp->modp() && cloneCellp->modp()->dead()));
+                    }
+                }
+            }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
             if (m_statep->forParamed() && contextCellp) {
-                AstNodeModule* const instModp = const_cast<AstCell*>(contextCellp)->modp();
-                UINFO(4, indent() << "iface typedef paramed context cell=" << contextCellp
-                                   << " mod=" << instModp);
+                AstNodeModule* instModp = const_cast<AstCell*>(contextCellp)->modp();
+                instModp = resolveLiveModule(instModp);
+                // EOM debug module clone
+                AstNodeModule* const instClonep = instModp ? instModp->clonep() : nullptr;
+                UINFO(3, indent() << "iface typedef paramed context cell=" << contextCellp
+                                   << " mod=" << instModp
+                                   << " name=" << (instModp ? instModp->name() : "<null>")
+                                   << " dead=" << (instModp && instModp->dead())
+                                   << " clone=" << instClonep
+                                   << " cloneDead=" << (instClonep && instClonep->dead()));
                 if (AstIface* const instIfacep = VN_CAST(instModp, Iface)) {
                     for (AstNode* stmtp = instIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                         if (AstTypedef* const tdefp = VN_CAST(stmtp, Typedef)) {
+                            UINFO(3, indent() << "iface typedef inspect typedef=" << tdefp
+                                               << " name=" << tdefp->name()
+                                               << " decl=" << tdefp->fileline()->ascii());
                             if (tdefp->name() == nodep->name()) {
                                 specializedTypedefp = tdefp;
                                 if (LinkDotState::existsNodeSym(specializedTypedefp)) {
                                     specializedSymp
                                         = LinkDotState::getNodeSym(specializedTypedefp);
                                 }
+                                UINFO(3, indent() << "iface typedef paramed matched typedef="
+                                                   << specializedTypedefp
+                                                   << " in module=" << instIfacep->name());
                                 break;
                             }
                         }
@@ -5189,12 +5590,38 @@ class LinkDotResolveVisitor final : public VNVisitor {
             }
 
             if (specializedTypedefp) {
-                nodep->typedefp(specializedTypedefp);
-                if (specializedSymp) nodep->classOrPackagep(specializedSymp->classOrPackagep());
+                // EOM
+                AstParamTypeDType* const paramTypep = VN_CAST(nodep->backp(), ParamTypeDType);
+                AstNodeDType* const childDTypep = specializedTypedefp->subDTypep();
+                UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
+                                   << " -> " << specializedTypedefp
+                                   << " paramType=" << paramTypep << " child=" << childDTypep);
                 // EOM
                 s_ifaceTypedefContext.erase(nodep);
-                UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
-                                   << " -> " << specializedTypedefp);
+                nodep->typedefp(specializedTypedefp);
+                if (specializedSymp) nodep->classOrPackagep(specializedSymp->classOrPackagep());
+                if (paramTypep && childDTypep) {
+                    AstNodeDType* const clonep = childDTypep->cloneTree(false);
+                    UINFO(3, indent() << "iface typedef paramed clone dtype orig=" << childDTypep
+                                       << " clone=" << clonep << " into=" << paramTypep);
+                    // EOM
+                    V3Const::constifyParamsEdit(clonep);
+                    substituteParamRefsWithValues(clonep);
+                    V3Const::constifyParamsEdit(clonep);
+                    nodep->unlinkFrBack();
+                    paramTypep->childDTypep(clonep);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    return;
+                }
+                if (!paramTypep) {
+                    UINFO(2, indent() << "iface typedef paramed missing ParamType container for node="
+                                       << nodep);
+                }
+                if (!childDTypep) {
+                    UINFO(2, indent() << "iface typedef paramed missing child dtype for typedef="
+                                       << specializedTypedefp);
+                }
+                return;
             } else if (AstTypedef* const defp = foundp ? VN_CAST(foundp->nodep(), Typedef) : nullptr) {
                 // Don't check if typedef is to a <type T>::<reference> as might not be resolved
                 // yet
@@ -5398,7 +5825,8 @@ public:
     ~LinkDotResolveVisitor() override = default;
 };
 
-std::unordered_map<AstRefDType*, const AstCell*> LinkDotResolveVisitor::s_ifaceTypedefContext;
+std::unordered_map<AstRefDType*, LinkDotResolveVisitor::IfaceTypedefContextEntry>
+    LinkDotResolveVisitor::s_ifaceTypedefContext;
 
 //######################################################################
 // Link class functions
