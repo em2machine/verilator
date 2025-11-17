@@ -5501,19 +5501,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                 }
             }
-            // EOM debug context clone
-            if (contextCellp) {
-                if (AstNode* const cloneNodep = contextCellp->clonep()) {
-                    if (const AstCell* const cloneCellp = VN_CAST(cloneNodep, Cell)) {
-                        UINFO(3, indent() << "iface typedef context cell clone=" << cloneCellp
-                                           << " mod=" << cloneCellp->modp()
-                                           << " name="
-                                           << (cloneCellp->modp() ? cloneCellp->modp()->name() : "<null>")
-                                           << " dead="
-                                           << (cloneCellp->modp() && cloneCellp->modp()->dead()));
-                    }
-                }
-            }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
             if (m_statep->forParamed() && contextCellp) {
