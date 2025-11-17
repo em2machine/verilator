@@ -5480,27 +5480,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     s_ifaceTypedefContext[nodep] = {contextCellp, contextSymp};
                 }
             }
-            if (contextCellp && contextCellp->modp() && contextCellp->modp()->dead()
-                && LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))) {
-                VSymEnt* const symp = LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp));
-                if (symp && symp->parentp()) {
-                    if (VSymEnt* const refreshedSymp
-                        = symp->parentp()->findIdFlat(contextCellp->name())) {
-                        if (const AstCell* const refreshedCellp
-                            = VN_CAST(refreshedSymp->nodep(), Cell)) {
-                            UINFO(3, indent() << "iface typedef context cell sym remap old="
-                                               << contextCellp << " -> " << refreshedCellp);
-                            contextCellp = refreshedCellp;
-                            nodep->user2p(const_cast<AstCell*>(contextCellp));
-                            VSymEnt* const refreshedSym
-                                = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
-                                      ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
-                                      : nullptr;
-                            s_ifaceTypedefContext[nodep] = {contextCellp, refreshedSym};
-                        }
-                    }
-                }
-            }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
             if (m_statep->forParamed() && contextCellp) {
