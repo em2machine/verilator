@@ -80,31 +80,6 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 namespace {
 
-class ParamRefConstifier final : public VNVisitor {
-public:
-    void run(AstNode* nodep) { iterate(nodep); }
-
-private:
-    void visit(AstNode* nodep) override { iterateChildren(nodep); }
-
-    void visit(AstVarRef* nodep) override {
-        AstVar* const varp = nodep->varp();
-        if (!varp) return;
-        if (!varp->isParam()) return;
-        if (!varp->valuep()) return;
-        UINFO(4, "param ref constify var=" << varp << " name=" << varp->name());
-        AstNode* const valueClonep = varp->valuep()->cloneTree(false);
-        AstNodeExpr* const valueExprp = VN_CAST(valueClonep, NodeExpr);
-        if (!valueExprp) {
-            if (valueClonep) valueClonep->deleteTree();
-            return;
-        }
-        UINFO(4, "param ref constify replacing with=" << valueExprp);
-        nodep->replaceWith(valueExprp);
-        VL_DO_DANGLING(pushDeletep(nodep), nodep);
-    }
-};
-
 inline AstNodeModule* resolveLiveModule(AstNodeModule* modp) {
     while (modp && modp->dead()) {
         AstNodeModule* const clonep = modp->clonep();
@@ -112,12 +87,6 @@ inline AstNodeModule* resolveLiveModule(AstNodeModule* modp) {
         modp = clonep;
     }
     return modp;
-}
-
-inline void substituteParamRefsWithValues(AstNode* nodep) {
-    if (!nodep) return;
-    ParamRefConstifier substituter;
-    substituter.run(nodep);
 }
 
 }  // namespace
@@ -5605,8 +5574,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UINFO(3, indent() << "iface typedef paramed clone dtype orig=" << childDTypep
                                        << " clone=" << clonep << " into=" << paramTypep);
                     // EOM
-                    V3Const::constifyParamsEdit(clonep);
-                    substituteParamRefsWithValues(clonep);
                     V3Const::constifyParamsEdit(clonep);
                     nodep->unlinkFrBack();
                     paramTypep->childDTypep(clonep);
