@@ -3192,23 +3192,25 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         UINFO(3, indent() << "iface typedef paramed entering cell=" << nodep
                                            << " mod=" << nodep->modp());
                     }
-                    UINFO(3, indent() << "iface typedef stage1 lookup ref=" << typedefRefp
-                                       << " cached=" << cachedCellp
-                                       << " cachedSym=" << cachedSymp
-                                       << " stored=" << storedCellp);
-                     if (cachedSymp) {
-                        UINFO(3, indent() << "iface typedef stage1 cached sym parent=" << cachedSymp->parentp()
-                                          << " fallback=" << cachedSymp->fallbackp()
-                                          << " node=" << cachedSymp->nodep());
-                     }
+                    const auto logStageSummary = [&](const char* label, const AstCell* cached,
+                                                     const AstCell* stored, VSymEnt* symp) {
+                        UINFO(3, indent() << "iface typedef " << label << " ref=" << typedefRefp
+                                           << " cached=" << cached << " stored=" << stored
+                                           << " sym=" << symp);
+                        if (symp) {
+                            UINFO(4, indent() << "    symParent=" << symp->parentp()
+                                               << " fallback=" << symp->fallbackp()
+                                               << " node=" << symp->nodep());
+                        }
+                    };
+
+                    logStageSummary("stage1", cachedCellp, storedCellp, cachedSymp);
                     const AstCell* const liveCachedCellp
                         = cachedCellp ? resolveLiveCell(cachedCellp) : nullptr;
                     const AstCell* const liveStoredCellp
                         = storedCellp ? resolveLiveCell(storedCellp) : nullptr;
                     VSymEnt* liveCachedSymp = cachedSymp;
-                    UINFO(3, indent() << "iface typedef stage1 live cached cell="
-                                       << liveCachedCellp << " stored=" << liveStoredCellp
-                                       << " cachedSym=" << liveCachedSymp);
+                    logStageSummary("stage1 live", liveCachedCellp, liveStoredCellp, liveCachedSymp);
                     AstNode* const cachedSymNodeStage1
                         = liveCachedSymp ? liveCachedSymp->nodep() : nullptr;
                     const bool cachedSymStale
