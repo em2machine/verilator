@@ -5432,26 +5432,36 @@ class LinkDotResolveVisitor final : public VNVisitor {
         if (nodep->typeofp()) {  // Really is a typeof not a reference
         } else if (!nodep->typedefp() && !nodep->subDTypep()) {
             // EOM
+            const AstCell* const savedContextCellp
+                = [&]() -> const AstCell* {
+                if (AstNode* const storedp = nodep->user2p()) return VN_CAST(storedp, Cell);
+                return nullptr;
+            }();
+
             const AstCell* contextCellp = nullptr;
             if (m_cellp) {
                 contextCellp = m_cellp;
             } else if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
                 contextCellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
-            } else if (AstNode* const storedp = nodep->user2p()) {
-                contextCellp = VN_CAST(storedp, Cell);
+            } else if (savedContextCellp) {
+                contextCellp = savedContextCellp;
             }
 
-            // EOM
+            auto rememberContext = [&](const AstCell* cellp, VSymEnt* symp = nullptr) {
+                if (!cellp) return;
+                AstCell* const nonConstCellp = const_cast<AstCell*>(cellp);
+                nodep->user2p(nonConstCellp);
+                if (!symp && LinkDotState::existsNodeSym(nonConstCellp)) {
+                    symp = LinkDotState::getNodeSym(nonConstCellp);
+                }
+                s_ifaceTypedefContext[nodep] = {cellp, symp};
+            };
+
             if (m_statep->forPrimary() && contextCellp) {
                 UINFO(3, indent() << "iface typedef defer primary node=" << nodep
                                    << " name=" << nodep->name() << " cell=" << contextCellp);
-                nodep->user2p(const_cast<AstCell*>(contextCellp));
                 nodep->user3(0);
-                VSymEnt* const contextSymp
-                = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
-                      ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
-                      : nullptr;
-            s_ifaceTypedefContext[nodep] = {contextCellp, contextSymp};
+                rememberContext(contextCellp);
                 return;
             }
 
@@ -5459,12 +5469,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 const auto it = s_ifaceTypedefContext.find(nodep);
                 if (it != s_ifaceTypedefContext.end()) {
                     contextCellp = it->second.cellp;
+                    rememberContext(contextCellp, it->second.symp);
                 }
             }
-            if (!contextCellp) {
-                if (AstNode* const storedp = nodep->user2p()) {
-                    contextCellp = VN_CAST(storedp, Cell);
-                }
+            if (!contextCellp && savedContextCellp) {
+                contextCellp = savedContextCellp;
+                rememberContext(contextCellp);
             }
             if (contextCellp) {
                 const AstCell* const liveCellp = resolveLiveCell(contextCellp);
@@ -5472,12 +5482,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UINFO(3, indent() << "iface typedef context cell refresh dead cell="
                                        << contextCellp << " -> " << liveCellp);
                     contextCellp = liveCellp;
-                    nodep->user2p(const_cast<AstCell*>(contextCellp));
-                    VSymEnt* const contextSymp
-                        = LinkDotState::existsNodeSym(const_cast<AstCell*>(contextCellp))
-                              ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
-                              : nullptr;
-                    s_ifaceTypedefContext[nodep] = {contextCellp, contextSymp};
+                    rememberContext(contextCellp);
                 }
             }
             AstTypedef* specializedTypedefp = nullptr;
