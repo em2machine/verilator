@@ -3205,6 +3205,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     };
 
                     logStageSummary("stage1", cachedCellp, storedCellp, cachedSymp);
+                    if (cachedCellp && cachedCellp->modp() && !VN_IS(cachedCellp->modp(), Iface)) {
+                        UINFO(2, indent() << "iface typedef stage1 module-context cache ref="
+                                          << cachedCellp << " mod=" << cachedCellp->modp());
+                    }
                     const AstCell* const liveCachedCellp
                         = cachedCellp ? resolveLiveCell(cachedCellp) : nullptr;
                     const AstCell* const liveStoredCellp
