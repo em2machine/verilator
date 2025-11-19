@@ -888,10 +888,7 @@ inline const AstCell* resolveLiveCell(const AstCell* cellp) {
         AstNodeModule* const modp = current->modp();
         AstNodeModule* const liveModp = resolveLiveModule(modp);
         const AstCell* const clonep = (liveModp == modp) ? nullptr : current->clonep();
-        UINFO(3, "resolveLiveCell stage1 chase depth=" << depth << " cell=" << current
-                                                        << " mod=" << modp
-                                                        << " liveMod=" << liveModp
-                                                        << " clone=" << clonep);
+        UINFO(4, "[iface-debug] resolveLiveCell stage1 chase depth=" << depth << " cell=" << current << " mod=" << modp << " liveMod=" << liveModp << " clone=" << clonep);
         if (!clonep || clonep == current || liveModp == modp) break;
         current = clonep;
         ++depth;
@@ -2328,22 +2325,17 @@ private:
                 const string ifcellname = dtypep->cellName();
                 string baddot;
                 VSymEnt* okSymp;
-                VSymEnt* cellSymp = m_statep->findDotted(nodep->fileline(), m_modSymp, ifcellname,
-                                                         baddot, okSymp, false);
+                VSymEnt* cellSymp = m_statep->findDotted(nodep->fileline(), m_modSymp, ifcellname, baddot, okSymp, false);
                 UASSERT_OBJ(
                     cellSymp, nodep,
                     "No symbol for interface instance: " << nodep->prettyNameQ(ifcellname));
-                UINFO(5, "       Found interface instance: se" << cvtToHex(cellSymp) << " "
-                                                               << cellSymp->nodep());
+                UINFO(5, "       Found interface instance: se" << cvtToHex(cellSymp) << " " << cellSymp->nodep());
                 if (dtypep->modportName() != "") {
                     VSymEnt* const mpSymp = m_statep->findDotted(
                         nodep->fileline(), m_modSymp, ifcellname, baddot, okSymp, false);
-                    UASSERT_OBJ(mpSymp, nodep,
-                                "No symbol for interface modport: "
-                                    << nodep->prettyNameQ(dtypep->modportName()));
+                    UASSERT_OBJ(mpSymp, nodep, "No symbol for interface modport: " << nodep->prettyNameQ(dtypep->modportName()));
                     cellSymp = mpSymp;
-                    UINFO(5, "       Found modport cell: se" << cvtToHex(cellSymp) << " "
-                                                             << mpSymp->nodep());
+                    UINFO(5, "       Found modport cell: se" << cvtToHex(cellSymp) << " " << mpSymp->nodep());
                 }
                 // Interface reference; need to put whole thing into
                 // symtable, but can't clone it now as we may have a later
@@ -3192,11 +3184,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     VSymEnt* effectiveCachedSymp = cachedSymp;
                     AstCell* const storedCellp = VN_CAST(typedefRefp->user2p(), Cell);
                     if (typedefRefp) {
-                        UINFO(3, indent() << "[iface-debug] stage1 entry typedef="
-                                           << typedefRefp->name()
-                                           << " cachedCell=" << cachedCellp
-                                           << " storedCell=" << storedCellp
-                                           << " module=" << nodep);
+                        UINFO(4, indent() << "[iface-debug] stage1 entry typedef=" << typedefRefp->name() << " cachedCell=" << cachedCellp << " storedCell=" << storedCellp << " module=" << nodep);
                     }
                     if (!reported) {
                         reported = true;
@@ -3218,9 +3206,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     logStageSummary("stage1", effectiveCachedCellp, storedCellp, effectiveCachedSymp);
                     if (effectiveCachedCellp && effectiveCachedCellp->modp()
                         && !VN_IS(effectiveCachedCellp->modp(), Iface)) {
-                        UINFO(3, indent() << "[iface-debug] stage1 module-context cachedCell="
-                                          << effectiveCachedCellp
-                                          << " mod=" << effectiveCachedCellp->modp());
+                        UINFO(4, indent() << "[iface-debug] stage1 module-context cachedCell=" << effectiveCachedCellp << " mod=" << effectiveCachedCellp->modp());
                         const AstCell* remapIfaceCellp = nullptr;
                         VSymEnt* remapIfaceSymp = nullptr;
                         for (AstPin* pinp = nodep->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
@@ -3234,11 +3220,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             const AstVarRef* const connRefp = VN_CAST(exprp, VarRef);
                             AstVar* const connVarp = connRefp ? connRefp->varp() : nullptr;
 
-UINFO(2, "[iface-debug] rq_t pin " << pinp
-                << " portVar=" << portVarp
-                << " isIfaceRef=" << portVarp->isIfaceRef()
-                << " expr=" << exprp
-                << " connVar=" << connVarp);
+                            UINFO(4, "[iface-debug] rq_t pin " << pinp << " portVar=" << portVarp << " isIfaceRef=" << portVarp->isIfaceRef() << " expr=" << exprp << " connVar=" << connVarp);
 
                             if (!connVarp) continue;
                             AstIfaceRefDType* const connIfacep
@@ -3261,12 +3243,9 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                             effectiveCachedSymp = newSymp;
                             typedefRefp->user2p(const_cast<AstCell*>(remapIfaceCellp));
                             updateCacheEntry(typedefRefp, {remapIfaceCellp, newSymp});
-                            UINFO(2, indent() << "iface typedef stage1 adopted interface cell="
-                                              << remapIfaceCellp << " sym=" << newSymp
-                                              << " typedef=" << typedefRefp);
+                            UINFO(4, indent() << "[iface-debug] typedef stage1 adopted interface cell=" << remapIfaceCellp << " sym=" << newSymp << " typedef=" << typedefRefp);
                         } else {
-                            UINFO(3, indent() << "iface typedef stage1 module-context no iface remap for typedef="
-                                               << typedefRefp);
+                            UINFO(4, indent() << "[iface-debug] typedef stage1 module-context no iface remap for typedef=" << typedefRefp);
                         }
                     }
                     const AstCell* const liveCachedCellp
@@ -3282,8 +3261,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                           && (cachedSymNodeStage1 == nullptr
                               || cachedSymNodeStage1 == reinterpret_cast<AstNode*>(1));
                     if (cachedSymStale) {
-                        UINFO(3, indent() << "iface typedef stage1 cached sym stale node="
-                                           << cachedSymNodeStage1 << ", refreshing");
+                        UINFO(4, indent() << "[iface-debug] typedef stage1 cached sym stale node=" << cachedSymNodeStage1 << ", refreshing");
                         const auto cacheIt = s_ifaceTypedefContext.find(typedefRefp);
                         const AstCell* contextCellp = cachedCellp;
                         if (cacheIt != s_ifaceTypedefContext.end()) {
@@ -3368,10 +3346,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                             if (specializedSymp) liveCachedSymp = specializedSymp;
                             updateCacheEntry(typedefRefp,
                                              {nodep, specializedSymp ? specializedSymp : nullptr});
-                            UINFO(3, indent()
-                                           << "iface typedef stage1 adopted specialized cell="
-                                           << nodep << " sym=" << specializedSymp
-                                           << " from cached dead cell=" << cachedCellp);
+                            UINFO(4, indent() << "[iface-debug] typedef stage1 adopted specialized cell=" << nodep << " sym=" << specializedSymp << " from cached dead cell=" << cachedCellp);
                         }
                     }
                     AstNode* const cachedSymNodep
@@ -3382,8 +3357,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                          || (recoveredCellp->modp() && recoveredCellp->modp()->dead()))
                         && cachedSymUsable) {
                         if (const AstCell* const symCellp = VN_CAST(cachedSymNodep, Cell)) {
-                            UINFO(3, indent() << "iface typedef stage1 recover via sym ref="
-                                               << cachedSymp << " cell=" << symCellp);
+                            UINFO(4, indent() << "[iface-debug] typedef stage1 recover via sym ref=" << cachedSymp << " cell=" << symCellp);
                             const AstCell* const liveSymCellp = resolveLiveCell(symCellp);
                             if (liveSymCellp) {
                                 recoveredCellp = liveSymCellp;
@@ -3392,43 +3366,21 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                     recoveredSymp = LinkDotState::getNodeSym(
                                         const_cast<AstCell*>(recoveredCellp));
                                 }
-                                UINFO(3, indent()
-                                               << "iface typedef stage1 recover resolved cell="
-                                               << recoveredCellp << " sym=" << recoveredSymp);
+                                UINFO(4, indent() << "[iface-debug] typedef stage1 recover resolved cell=" << recoveredCellp << " sym=" << recoveredSymp);
                             } else {
-                                UINFO(3, indent()
-                                               << "iface typedef stage1 recover sym target unresolved" << symCellp);
+                                UINFO(4, indent() << "[iface-debug] typedef stage1 recover sym target unresolved" << symCellp);
                             }
                         } else {
-                            UINFO(3, indent() << "iface typedef stage1 recover sym node not cell"
-                                               << cachedSymNodep);
+                            UINFO(4, indent() << "[iface-debug] typedef stage1 recover sym node not cell" << cachedSymNodep);
                         }
                     } else if ((recoveredCellp == nullptr
                                 || (recoveredCellp->modp() && recoveredCellp->modp()->dead()))
                                && cachedSymp && !cachedSymUsable) {
-                        UINFO(3, indent()
-                                       << "iface typedef stage1 recover skipping stale sym="
-                                       << cachedSymp << " node=" << cachedSymNodep);
+                        UINFO(4, indent() << "[iface-debug] typedef stage1 recover skipping stale sym=" << cachedSymp << " node=" << cachedSymNodep);
                     }
                     deferredEntries.push_back({typedefRefp, effectiveCachedCellp, effectiveCachedSymp,
                                                storedCellp, liveCachedCellp, liveStoredCellp,
                                                liveCachedSymp, recoveredCellp, recoveredSymp});
-                }
-                for (const DeferredTypedefEntry& entry : deferredEntries) {
-                    const bool cachedMatches = entry.liveCachedCellp == nodep;
-                    const bool storedMatches = entry.liveStoredCellp == nodep;
-                    const bool recoveredMatches = entry.recoveredCellp == nodep;
-                    UINFO(3, indent() << "iface typedef stage2 compare ref=" << entry.typedefRefp
-                                       << " liveCached=" << entry.liveCachedCellp
-                                       << (cachedMatches ? " (match)" : " (diff)")
-                                       << " liveStored=" << entry.liveStoredCellp
-                                       << (storedMatches ? " (match)" : " (diff)")
-                                       << " recovered=" << entry.recoveredCellp
-                                       << (recoveredMatches ? " (match-recovered)" : " (diff)"));
-                    if (!cachedMatches && !storedMatches && recoveredMatches) {
-                        UINFO(3, indent() << "iface typedef stage2 recovered match sym="
-                                           << entry.recoveredSymp);
-                    }
                 }
                 for (const DeferredTypedefEntry& entry : deferredEntries) {
                     const bool cachedMatches = entry.liveCachedCellp == nodep;
@@ -3439,6 +3391,12 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                     const bool staleStored = entry.storedCellp && entry.storedCellp != nodep;
                     const bool staleRecovered = entry.recoveredCellp && entry.recoveredCellp != nodep;
                     const bool staleUser2 = entry.typedefRefp->user2p() != nodep;
+
+                    UINFO(4, indent() << "[iface-debug] typedef stage2 compare ref=" << entry.typedefRefp << " liveCached=" << entry.liveCachedCellp << (cachedMatches ? " (match)" : " (diff)") << " liveStored=" << entry.liveStoredCellp << (storedMatches ? " (match)" : " (diff)") << " recovered=" << entry.recoveredCellp << (recoveredMatches ? " (match-recovered)" : " (diff)"));
+                    if (!cachedMatches && !storedMatches && recoveredMatches) {
+                        UINFO(4, indent() << "[iface-debug] typedef stage2 recovered match sym=" << entry.recoveredSymp);
+                    }
+
                     if (matchesNode && (staleCached || staleStored || staleRecovered || staleUser2)) {
                         const AstCell* const targetCellp
                             = recoveredMatches ? entry.recoveredCellp
@@ -3446,9 +3404,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                                                 : entry.liveStoredCellp);
                         VSymEnt* const targetSymp
                             = recoveredMatches ? entry.recoveredSymp : entry.liveCachedSymp;
-                        UINFO(3, indent() << "iface typedef stage3 update ref="
-                                           << entry.typedefRefp << " -> cell=" << targetCellp
-                                           << " sym=" << targetSymp);
+                        UINFO(4, indent() << "[iface-debug] typedef stage3 update ref=" << entry.typedefRefp << " -> cell=" << targetCellp << " sym=" << targetSymp);
                         entry.typedefRefp->user2p(const_cast<AstCell*>(targetCellp));
                         updateCacheEntry(entry.typedefRefp,
                                          {targetCellp, targetSymp ? targetSymp : m_curSymp});
@@ -3775,13 +3731,13 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
     void visit(AstParseRef* nodep) override {
         if (nodep->user3SetOnce()) {
             if (nodep->user2() && m_statep->forParamed()) {
-                UINFO(3, indent() << "parseRef revisit user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
+                UINFO(4, indent() << "[iface-debug] parseRef revisit user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
                 nodep->user2(false);
 
-                UINFO(3, indent() << "parseRef revisit typedef node=" << nodep << " name=" << nodep->name() << " step=" << m_statep->stepNumber());
+                UINFO(4, indent() << "[iface-debug] parseRef revisit typedef node=" << nodep << " name=" << nodep->name() << " step=" << m_statep->stepNumber());
 
             } else {
-                UINFO(3, indent() << "parseRef skip user3 user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
+                UINFO(4, indent() << "[iface-debug] parseRef skip user3 user2=" << nodep->user2() << " step=" << m_statep->stepNumber());
                 return;
             }
         }
@@ -4209,12 +4165,10 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             } else if (AstTypedef* const defp = VN_CAST(foundp->nodep(), Typedef)) {
                 // EOM
                 if (m_ds.m_dotPos != DP_FINAL) {
-                    UINFO(3, indent() << "iface typedef non-final segment node=" << nodep
-                                       << " dotPos=" << m_ds.m_dotPos
-                                       << " dotText=" << m_ds.m_dotText);
+                    UINFO(4, indent() << "[iface-debug] typedef non-final segment node=" << nodep << " dotPos=" << m_ds.m_dotPos << " dotText=" << m_ds.m_dotText);
                 }
                 if(m_ds.m_dotPos == DP_FINAL) {
-                  UINFO(3, indent() << "iface type " << nodep << " " << "Typedef " << nodep->name() << " " << m_ds.m_dotPos);
+                  UINFO(4, indent() << "[iface-debug] type " << nodep << " " << "Typedef " << nodep->name() << " " << m_ds.m_dotPos);
 
                   AstVar* enclosingVarp = nullptr;
                   for (AstNode* curp = nodep; curp; curp = curp->backp()) {
@@ -4224,7 +4178,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                   UASSERT_OBJ(enclosingVarp, nodep,
                               "Expected localparam owner for interface typedef reference");
 
-                  UINFO(3, indent() << "iface typedef LHS "
+                  UINFO(4, indent() << "[iface-debug] typedef LHS "
                      << enclosingVarp << " " << enclosingVarp->prettyName()
                      << " dtype=" << enclosingVarp->dtypep());
 
@@ -4234,10 +4188,10 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                   AstRefDType* const typedefRefp = new AstRefDType{nodep->fileline(), nodep->name()};
                   if (m_statep->forPrimary()) {
                     nodep->user2(true);
-                    UINFO(3, indent() << "iface typedef mark revisit node=" << nodep << " step=" << m_statep->stepNumber());
+                    UINFO(4, indent() << "[iface-debug] typedef mark revisit node=" << nodep << " step=" << m_statep->stepNumber());
                   }
-                  UINFO(3, indent() << "iface typedef dtype ref " << typedefRefp << " unresolved name=" << nodep->name());
-                  UINFO(3, indent() << "iface typedef original def " << defp);
+                  UINFO(4, indent() << "[iface-debug] typedef dtype ref " << typedefRefp << " unresolved name=" << nodep->name());
+                  UINFO(4, indent() << "[iface-debug] typedef original def " << defp);
 
                   const AstCell* contextCellp = nullptr;
                   if (m_cellp) {
@@ -4258,12 +4212,8 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                 ? LinkDotState::getNodeSym(const_cast<AstCell*>(contextCellp))
                                 : nullptr;
                       s_ifaceTypedefContext[typedefRefp] = {contextCellp, contextSymp};
-                      UINFO(3, indent() << "iface typedef remember cell=" << contextCellp
-                                         << " mod=" << (contextCellp->modp() ? contextCellp->modp()
-                                                                              : nullptr)
-                                         << " sym=" << contextSymp);
-                      UINFO(3, indent() << "iface typedef cache init cell=" << contextCellp
-                                         << " sym=" << contextSymp);
+                      UINFO(4, indent() << "[iface-debug] typedef remember cell=" << contextCellp << " mod=" << (contextCellp->modp() ? contextCellp->modp() : nullptr) << " sym=" << contextSymp);
+                      UINFO(4, indent() << "[iface-debug] typedef cache init cell=" << contextCellp << " sym=" << contextSymp);
                   }
 
                   // Create new param dtype node for localparam.  it references the typedef dtype via the new AstRefDType.
@@ -4274,7 +4224,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                      enclosingVarp->name(),
                      VFlagChildDType{},
                      typedefRefp};
-                  UINFO(3, indent() << "iface typedef new paramtype " << newTypep << " name=" << newTypep->name() << " child=" << typedefRefp);
+                  UINFO(4, indent() << "[iface-debug] typedef new paramtype " << newTypep << " name=" << newTypep->name() << " child=" << typedefRefp);
 
                   // get the current symbol table entry
                   VSymEnt* const symEntp = enclosingVarp->user1u().toSymEnt();
@@ -4282,11 +4232,9 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                               "Localparam missing symbol table entry for interface typedef");
                   VSymEnt* const parentSymp = symEntp->parentp();
                   UASSERT_OBJ(parentSymp, nodep, "Symbol entry without parent scope");
-                  UINFO(3, indent() << "iface typedef sym " << symEntp
+                  UINFO(4, indent() << "[iface-debug] typedef sym " << symEntp
                    << " node=" << (symEntp ? symEntp->nodep() : nullptr));
-                  UINFO(3, indent() << "iface typedef parent " << parentSymp
-                   << " node=" << (parentSymp ? parentSymp->nodep() : nullptr)
-                   << " typedef=" << typedefRefp->typedefp());
+                  UINFO(4, indent() << "[iface-debug] typedef parent " << parentSymp << " node=" << (parentSymp ? parentSymp->nodep() : nullptr) << " typedef=" << typedefRefp->typedefp());
 
                   // create new symbol table entry for localparam
                   VSymEnt* const newSymEntp = new VSymEnt{m_statep->symsp(), newTypep};
@@ -4295,16 +4243,16 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                   newSymEntp->classOrPackagep(symEntp->classOrPackagep());
                   newSymEntp->exported(symEntp->exported());
                   newSymEntp->imported(symEntp->imported());
-                  UINFO(3, indent() << "iface typedef new syment " << newSymEntp << " name=" << enclosingVarp->name() << " parent=" << parentSymp);
+                  UINFO(4, indent() << "[iface-debug] typedef new syment " << newSymEntp << " name=" << enclosingVarp->name() << " parent=" << parentSymp);
 
                   // set the new symbol table entry
                   newTypep->user1p(newSymEntp);
                   parentSymp->reinsert(enclosingVarp->name(), newSymEntp);
-                  UINFO(3, indent() << "iface typedef reinsert sym name=" << enclosingVarp->name() << " parent=" << parentSymp << " newSym=" << newSymEntp);
+                  UINFO(4, indent() << "[iface-debug] typedef reinsert sym name=" << enclosingVarp->name() << " parent=" << parentSymp << " newSym=" << newSymEntp);
 
                   // do the node swap in the tree
                   enclosingVarp->replaceWith(newTypep);
-                  UINFO(3, indent() << "iface typedef replace var node=" << enclosingVarp << " -> type=" << newTypep);
+                  UINFO(4, indent() << "[iface-debug] typedef replace var node=" << enclosingVarp << " -> type=" << newTypep);
                   VL_DO_DANGLING(pushDeletep(enclosingVarp), enclosingVarp);
 
                   ok = true;
@@ -5542,17 +5490,9 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                 const_cast<AstCell*>(ifaceCellp));
                         }
                         if (ifaceCellp) {
-                            if (nodep->name() == "rq_t") {
-                                UINFO(2, "[iface-debug] " << stage
-                                                           << " rq_t context remap cell=" << cellp
-                                                           << " -> " << ifaceCellp
-                                                           << " sym=" << resolvedSymp);
-                            } else {
-                                UINFO(3, indent() << "iface typedef " << stage
-                                                  << " context remap cell=" << cellp
-                                                  << " -> " << ifaceCellp
-                                                  << " typedef=" << nodep);
-                            }
+
+                            UINFO(4, indent() << "[iface-debug] typedef " << stage << " context remap cell=" << cellp << " -> " << ifaceCellp << " typedef=" << nodep);
+
                             resolvedCellp = ifaceCellp;
                         }
                         break;
@@ -5582,16 +5522,14 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                         resolvedSymp = LinkDotState::getNodeSym(nonConstCellp);
                     }
                     if (nodep->name() == "rq_t") {
-                        UINFO(2, "[iface-debug] rememberContext rq_t cell=" << resolvedCellp
-                                                                               << " sym=" << resolvedSymp);
+                        UINFO(4, "[iface-debug] rememberContext rq_t cell=" << resolvedCellp << " sym=" << resolvedSymp);
                     }
                     s_ifaceTypedefContext[nodep] = {resolvedCellp, resolvedSymp};
                 }
             };
 
             if (m_statep->forPrimary() && contextCellp) {
-                UINFO(3, indent() << "iface typedef defer primary node=" << nodep
-                                   << " name=" << nodep->name() << " cell=" << contextCellp);
+                UINFO(4, indent() << "[iface-debug] typedef defer primary node=" << nodep << " name=" << nodep->name() << " cell=" << contextCellp);
                 nodep->user3(0);
                 rememberContext(contextCellp);
                 return;
@@ -5617,7 +5555,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             if (contextCellp) {
                 const AstCell* const liveCellp = resolveLiveCell(contextCellp);
                 if (liveCellp != contextCellp) {
-                    UINFO(3, indent() << "iface typedef context cell refresh dead cell="
+                    UINFO(4, indent() << "[iface-debug] typedef context cell refresh dead cell="
                                        << contextCellp << " -> " << liveCellp);
                     contextCellp = liveCellp;
                     rememberContext(contextCellp, contextSymp);
@@ -5630,8 +5568,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             std::tie(contextCellp, contextSymp)
                 = remapModuleCellToIface(contextCellp, contextSymp, "resolve");
             if (contextCellp) {
-                UINFO(2, indent() << "[iface-debug] resolve context typedef=" << nodep->name()
-                                   << " cell=" << contextCellp << " sym=" << contextSymp);
+                UINFO(4, indent() << "[iface-debug] resolve context typedef=" << nodep->name() << " cell=" << contextCellp << " sym=" << contextSymp);
             }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
@@ -5640,35 +5577,20 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                 instModp = resolveLiveModule(instModp);
                 // EOM debug module clone
                 AstNodeModule* const instClonep = instModp ? instModp->clonep() : nullptr;
-                UINFO(3, indent() << "iface typedef paramed context cell=" << contextCellp
-                                   << " mod=" << instModp
-                                   << " name=" << (instModp ? instModp->name() : "<null>")
-                                   << " dead=" << (instModp && instModp->dead())
-                                   << " clone=" << instClonep
-                                   << " cloneDead=" << (instClonep && instClonep->dead()));
-                UINFO(2, indent() << "[iface-debug] pre-match typedef=" << nodep->name()
-                                   << " contextCell=" << contextCellp
-                                   << " instMod=" << instModp << " curSym=" << m_curSymp
-                                   << " visitCell=" << m_cellp << " dotSym=" << m_ds.m_dotSymp);
+                UINFO(4, indent() << "[iface-debug] typedef paramed context cell=" << contextCellp << " mod=" << instModp << " name=" << (instModp ? instModp->name() : "<null>") << " dead=" << (instModp && instModp->dead()) << " clone=" << instClonep << " cloneDead=" << (instClonep && instClonep->dead()));
+                UINFO(4, indent() << "[iface-debug] pre-match typedef=" << nodep->name() << " contextCell=" << contextCellp << " instMod=" << instModp << " curSym=" << m_curSymp << " visitCell=" << m_cellp << " dotSym=" << m_ds.m_dotSymp);
                 if (AstIface* const instIfacep = VN_CAST(instModp, Iface)) {
                     for (AstNode* stmtp = instIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                         if (AstTypedef* const tdefp = VN_CAST(stmtp, Typedef)) {
-                            UINFO(3, indent() << "iface typedef inspect typedef=" << tdefp
-                                               << " name=" << tdefp->name()
-                                               << " decl=" << tdefp->fileline()->ascii());
-                            UINFO(2, indent() << "[iface-debug] inspecting typedef candidate"
-                                               << " typedef=" << nodep->name()
-                                               << " candidate=" << tdefp->name()
-                                               << " node=" << tdefp);
+                            UINFO(4, indent() << "[iface-debug] typedef inspect typedef=" << tdefp << " name=" << tdefp->name() << " decl=" << tdefp->fileline()->ascii());
+                            UINFO(4, indent() << "[iface-debug] inspecting typedef candidate" << " typedef=" << nodep->name() << " candidate=" << tdefp->name() << " node=" << tdefp);
                             if (tdefp->name() == nodep->name()) {
                                 specializedTypedefp = tdefp;
                                 if (LinkDotState::existsNodeSym(specializedTypedefp)) {
                                     specializedSymp
                                         = LinkDotState::getNodeSym(specializedTypedefp);
                                 }
-                                UINFO(3, indent() << "iface typedef paramed matched typedef="
-                                                   << specializedTypedefp
-                                                   << " in module=" << instIfacep->name());
+                                UINFO(4, indent() << "[iface-debug] typedef paramed matched typedef=" << specializedTypedefp << " in module=" << instIfacep->name());
                                 break;
                             }
                         }
@@ -5689,13 +5611,8 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                 // EOM
                 AstParamTypeDType* const paramTypep = VN_CAST(nodep->backp(), ParamTypeDType);
                 AstNodeDType* const childDTypep = specializedTypedefp->subDTypep();
-                UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
-                                   << " -> " << specializedTypedefp
-                                   << " paramType=" << paramTypep << " child=" << childDTypep);
-                UINFO(2, indent() << "[iface-debug] resolved typedef=" << nodep->name()
-                                   << " paramType=" << paramTypep
-                                   << " child=" << childDTypep
-                                   << " contextCell=" << contextCellp);
+                UINFO(4, indent() << "[iface-debug] typedef paramed resolved node=" << nodep << " -> " << specializedTypedefp << " paramType=" << paramTypep << " child=" << childDTypep);
+                UINFO(4, indent() << "[iface-debug] resolved typedef=" << nodep->name() << " paramType=" << paramTypep << " child=" << childDTypep << " contextCell=" << contextCellp);
                 AstVar* ownerVarp = nullptr;
                 for (AstNode* curp = nodep; curp; curp = curp->backp()) {
                     if (AstVar* const varp = VN_CAST(curp, Var)) {
@@ -5707,9 +5624,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                 if (ownerVarp) {
                     VSymEnt* const ownerSymp = ownerVarp->user1u().toSymEnt();
                     VSymEnt* const parentSymp = ownerSymp ? ownerSymp->parentp() : nullptr;
-                    UINFO(3, indent() << "[iface-debug] typedef owner var=" << ownerVarp
-                                       << " varType=" << static_cast<int>(ownerVarp->varType())
-                                       << " sym=" << ownerSymp << " parentSym=" << parentSymp);
+                    UINFO(4, indent() << "[iface-debug] typedef owner var=" << ownerVarp << " varType=" << static_cast<int>(ownerVarp->varType()) << " sym=" << ownerSymp << " parentSym=" << parentSymp);
                 }
                 // EOM
                 s_ifaceTypedefContext.erase(nodep);
@@ -5717,8 +5632,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                 if (specializedSymp) nodep->classOrPackagep(specializedSymp->classOrPackagep());
                 if (paramTypep && childDTypep) {
                     AstNodeDType* const clonep = childDTypep->cloneTree(false);
-                    UINFO(3, indent() << "iface typedef paramed clone dtype orig=" << childDTypep
-                                       << " clone=" << clonep << " into=" << paramTypep);
+                    UINFO(4, indent() << "[iface-debug] typedef paramed clone dtype orig=" << childDTypep << " clone=" << clonep << " into=" << paramTypep);
                     // EOM
                     V3Const::constifyParamsEdit(clonep);
                     nodep->unlinkFrBack();
@@ -5727,12 +5641,10 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                     return;
                 }
                 if (!paramTypep) {
-                    UINFO(2, indent() << "iface typedef paramed missing ParamType container for node="
-                                       << nodep);
+                    UINFO(4, indent() << "[iface-debug] typedef paramed missing ParamType container for node=" << nodep);
                 }
                 if (!childDTypep) {
-                    UINFO(2, indent() << "iface typedef paramed missing child dtype for typedef="
-                                       << specializedTypedefp);
+                    UINFO(4, indent() << "[iface-debug] typedef paramed missing child dtype for typedef=" << specializedTypedefp);
                 }
                 return;
             } else if (AstTypedef* const defp = foundp ? VN_CAST(foundp->nodep(), Typedef) : nullptr) {
@@ -5769,11 +5681,7 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             } else if (m_insideClassExtParam) {
                 return;
             } else {
-                UINFO(2, indent() << "[iface-debug] typedef lookup miss name=" << nodep->name()
-                                   << " contextCell=" << contextCellp
-                                   << " specializedTypedef=" << specializedTypedefp
-                                   << " foundSym=" << foundp
-                                   << " dotPos=" << int(m_ds.m_dotPos));
+                UINFO(4, indent() << "[iface-debug] typedef lookup miss name=" << nodep->name() << " contextCell=" << contextCellp << " specializedTypedef=" << specializedTypedefp << " foundSym=" << foundp << " dotPos=" << int(m_ds.m_dotPos));
                 if (foundp) {
                     UINFO(1, "Found sym node: " << foundp->nodep());
                     nodep->v3error("Expecting a data type: " << nodep->prettyNameQ());
@@ -5784,12 +5692,9 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
         }
          // EOM
          if (nodep->typedefp()) {
-            UINFO(3, indent() << "ref dtype typedef node=" << nodep
-                              << " name=" << nodep->name()
-                              << " typedef=" << nodep->typedefp()
-                              << " step=" << m_statep->stepNumber());
+            UINFO(4, indent() << "[iface-debug] ref dtype typedef node=" << nodep << " name=" << nodep->name() << " typedef=" << nodep->typedefp() << " step=" << m_statep->stepNumber());
             if (nodep->classOrPackagep()) {
-               UINFO(4, indent() << "ref dtype typedef class/package " << nodep);
+               UINFO(4, indent() << "[iface-debug] ref dtype typedef class/package " << nodep);
             }
          }
         iterateChildren(nodep);
@@ -5930,7 +5835,7 @@ public:
     LinkDotResolveVisitor(AstNetlist* rootp, LinkDotState* statep)
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
-        UINFO(3, "LinkDotResolveVisitor running step=" << m_statep->stepNumber());
+        UINFO(4, "[iface-debug] LinkDotResolveVisitor running step=" << m_statep->stepNumber());
         iterate(rootp);
         std::map<std::string, AstNodeModule*> modulesToRevisit = std::move(m_modulesToRevisit);
         m_lastDeferredp = nullptr;
@@ -5998,7 +5903,7 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 }
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
-    UINFO(2, "[iface-debug] enter linkDotParamed");
+    UINFO(4, "[iface-debug] enter linkDotParamed");
     UINFO(2, __FUNCTION__ << ":");
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);
