@@ -3191,24 +3191,25 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     const AstCell* effectiveCachedCellp = cachedCellp;
                     VSymEnt* effectiveCachedSymp = cachedSymp;
                     AstCell* const storedCellp = VN_CAST(typedefRefp->user2p(), Cell);
-                    if (typedefRefp && typedefRefp->name() == "rq_t") {
-                        UINFO(2, "[iface-debug] stage1 context entry rq_t storedCell=" << storedCellp);
-                    }
-                    if (typedefRefp && typedefRefp->name() == "rq_t") {
-                        UINFO(2, "[iface-debug] stage1 context entry rq_t cell=" << cachedCellp << " stored=" << storedCellp << " module=" << nodep);
+                    if (typedefRefp) {
+                        UINFO(3, indent() << "[iface-debug] stage1 entry typedef="
+                                           << typedefRefp->name()
+                                           << " cachedCell=" << cachedCellp
+                                           << " storedCell=" << storedCellp
+                                           << " module=" << nodep);
                     }
                     if (!reported) {
                         reported = true;
-                        UINFO(3, indent() << "iface typedef paramed entering cell=" << nodep
+                        UINFO(4, indent() << "[iface-debug] stage1 visiting cell=" << nodep
                                            << " mod=" << nodep->modp());
                     }
                     const auto logStageSummary = [&](const char* label, const AstCell* cached,
                                                      const AstCell* stored, VSymEnt* symp) {
-                        UINFO(3, indent() << "iface typedef " << label << " ref=" << typedefRefp
-                                           << " cached=" << cached << " stored=" << stored
-                                           << " sym=" << symp);
+                        UINFO(4, indent() << "[iface-debug] " << label << " summary typedef="
+                                           << typedefRefp->name() << " cachedCell=" << cached
+                                           << " storedCell=" << stored << " sym=" << symp);
                         if (symp) {
-                            UINFO(4, indent() << "    symParent=" << symp->parentp()
+                            UINFO(5, indent() << "    symParent=" << symp->parentp()
                                                << " fallback=" << symp->fallbackp()
                                                << " node=" << symp->nodep());
                         }
@@ -3217,7 +3218,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     logStageSummary("stage1", effectiveCachedCellp, storedCellp, effectiveCachedSymp);
                     if (effectiveCachedCellp && effectiveCachedCellp->modp()
                         && !VN_IS(effectiveCachedCellp->modp(), Iface)) {
-                        UINFO(2, indent() << "iface typedef stage1 module-context cache ref="
+                        UINFO(3, indent() << "[iface-debug] stage1 module-context cachedCell="
                                           << effectiveCachedCellp
                                           << " mod=" << effectiveCachedCellp->modp());
                         const AstCell* remapIfaceCellp = nullptr;
@@ -3286,15 +3287,15 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                         const auto cacheIt = s_ifaceTypedefContext.find(typedefRefp);
                         const AstCell* contextCellp = cachedCellp;
                         if (cacheIt != s_ifaceTypedefContext.end()) {
-                            UINFO(3, indent() << "iface typedef stage1 cached entry cell="
+                            UINFO(4, indent() << "[iface-debug] stage1 cached entry cell="
                                                << cacheIt->second.cellp << " sym="
                                                << cacheIt->second.symp);
                             contextCellp = cacheIt->second.cellp ? cacheIt->second.cellp : contextCellp;
                         }
-                        UINFO(3, indent() << "iface typedef stage1 refresh context cell="
+                        UINFO(4, indent() << "[iface-debug] stage1 refresh context cell="
                                            << contextCellp);
                         const AstCell* const liveContextCellp = resolveLiveCell(contextCellp);
-                        UINFO(3, indent() << "iface typedef stage1 live context cell="
+                        UINFO(4, indent() << "[iface-debug] stage1 live context cell="
                                            << liveContextCellp);
                         if (liveContextCellp && LinkDotState::existsNodeSym(
                                                    const_cast<AstCell*>(liveContextCellp))) {
@@ -3302,23 +3303,23 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                 = LinkDotState::getNodeSym(const_cast<AstCell*>(liveContextCellp));
                             const bool specializedContext
                                 = liveContextCellp && liveContextCellp != cachedCellp;
-                            UINFO(3, indent()
-                                           << "iface typedef stage1 refreshed cached sym="
+                            UINFO(4, indent()
+                                           << "[iface-debug] stage1 refreshed cached sym="
                                            << liveCachedSymp << " for cell=" << liveContextCellp);
                             if (specializedContext) {
-                                UINFO(3, indent()
-                                               << "iface typedef stage1 specialized context cell="
+                                UINFO(4, indent()
+                                               << "[iface-debug] stage1 specialized context cell="
                                                << liveContextCellp << " from cached="
                                                << cachedCellp);
                             }
                             updateCacheEntry(typedefRefp, {liveContextCellp, liveCachedSymp});
                             effectiveCachedCellp = liveContextCellp;
                             effectiveCachedSymp = liveCachedSymp;
-                            UINFO(3, indent() << "iface typedef stage1 cache updated (refresh) cell="
+                            UINFO(4, indent() << "[iface-debug] stage1 cache updated (refresh) cell="
                                                << liveContextCellp << " sym=" << liveCachedSymp);
                         } else {
-                            UINFO(3, indent()
-                                           << "iface typedef stage1 refresh failed liveCell="
+                            UINFO(4, indent()
+                                           << "[iface-debug] stage1 refresh failed liveCell="
                                            << liveContextCellp << " symExists="
                                            << (liveContextCellp && LinkDotState::existsNodeSym(
                                                    const_cast<AstCell*>(liveContextCellp))));
@@ -3327,8 +3328,8 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                             updateCacheEntry(typedefRefp, {clearedCellp, nullptr});
                             effectiveCachedCellp = clearedCellp;
                             effectiveCachedSymp = nullptr;
-                            UINFO(3, indent()
-                                           << "iface typedef stage1 cache cleared pending specialized cell="
+                            UINFO(4, indent()
+                                           << "[iface-debug] stage1 cache cleared pending specialized cell="
                                            << clearedCellp);
                             liveCachedSymp = nullptr;
                         }
@@ -3337,12 +3338,12 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                         && LinkDotState::existsNodeSym(const_cast<AstCell*>(liveCachedCellp))) {
                         liveCachedSymp
                             = LinkDotState::getNodeSym(const_cast<AstCell*>(liveCachedCellp));
-                        UINFO(3, indent() << "iface typedef stage1 recovered cached sym from live cell="
+                        UINFO(4, indent() << "[iface-debug] stage1 recovered cached sym from live cell="
                                            << liveCachedSymp << " cell=" << liveCachedCellp);
                         updateCacheEntry(typedefRefp, {liveCachedCellp, liveCachedSymp});
                         effectiveCachedCellp = liveCachedCellp;
                         effectiveCachedSymp = liveCachedSymp;
-                        UINFO(3, indent() << "iface typedef stage1 cache updated (fallback) cell="
+                        UINFO(4, indent() << "[iface-debug] stage1 cache updated (fallback) cell="
                                            << liveCachedCellp << " sym=" << liveCachedSymp);
                     }
                     const AstCell* recoveredCellp = liveCachedCellp;
@@ -5628,9 +5629,9 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             }
             std::tie(contextCellp, contextSymp)
                 = remapModuleCellToIface(contextCellp, contextSymp, "resolve");
-            if (contextCellp && nodep->name() == "rq_t") {
-                UINFO(2, "[iface-debug] resolve-context rq_t cell=" << contextCellp
-                                                                       << " sym=" << contextSymp);
+            if (contextCellp) {
+                UINFO(2, indent() << "[iface-debug] resolve context typedef=" << nodep->name()
+                                   << " cell=" << contextCellp << " sym=" << contextSymp);
             }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
@@ -5645,18 +5646,20 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                                    << " dead=" << (instModp && instModp->dead())
                                    << " clone=" << instClonep
                                    << " cloneDead=" << (instClonep && instClonep->dead()));
-                if (nodep->name() == "rq_t") {
-                    UINFO(2, "[iface-debug] pre-match rq_t contextCell=" << contextCellp << " instMod=" << instModp << " curSym=" << m_curSymp << " m_cellp=" << m_cellp << " dotSym=" << m_ds.m_dotSymp);
-                }
+                UINFO(2, indent() << "[iface-debug] pre-match typedef=" << nodep->name()
+                                   << " contextCell=" << contextCellp
+                                   << " instMod=" << instModp << " curSym=" << m_curSymp
+                                   << " visitCell=" << m_cellp << " dotSym=" << m_ds.m_dotSymp);
                 if (AstIface* const instIfacep = VN_CAST(instModp, Iface)) {
                     for (AstNode* stmtp = instIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                         if (AstTypedef* const tdefp = VN_CAST(stmtp, Typedef)) {
                             UINFO(3, indent() << "iface typedef inspect typedef=" << tdefp
                                                << " name=" << tdefp->name()
                                                << " decl=" << tdefp->fileline()->ascii());
-                            if (nodep->name() == "rq_t") {
-                                UINFO(2, "[iface-debug] inspecting typedef candidate name=" << tdefp->name() << " typedef=" << tdefp << " stmt=" << stmtp);
-                            }
+                            UINFO(2, indent() << "[iface-debug] inspecting typedef candidate"
+                                               << " typedef=" << nodep->name()
+                                               << " candidate=" << tdefp->name()
+                                               << " node=" << tdefp);
                             if (tdefp->name() == nodep->name()) {
                                 specializedTypedefp = tdefp;
                                 if (LinkDotState::existsNodeSym(specializedTypedefp)) {
@@ -5689,28 +5692,24 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
                 UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
                                    << " -> " << specializedTypedefp
                                    << " paramType=" << paramTypep << " child=" << childDTypep);
-                if (nodep->name() == "rq_t") {
-                    UINFO(2, "[iface-debug] resolved rq_t paramType=" << paramTypep
-                                                                           << " child=" << childDTypep
-                                                                           << " contextCell=" << contextCellp);
-                    AstVar* ownerVarp = nullptr;
-                    for (AstNode* curp = nodep; curp; curp = curp->backp()) {
-                        if (AstVar* const varp = VN_CAST(curp, Var)) {
-                            ownerVarp = varp;
-                            break;
-                        }
-                        if (VN_IS(curp, NodeModule)) break;
+                UINFO(2, indent() << "[iface-debug] resolved typedef=" << nodep->name()
+                                   << " paramType=" << paramTypep
+                                   << " child=" << childDTypep
+                                   << " contextCell=" << contextCellp);
+                AstVar* ownerVarp = nullptr;
+                for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+                    if (AstVar* const varp = VN_CAST(curp, Var)) {
+                        ownerVarp = varp;
+                        break;
                     }
-                    if (ownerVarp) {
-                        VSymEnt* const ownerSymp = ownerVarp->user1u().toSymEnt();
-                        VSymEnt* const parentSymp = ownerSymp ? ownerSymp->parentp() : nullptr;
-                        UINFO(2, "[iface-debug] owner var=" << ownerVarp << " varType="
-                                                               << static_cast<int>(ownerVarp->varType())
-                                                               << " sym=" << ownerSymp
-                                                               << " parentSym=" << parentSymp);
-                    } else {
-                        UINFO(2, "[iface-debug] owner var not found for rq_t reference");
-                    }
+                    if (VN_IS(curp, NodeModule)) break;
+                }
+                if (ownerVarp) {
+                    VSymEnt* const ownerSymp = ownerVarp->user1u().toSymEnt();
+                    VSymEnt* const parentSymp = ownerSymp ? ownerSymp->parentp() : nullptr;
+                    UINFO(3, indent() << "[iface-debug] typedef owner var=" << ownerVarp
+                                       << " varType=" << static_cast<int>(ownerVarp->varType())
+                                       << " sym=" << ownerSymp << " parentSym=" << parentSymp);
                 }
                 // EOM
                 s_ifaceTypedefContext.erase(nodep);
@@ -5770,17 +5769,16 @@ UINFO(2, "[iface-debug] rq_t pin " << pinp
             } else if (m_insideClassExtParam) {
                 return;
             } else {
-                if (nodep->name() == "rq_t") {
-                    UINFO(2, "[iface-debug] pre-error rq_t contextCell=" << contextCellp << " specializedTypedefp=" << specializedTypedefp << " foundp=" << foundp << " dotPos=" << int(m_ds.m_dotPos));
-                    //std::exit(0);
-                }
+                UINFO(2, indent() << "[iface-debug] typedef lookup miss name=" << nodep->name()
+                                   << " contextCell=" << contextCellp
+                                   << " specializedTypedef=" << specializedTypedefp
+                                   << " foundSym=" << foundp
+                                   << " dotPos=" << int(m_ds.m_dotPos));
                 if (foundp) {
                     UINFO(1, "Found sym node: " << foundp->nodep());
                     nodep->v3error("Expecting a data type: " << nodep->prettyNameQ());
-                    exit(0);
                 } else {
                     nodep->v3error("Can't find typedef/interface: " << nodep->prettyNameQ());
-                    exit(0);
                 }
             }
         }
