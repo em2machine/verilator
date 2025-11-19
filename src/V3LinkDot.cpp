@@ -5512,6 +5512,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
             VSymEnt* contextSymp = nullptr;
 
             auto rememberContext = [&](const AstCell* cellp, VSymEnt* symp = nullptr) {
+                if (!cellp) return;
+                if (nodep->classOrPackagep()) {
+                    UINFO(4, indent() << "[iface-debug] typedef skip cache for class/package node="
+                                       << nodep << " name=" << nodep->name());
+                    return;
+                }
                 auto resolved = remapModuleCellToIface(cellp, symp, "cache");
                 const AstCell* const resolvedCellp = resolved.first;
                 VSymEnt* resolvedSymp = resolved.second;
@@ -5522,24 +5528,44 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         resolvedSymp = LinkDotState::getNodeSym(nonConstCellp);
                     }
                     if (nodep->name() == "rq_t") {
-                        UINFO(4, "[iface-debug] rememberContext rq_t cell=" << resolvedCellp << " sym=" << resolvedSymp);
+                        UINFO(4, "[iface-debug] rememberContext rq_t cell=" << resolvedCellp
+                                                                           << " sym="
+                                                                           << resolvedSymp);
                     }
                     s_ifaceTypedefContext[nodep] = {resolvedCellp, resolvedSymp};
                 }
             };
 
             if (m_statep->forPrimary() && contextCellp) {
-                UINFO(4, indent() << "[iface-debug] typedef defer primary node=" << nodep << " name=" << nodep->name() << " cell=" << contextCellp);
-                nodep->user3(0);
-                rememberContext(contextCellp);
-                return;
+                if (nodep->name() == "cfg_t") {
+                    UINFO(3, indent() << "[iface-debug] cfg_t primary deferral hit cell=" << contextCellp);
+                }
+                if (!nodep->classOrPackagep() && m_statep->forPrimary() && contextCellp) {
+                    UINFO(4, indent() << "[iface-debug] typedef defer primary node=" << nodep << " name=" << nodep->name() << " cell=" << contextCellp);
+                    nodep->user3(0);
+                    rememberContext(contextCellp);
+                    return;
+                }
+            }
+            if (nodep->name() == "cfg_t" && m_statep->forPrimary()) {
+                UINFO(3, indent() << "[iface-debug] cfg_t continuing primary without deferral cell=" << contextCellp);
             }
 
             if (!contextCellp) {
                 const auto it = s_ifaceTypedefContext.find(nodep);
                 if (it != s_ifaceTypedefContext.end()) {
+                    if (nodep->name() == "cfg_t") {
+                        UINFO(3, indent()
+                                       << "[iface-debug] cfg_t would reload cached interface context"
+                                       << " cachedCell=" << it->second.cellp);
+                    }
                     contextCellp = it->second.cellp;
                     contextSymp = it->second.symp;
+                    if (nodep->name() == "cfg_t") {
+                        UINFO(3, indent()
+                                       << "[iface-debug] cfg_t about to remember cached context"
+                                       << " cell=" << contextCellp);
+                    }
                     rememberContext(contextCellp, contextSymp);
                 }
             }
@@ -5605,6 +5631,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 foundp = m_curSymp->findIdFallback(nodep->name());
             } else {
                 foundp = m_curSymp->findIdFlat(nodep->name());
+            }
+            if (nodep->name() == "cfg_t" && foundp && VN_IS(foundp->nodep(), Typedef)) {
+                UINFO(3, indent() << "[iface-debug] cfg_t legacy resolution path foundp="  << foundp->nodep());
             }
 
             if (specializedTypedefp) {
