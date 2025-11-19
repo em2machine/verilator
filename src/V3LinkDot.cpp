@@ -71,6 +71,8 @@
 #include "V3Parse.h"
 #include "V3Randomize.h"
 #include "V3String.h"
+
+#include <cstdlib>
 #include "V3Const.h"
 #include "V3SymTable.h"
 
@@ -3186,7 +3188,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     const IfaceTypedefContextEntry& cachedEntry = entry.second;
                     const AstCell* const cachedCellp = cachedEntry.cellp;
                     VSymEnt* const cachedSymp = cachedEntry.symp;
+                    const AstCell* effectiveCachedCellp = cachedCellp;
+                    VSymEnt* effectiveCachedSymp = cachedSymp;
                     AstCell* const storedCellp = VN_CAST(typedefRefp->user2p(), Cell);
+                    if (typedefRefp && typedefRefp->name() == "rq_t") {
+                        UINFO(2, "[iface-debug] stage1 context entry rq_t storedCell=" << storedCellp);
+                    }
+                    if (typedefRefp && typedefRefp->name() == "rq_t") {
+                        UINFO(2, "[iface-debug] stage1 context entry rq_t cell=" << cachedCellp << " stored=" << storedCellp << " module=" << nodep);
+                    }
                     if (!reported) {
                         reported = true;
                         UINFO(3, indent() << "iface typedef paramed entering cell=" << nodep
@@ -3204,16 +3214,65 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         }
                     };
 
-                    logStageSummary("stage1", cachedCellp, storedCellp, cachedSymp);
-                    if (cachedCellp && cachedCellp->modp() && !VN_IS(cachedCellp->modp(), Iface)) {
+                    logStageSummary("stage1", effectiveCachedCellp, storedCellp, effectiveCachedSymp);
+                    if (effectiveCachedCellp && effectiveCachedCellp->modp()
+                        && !VN_IS(effectiveCachedCellp->modp(), Iface)) {
                         UINFO(2, indent() << "iface typedef stage1 module-context cache ref="
-                                          << cachedCellp << " mod=" << cachedCellp->modp());
+                                          << effectiveCachedCellp
+                                          << " mod=" << effectiveCachedCellp->modp());
+                        const AstCell* remapIfaceCellp = nullptr;
+                        VSymEnt* remapIfaceSymp = nullptr;
+                        for (AstPin* pinp = nodep->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+                            AstVar* const portVarp = pinp->modVarp();
+
+                            if (!portVarp || !portVarp->isIfaceRef()) continue;
+                            AstIfaceRefDType* const portIfacep
+                                = LinkDotState::ifaceRefFromArray(portVarp->subDTypep());
+                            if (!portIfacep) continue;
+                            AstNode* const exprp = pinp->exprp();
+                            const AstVarRef* const connRefp = VN_CAST(exprp, VarRef);
+                            AstVar* const connVarp = connRefp ? connRefp->varp() : nullptr;
+
+UINFO(2, "[iface-debug] rq_t pin " << pinp
+                << " portVar=" << portVarp
+                << " isIfaceRef=" << portVarp->isIfaceRef()
+                << " expr=" << exprp
+                << " connVar=" << connVarp);
+
+                            if (!connVarp) continue;
+                            AstIfaceRefDType* const connIfacep
+                                = LinkDotState::ifaceRefFromArray(connVarp->subDTypep());
+                            if (!connIfacep) continue;
+                            if (const AstCell* const boundCellp = connIfacep->cellp()) {
+                                remapIfaceCellp = resolveLiveCell(boundCellp);
+                                if (remapIfaceCellp
+                                    && LinkDotState::existsNodeSym(const_cast<AstCell*>(remapIfaceCellp))) {
+                                    remapIfaceSymp
+                                        = LinkDotState::getNodeSym(const_cast<AstCell*>(remapIfaceCellp));
+                                }
+                                break;
+                            }
+                        }
+                        if (remapIfaceCellp) {
+                            effectiveCachedCellp = remapIfaceCellp;
+                            VSymEnt* const newSymp
+                                = remapIfaceSymp ? remapIfaceSymp : effectiveCachedSymp;
+                            effectiveCachedSymp = newSymp;
+                            typedefRefp->user2p(const_cast<AstCell*>(remapIfaceCellp));
+                            updateCacheEntry(typedefRefp, {remapIfaceCellp, newSymp});
+                            UINFO(2, indent() << "iface typedef stage1 adopted interface cell="
+                                              << remapIfaceCellp << " sym=" << newSymp
+                                              << " typedef=" << typedefRefp);
+                        } else {
+                            UINFO(3, indent() << "iface typedef stage1 module-context no iface remap for typedef="
+                                               << typedefRefp);
+                        }
                     }
                     const AstCell* const liveCachedCellp
-                        = cachedCellp ? resolveLiveCell(cachedCellp) : nullptr;
+                        = effectiveCachedCellp ? resolveLiveCell(effectiveCachedCellp) : nullptr;
                     const AstCell* const liveStoredCellp
                         = storedCellp ? resolveLiveCell(storedCellp) : nullptr;
-                    VSymEnt* liveCachedSymp = cachedSymp;
+                    VSymEnt* liveCachedSymp = effectiveCachedSymp;
                     logStageSummary("stage1 live", liveCachedCellp, liveStoredCellp, liveCachedSymp);
                     AstNode* const cachedSymNodeStage1
                         = liveCachedSymp ? liveCachedSymp->nodep() : nullptr;
@@ -3253,6 +3312,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                                << cachedCellp);
                             }
                             updateCacheEntry(typedefRefp, {liveContextCellp, liveCachedSymp});
+                            effectiveCachedCellp = liveContextCellp;
+                            effectiveCachedSymp = liveCachedSymp;
                             UINFO(3, indent() << "iface typedef stage1 cache updated (refresh) cell="
                                                << liveContextCellp << " sym=" << liveCachedSymp);
                         } else {
@@ -3264,6 +3325,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             const AstCell* const clearedCellp
                                 = liveContextCellp ? liveContextCellp : contextCellp;
                             updateCacheEntry(typedefRefp, {clearedCellp, nullptr});
+                            effectiveCachedCellp = clearedCellp;
+                            effectiveCachedSymp = nullptr;
                             UINFO(3, indent()
                                            << "iface typedef stage1 cache cleared pending specialized cell="
                                            << clearedCellp);
@@ -3277,6 +3340,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         UINFO(3, indent() << "iface typedef stage1 recovered cached sym from live cell="
                                            << liveCachedSymp << " cell=" << liveCachedCellp);
                         updateCacheEntry(typedefRefp, {liveCachedCellp, liveCachedSymp});
+                        effectiveCachedCellp = liveCachedCellp;
+                        effectiveCachedSymp = liveCachedSymp;
                         UINFO(3, indent() << "iface typedef stage1 cache updated (fallback) cell="
                                            << liveCachedCellp << " sym=" << liveCachedSymp);
                     }
@@ -3344,9 +3409,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                        << "iface typedef stage1 recover skipping stale sym="
                                        << cachedSymp << " node=" << cachedSymNodep);
                     }
-                    deferredEntries.push_back({typedefRefp, cachedCellp, cachedSymp, storedCellp,
-                                               liveCachedCellp, liveStoredCellp, liveCachedSymp,
-                                               recoveredCellp, recoveredSymp});
+                    deferredEntries.push_back({typedefRefp, effectiveCachedCellp, effectiveCachedSymp,
+                                               storedCellp, liveCachedCellp, liveStoredCellp,
+                                               liveCachedSymp, recoveredCellp, recoveredSymp});
                 }
                 for (const DeferredTypedefEntry& entry : deferredEntries) {
                     const bool cachedMatches = entry.liveCachedCellp == nodep;
@@ -5444,6 +5509,57 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 return nullptr;
             }();
 
+            const auto remapModuleCellToIface
+                = [&](const AstCell* cellp, VSymEnt* symp, const char* stage)
+                -> std::pair<const AstCell*, VSymEnt*> {
+                const AstCell* resolvedCellp = cellp;
+                VSymEnt* resolvedSymp = symp;
+                if (!cellp || !cellp->modp() || VN_IS(cellp->modp(), Iface)) {
+                    return {resolvedCellp, resolvedSymp};
+                }
+                AstCell* const nonConstCtxCellp = const_cast<AstCell*>(cellp);
+                for (AstPin* pinp = nonConstCtxCellp->pinsp(); pinp;
+                     pinp = VN_AS(pinp->nextp(), Pin)) {
+                    AstVar* const portVarp = pinp->modVarp();
+                    if (!portVarp || !portVarp->isIfaceRef()) continue;
+                    AstIfaceRefDType* const portIfacep
+                        = LinkDotState::ifaceRefFromArray(portVarp->subDTypep());
+                    if (!portIfacep) continue;
+                    AstNode* const exprp = pinp->exprp();
+                    const AstVarRef* const connRefp = VN_CAST(exprp, VarRef);
+                    AstVar* const connVarp = connRefp ? connRefp->varp() : nullptr;
+                    if (!connVarp) continue;
+                    AstIfaceRefDType* const connIfacep
+                        = LinkDotState::ifaceRefFromArray(connVarp->subDTypep());
+                    if (!connIfacep) continue;
+                    if (const AstCell* const boundCellp = connIfacep->cellp()) {
+                        const AstCell* const ifaceCellp = resolveLiveCell(boundCellp);
+                        if (ifaceCellp
+                            && LinkDotState::existsNodeSym(
+                                const_cast<AstCell*>(ifaceCellp))) {
+                            resolvedSymp = LinkDotState::getNodeSym(
+                                const_cast<AstCell*>(ifaceCellp));
+                        }
+                        if (ifaceCellp) {
+                            if (nodep->name() == "rq_t") {
+                                UINFO(2, "[iface-debug] " << stage
+                                                           << " rq_t context remap cell=" << cellp
+                                                           << " -> " << ifaceCellp
+                                                           << " sym=" << resolvedSymp);
+                            } else {
+                                UINFO(3, indent() << "iface typedef " << stage
+                                                  << " context remap cell=" << cellp
+                                                  << " -> " << ifaceCellp
+                                                  << " typedef=" << nodep);
+                            }
+                            resolvedCellp = ifaceCellp;
+                        }
+                        break;
+                    }
+                }
+                return {resolvedCellp, resolvedSymp};
+            };
+
             const AstCell* contextCellp = nullptr;
             if (m_cellp) {
                 contextCellp = m_cellp;
@@ -5452,15 +5568,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (savedContextCellp) {
                 contextCellp = savedContextCellp;
             }
+            VSymEnt* contextSymp = nullptr;
 
             auto rememberContext = [&](const AstCell* cellp, VSymEnt* symp = nullptr) {
-                if (!cellp) return;
-                AstCell* const nonConstCellp = const_cast<AstCell*>(cellp);
-                nodep->user2p(nonConstCellp);
-                if (!symp && LinkDotState::existsNodeSym(nonConstCellp)) {
-                    symp = LinkDotState::getNodeSym(nonConstCellp);
+                auto resolved = remapModuleCellToIface(cellp, symp, "cache");
+                const AstCell* const resolvedCellp = resolved.first;
+                VSymEnt* resolvedSymp = resolved.second;
+                if (resolvedCellp) {
+                    AstCell* const nonConstCellp = const_cast<AstCell*>(resolvedCellp);
+                    nodep->user2p(nonConstCellp);
+                    if (!resolvedSymp && LinkDotState::existsNodeSym(nonConstCellp)) {
+                        resolvedSymp = LinkDotState::getNodeSym(nonConstCellp);
+                    }
+                    if (nodep->name() == "rq_t") {
+                        UINFO(2, "[iface-debug] rememberContext rq_t cell=" << resolvedCellp
+                                                                               << " sym=" << resolvedSymp);
+                    }
+                    s_ifaceTypedefContext[nodep] = {resolvedCellp, resolvedSymp};
                 }
-                s_ifaceTypedefContext[nodep] = {cellp, symp};
             };
 
             if (m_statep->forPrimary() && contextCellp) {
@@ -5475,12 +5600,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 const auto it = s_ifaceTypedefContext.find(nodep);
                 if (it != s_ifaceTypedefContext.end()) {
                     contextCellp = it->second.cellp;
-                    rememberContext(contextCellp, it->second.symp);
+                    contextSymp = it->second.symp;
+                    rememberContext(contextCellp, contextSymp);
                 }
             }
             if (!contextCellp && savedContextCellp) {
                 contextCellp = savedContextCellp;
                 rememberContext(contextCellp);
+                const auto it = s_ifaceTypedefContext.find(nodep);
+                if (it != s_ifaceTypedefContext.end()) {
+                    contextCellp = it->second.cellp;
+                    contextSymp = it->second.symp;
+                }
             }
             if (contextCellp) {
                 const AstCell* const liveCellp = resolveLiveCell(contextCellp);
@@ -5488,8 +5619,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UINFO(3, indent() << "iface typedef context cell refresh dead cell="
                                        << contextCellp << " -> " << liveCellp);
                     contextCellp = liveCellp;
-                    rememberContext(contextCellp);
+                    rememberContext(contextCellp, contextSymp);
                 }
+            }
+            if (!contextSymp) {
+                const auto it = s_ifaceTypedefContext.find(nodep);
+                if (it != s_ifaceTypedefContext.end()) contextSymp = it->second.symp;
+            }
+            std::tie(contextCellp, contextSymp)
+                = remapModuleCellToIface(contextCellp, contextSymp, "resolve");
+            if (contextCellp && nodep->name() == "rq_t") {
+                UINFO(2, "[iface-debug] resolve-context rq_t cell=" << contextCellp
+                                                                       << " sym=" << contextSymp);
             }
             AstTypedef* specializedTypedefp = nullptr;
             VSymEnt* specializedSymp = nullptr;
@@ -5504,12 +5645,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                    << " dead=" << (instModp && instModp->dead())
                                    << " clone=" << instClonep
                                    << " cloneDead=" << (instClonep && instClonep->dead()));
+                if (nodep->name() == "rq_t") {
+                    UINFO(2, "[iface-debug] pre-match rq_t contextCell=" << contextCellp << " instMod=" << instModp << " curSym=" << m_curSymp << " m_cellp=" << m_cellp << " dotSym=" << m_ds.m_dotSymp);
+                }
                 if (AstIface* const instIfacep = VN_CAST(instModp, Iface)) {
                     for (AstNode* stmtp = instIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                         if (AstTypedef* const tdefp = VN_CAST(stmtp, Typedef)) {
                             UINFO(3, indent() << "iface typedef inspect typedef=" << tdefp
                                                << " name=" << tdefp->name()
                                                << " decl=" << tdefp->fileline()->ascii());
+                            if (nodep->name() == "rq_t") {
+                                UINFO(2, "[iface-debug] inspecting typedef candidate name=" << tdefp->name() << " typedef=" << tdefp << " stmt=" << stmtp);
+                            }
                             if (tdefp->name() == nodep->name()) {
                                 specializedTypedefp = tdefp;
                                 if (LinkDotState::existsNodeSym(specializedTypedefp)) {
@@ -5542,6 +5689,29 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 UINFO(3, indent() << "iface typedef paramed resolved node=" << nodep
                                    << " -> " << specializedTypedefp
                                    << " paramType=" << paramTypep << " child=" << childDTypep);
+                if (nodep->name() == "rq_t") {
+                    UINFO(2, "[iface-debug] resolved rq_t paramType=" << paramTypep
+                                                                           << " child=" << childDTypep
+                                                                           << " contextCell=" << contextCellp);
+                    AstVar* ownerVarp = nullptr;
+                    for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+                        if (AstVar* const varp = VN_CAST(curp, Var)) {
+                            ownerVarp = varp;
+                            break;
+                        }
+                        if (VN_IS(curp, NodeModule)) break;
+                    }
+                    if (ownerVarp) {
+                        VSymEnt* const ownerSymp = ownerVarp->user1u().toSymEnt();
+                        VSymEnt* const parentSymp = ownerSymp ? ownerSymp->parentp() : nullptr;
+                        UINFO(2, "[iface-debug] owner var=" << ownerVarp << " varType="
+                                                               << static_cast<int>(ownerVarp->varType())
+                                                               << " sym=" << ownerSymp
+                                                               << " parentSym=" << parentSymp);
+                    } else {
+                        UINFO(2, "[iface-debug] owner var not found for rq_t reference");
+                    }
+                }
                 // EOM
                 s_ifaceTypedefContext.erase(nodep);
                 nodep->typedefp(specializedTypedefp);
@@ -5600,11 +5770,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (m_insideClassExtParam) {
                 return;
             } else {
+                if (nodep->name() == "rq_t") {
+                    UINFO(2, "[iface-debug] pre-error rq_t contextCell=" << contextCellp << " specializedTypedefp=" << specializedTypedefp << " foundp=" << foundp << " dotPos=" << int(m_ds.m_dotPos));
+                    //std::exit(0);
+                }
                 if (foundp) {
                     UINFO(1, "Found sym node: " << foundp->nodep());
                     nodep->v3error("Expecting a data type: " << nodep->prettyNameQ());
+                    exit(0);
                 } else {
                     nodep->v3error("Can't find typedef/interface: " << nodep->prettyNameQ());
+                    exit(0);
                 }
             }
         }
@@ -5824,6 +6000,7 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 }
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
+    UINFO(2, "[iface-debug] enter linkDotParamed");
     UINFO(2, __FUNCTION__ << ":");
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);
