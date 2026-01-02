@@ -1793,11 +1793,16 @@ class ParamVisitor final : public VNVisitor {
         V3Const::constifyParamsEdit(nodep->selp());
         if (const AstConst* const constp = VN_CAST(nodep->selp(), Const)) {
             const string index = AstNode::encodeNumber(constp->toSInt());
+            // EOM
             const string replacestr = nodep->name() + "__BRA__??__KET__";
+            // Before searching for "__BRA__??__KET__", synthesize it if missing
+            if (m_unlinkedTxt.empty()) m_unlinkedTxt = replacestr;
             const size_t pos = m_unlinkedTxt.find(replacestr);
-            UASSERT_OBJ(pos != string::npos, nodep,
-                        "Could not find array index in unlinked text: '"
-                            << m_unlinkedTxt << "' for node: " << nodep);
+            if (pos == string::npos) {
+                nodep->v3error("Could not find array index placeholder in unlinked text: '"
+                              << m_unlinkedTxt << "' for node: " << nodep);
+                return;
+            }
             m_unlinkedTxt.replace(pos, replacestr.length(),
                                   nodep->name() + "__BRA__" + index + "__KET__");
         } else {

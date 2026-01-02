@@ -2027,6 +2027,36 @@ class WidthVisitor final : public VNVisitor {
         // Only used in CStmts which don't care....
     }
 
+    void visit(AstCellArrayRef* nodep) override {
+        if (nodep->didWidthAndSet()) return;
+        userIterateAndNext(nodep->selp(), WidthVP{SELF, PRELIM}.p());
+        userIterateAndNext(nodep->selp(), WidthVP{SELF, FINAL}.p());
+        nodep->dtypeSetVoid();  // placeholder; this node shouldn’t survive beyond linking
+        nodep->didWidth(true);
+    }
+
+    void visit(AstCellRef* nodep) override {
+        if (nodep->didWidthAndSet()) return;
+
+        if (AstNodeExpr* const cellExprp = VN_CAST(nodep->cellp(), NodeExpr)) {
+            userIterateAndNext(cellExprp, WidthVP{SELF, PRELIM}.p());
+            userIterateAndNext(cellExprp, WidthVP{SELF, FINAL}.p());
+        }
+
+        if (AstNodeExpr* const exprp = VN_CAST(nodep->exprp(), NodeExpr)) {
+            userIterateAndNext(exprp, WidthVP{SELF, PRELIM}.p());
+            nodep->dtypeFrom(exprp);
+            userIterateAndNext(exprp, WidthVP{SELF, FINAL}.p());
+        } else if (AstNodeDType* const dtypep = VN_CAST(nodep->exprp(), NodeDType)) {
+            userIterateAndNext(dtypep, WidthVP{SELF, BOTH}.p());
+            nodep->dtypep(dtypep);
+        } else {
+            nodep->dtypeSetVoid();  // Fallback; should not normally occur
+        }
+
+        nodep->didWidth(true);
+    }
+
     // DTYPES
     void visit(AstNodeArrayDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
