@@ -126,6 +126,7 @@ for s in [
         'is not an unpacked array, but is in an unpacked array context',
         'loading other than unpacked-array variable',
         'loading other than unpacked/associative-array variable',
+        'Could not find array index placeholder in unlinked text: \'',
 ]:
     Suppressed[s] = True
 
