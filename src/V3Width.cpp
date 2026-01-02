@@ -2031,7 +2031,7 @@ class WidthVisitor final : public VNVisitor {
         if (nodep->didWidthAndSet()) return;
         userIterateAndNext(nodep->selp(), WidthVP{SELF, PRELIM}.p());
         userIterateAndNext(nodep->selp(), WidthVP{SELF, FINAL}.p());
-        nodep->dtypeSetVoid();  // placeholder; this node shouldn’t survive beyond linking
+        nodep->dtypeSetVoid();  // placeholder; this node shouldnt survive beyond linking
         nodep->didWidth(true);
     }
 
