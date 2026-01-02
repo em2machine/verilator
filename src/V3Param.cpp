@@ -1800,7 +1800,7 @@ class ParamVisitor final : public VNVisitor {
             const size_t pos = m_unlinkedTxt.find(replacestr);
             if (pos == string::npos) {
                 nodep->v3error("Could not find array index placeholder in unlinked text: '"
-                              << m_unlinkedTxt << "' for node: " << nodep);
+                               << m_unlinkedTxt << "' for node: " << nodep);
                 return;
             }
             m_unlinkedTxt.replace(pos, replacestr.length(),

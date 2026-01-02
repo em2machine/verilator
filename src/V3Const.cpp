@@ -4138,7 +4138,8 @@ class ConstVisitor final : public VNVisitor {
     void visit(AstNode* nodep) override {
         // Default: Just iterate
         if (m_required) {
-            if (VN_IS(nodep, NodeDType) || VN_IS(nodep, Range) || VN_IS(nodep, SliceSel) || VN_IS(nodep, Dot)) {
+            if (VN_IS(nodep, NodeDType) || VN_IS(nodep, Range) || VN_IS(nodep, SliceSel)
+                || VN_IS(nodep, Dot)) {
                 // ignore
             } else if (AstCellRef* const crp = VN_CAST(nodep, CellRef)) {
                 iterate(crp->exprp());
@@ -4150,11 +4151,12 @@ class ConstVisitor final : public VNVisitor {
             } else if (AstCellArrayRef* const car = VN_CAST(nodep, CellArrayRef)) {
                 iterate(car->selp());
                 nodep->v3error("Expecting expression to be constant, but can't convert a "
-                  << nodep->prettyTypeName() << " (cell array reference) to constant.");
+                               << nodep->prettyTypeName()
+                               << " (cell array reference) to constant.");
                 return;
             } else {
                 nodep->v3error("Expecting expression to be constant, but can't convert a "
-                              << nodep->prettyTypeName() << " to constant.");
+                               << nodep->prettyTypeName() << " to constant.");
             }
         } else {
             if (nodep->isTimingControl()) m_hasJumpDelay = true;
