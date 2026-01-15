@@ -3796,7 +3796,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 m_ds.m_dotText = "";
                             }
                         } else {
-                            newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                          // EOM
+                            //newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                            AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                            if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
+                            newp = refp;
                         }
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -3831,8 +3835,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotSymp = m_statep->getNodeSym(ifacerefp->ifaceViaCellp());
                     m_ds.m_dotPos = DP_SCOPE;
                     ok = true;
-                    AstNode* const newp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+
+                    // EOM
+                    //AstNode* const newp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+                    //nodep->replaceWith(newp);
+                    AstVarRef* const refp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+                    if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
+                    AstNode* const newp = refp;
                     nodep->replaceWith(newp);
+
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
                     AstNode* newp;
@@ -3841,6 +3852,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             = new AstVarXRef{nodep->fileline(), nodep->name(), m_ds.m_dotText,
                                              VAccess::READ};  // lvalue'ness computed later
                         refp->varp(varp);
+                        // EOM
+                        if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
                         refp->containsGenBlock(m_ds.m_genBlk);
                         if (varp->attrSplitVar()) {
                             refp->v3warn(
@@ -3877,6 +3890,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         }
                         AstVarRef* const refp = new AstVarRef{
                             nodep->fileline(), varp, VAccess::READ};  // lvalue'ness computed later
+                        // EOM
+                        if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
+
                         refp->classOrPackagep(foundp->classOrPackagep());
                         newp = refp;
                     }
@@ -3921,8 +3937,11 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotPos = DP_SCOPE;
                     UINFO(9, indent() << "modport -> iface varref " << foundp->nodep());
                     // We lose the modport name here, so we cannot detect mismatched modports.
-                    AstNodeExpr* newp
-                        = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                    // EOM
+                    AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                    if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
+                    AstNodeExpr* newp = refp;
+
                     auto* const cellarrayrefp = VN_CAST(m_ds.m_unlinkedScopep, CellArrayRef);
                     if (cellarrayrefp) {
                         // iface[vec].modport became CellArrayRef(iface, lsb)
@@ -4095,6 +4114,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             = createImplicitVar(m_curSymp, nodep, m_modp, m_modSymp, err);
                         AstVarRef* const newp
                             = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
+                        // EOM
+                        if (varp && !newp->dtypep()) newp->dtypeFrom(varp);
+
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     }
@@ -4212,6 +4234,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (AstVar* const varp
                 = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr) {
                 nodep->varp(varp);
+
+                // EOM
+                if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
+
                 updateVarUse(nodep->varp());
                 // Generally set by parse, but might be an import
                 nodep->classOrPackagep(foundp->classOrPackagep());
@@ -4227,6 +4253,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->varp(vscp->varp());
             nodep->varScopep(vscp);
             updateVarUse(nodep->varp());
+
+            // EOM
+            if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
+
             UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
         }
     }
@@ -4311,6 +4341,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr;
                 nodep->varp(varp);
                 updateVarUse(nodep->varp());
+
+                // EOM
+                if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
+
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints varp
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (nodep->varp() && errorHierNonPort(nodep, nodep->varp(), dotSymp)) return;
@@ -4357,6 +4391,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     nodep->varp(vscp->varp());
                     nodep->varScopep(vscp);
                     updateVarUse(nodep->varp());
+
+                    // EOM
+                    if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
+
                     UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
                     AstVarRef* const newvscp
                         = new AstVarRef{nodep->fileline(), vscp, nodep->access()};

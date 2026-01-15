@@ -22,7 +22,7 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 V3LinkDotIfaceCapture::CapturedMap V3LinkDotIfaceCapture::s_map{};
-
+V3LinkDotIfaceCapture::LocalparamMap V3LinkDotIfaceCapture::s_localparamMap{};
 bool V3LinkDotIfaceCapture::s_enabled = true;
 
 AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
@@ -236,4 +236,34 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
     if (promoteVarCb && promoteVarCb(enclosingVarp, refp)) return;
     UINFO(9, indentFn() << "iface capture failed to convert owner var name="
                         << enclosingVarp->prettyName());
+}
+
+void V3LinkDotIfaceCapture::addLocalparam(AstVar* varp, AstNode* exprp,
+                                          AstNodeModule* ownerModp) {
+    if (!varp || !exprp) return;
+    // Only capture if not already captured
+    if (s_localparamMap.find(varp) != s_localparamMap.end()) return;
+    // Clone the expression to preserve it
+    AstNode* const clonedExprp = exprp->cloneTree(false);
+    s_localparamMap[varp] = CapturedIfaceLocalparam{varp, clonedExprp, ownerModp};
+    UINFO(5, "LOCALPARAM-CAPTURE var=" << varp->name()
+              << " owner=" << (ownerModp ? ownerModp->name() : "<null>")
+              << " expr=" << clonedExprp << endl);
+}
+const V3LinkDotIfaceCapture::CapturedIfaceLocalparam*
+V3LinkDotIfaceCapture::findLocalparam(const AstVar* varp) {
+    if (!varp) return nullptr;
+    const auto it = s_localparamMap.find(varp);
+    if (it == s_localparamMap.end()) return nullptr;
+    return &it->second;
+}
+void V3LinkDotIfaceCapture::forEachLocalparamOwned(
+    const AstNodeModule* ownerModp,
+    const std::function<void(const CapturedIfaceLocalparam&)>& fn) {
+    if (!ownerModp || !fn) return;
+    for (const auto& kv : s_localparamMap) {
+        if (kv.second.ownerModp == ownerModp) {
+            fn(kv.second);
+        }
+    }
 }

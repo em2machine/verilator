@@ -68,6 +68,8 @@
 #include <map>
 #include <memory>
 #include <vector>
+// EOM
+#include <unordered_map>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -778,6 +780,140 @@ class ParamProcessor final {
                 }
             }
         }
+
+        // EOM: Restore captured localparam expressions for interfaces/classes
+        // After parameters are assigned, restore original expressions and re-constify
+/*
+        if (VN_IS(newModp, Iface) || VN_IS(newModp, Class)) {
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    if (varp->varType() != VVarType::LPARAM) continue;
+                    // Find the original var in srcModp to look up captured expression
+                    AstVar* srcVarp = nullptr;
+                    for (AstNode* srcStmtp = srcModp->stmtsp(); srcStmtp;
+                         srcStmtp = srcStmtp->nextp()) {
+                        if (AstVar* const svp = VN_CAST(srcStmtp, Var)) {
+                            if (svp->name() == varp->name()) {
+                                srcVarp = svp;
+                                break;
+                            }
+                        }
+                    }
+                    if (!srcVarp) continue;
+                    const auto* captured = V3LinkDotIfaceCapture::findLocalparam(srcVarp);
+                    if (captured && captured->origExprp) {
+                        UINFO(5, "LOCALPARAM-RESTORE var=" << varp->name()
+                              << " in " << newModp->name() << endl);
+                        // Replace constified value with clone of original expression
+                        if (varp->valuep()) varp->valuep()->unlinkFrBack()->deleteTree();
+                        AstNode* newExprp = captured->origExprp->cloneTree(false);
+                        // Relink VarRefs in the cloned expression to point to cloned vars
+                        newExprp->foreach([&](AstVarRef* refp) {
+                            const auto it = clonemapp->find(refp->varp());
+                            if (it != clonemapp->end()) {
+                                refp->varp(VN_AS(it->second, Var));
+                            }
+                        });
+                        varp->valuep(newExprp);
+                        // Width the expression to resolve MEMBERSELs, then constify
+                        V3Width::widthParamsEdit(varp);
+                        V3Const::constifyParamsEdit(varp);
+                    }
+                }
+            }
+        }
+*/
+
+        // EOM: Restore captured localparam expressions for interfaces/classes
+        // After parameters are assigned, restore original expressions.
+        // Do NOT constify here - let the normal passes handle ordering.
+        if (VN_IS(newModp, Iface) || VN_IS(newModp, Class)) {
+            // Build a name-to-var map for the cloned module's vars
+            std::unordered_map<std::string, AstVar*> clonedVarsByName;
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    clonedVarsByName[varp->name()] = varp;
+                }
+            }
+
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    if (varp->varType() != VVarType::LPARAM) continue;
+                    // Find the original var in srcModp to look up captured expression
+                    AstVar* srcVarp = nullptr;
+                    for (AstNode* srcStmtp = srcModp->stmtsp(); srcStmtp;
+                        srcStmtp = srcStmtp->nextp()) {
+                        if (AstVar* const svp = VN_CAST(srcStmtp, Var)) {
+                            if (svp->name() == varp->name()) {
+                                srcVarp = svp;
+                                break;
+                            }
+                        }
+                    }
+                    if (!srcVarp) continue;
+                    const auto* captured = V3LinkDotIfaceCapture::findLocalparam(srcVarp);
+                    if (captured && captured->origExprp) {
+                        UINFO(5, "LOCALPARAM-RESTORE var=" << varp->name()
+                              << " in " << newModp->name() << endl);
+                        // Replace constified value with clone of original expression
+                        if (varp->valuep()) varp->valuep()->unlinkFrBack()->deleteTree();
+                        AstNode* newExprp = captured->origExprp->cloneTree(false);
+
+                        // Relink VarRefs in the cloned expression:
+                        // 1. First try clonemapp (for vars from source module)
+                        // 2. Then try name-based lookup (for vars within same interface)
+                        newExprp->foreach([&](AstVarRef* refp) {
+                            const auto it = clonemapp->find(refp->varp());
+                            if (it != clonemapp->end()) {
+                                refp->varp(VN_AS(it->second, Var));
+                            } else {
+                                // Try name-based lookup for same-interface vars
+                                const auto nameIt = clonedVarsByName.find(refp->varp()->name());
+                                if (nameIt != clonedVarsByName.end()) {
+                                    refp->varp(nameIt->second);
+                                }
+                            }
+                        });
+
+                        varp->valuep(newExprp);
+                        // Do NOT constify here - expressions may reference other
+                        // localparams that haven't been restored yet.
+                        // Mark for later constification.
+                    }
+                }
+            }
+
+            // Now constify all restored localparams in dependency order
+            // Use iterative approach: keep trying until no progress
+            bool progress = true;
+            while (progress) {
+                progress = false;
+                for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                        if (varp->varType() != VVarType::LPARAM) continue;
+                        if (!varp->valuep()) continue;
+                        if (VN_IS(varp->valuep(), Const)) continue;  // Already done
+
+                        // Check if all referenced localparams are const
+                        bool allDepsConst = true;
+                        varp->valuep()->foreach([&](const AstVarRef* refp) {
+                            if (refp->varp()->varType() == VVarType::LPARAM
+                                && refp->varp()->valuep()
+                                && !VN_IS(refp->varp()->valuep(), Const)) {
+                                allDepsConst = false;
+                            }
+                        });
+
+                        if (allDepsConst) {
+                            V3Width::widthParamsEdit(varp);
+                            V3Const::constifyParamsEdit(varp);
+                            progress = true;
+                        }
+                    }
+                }
+            }
+        }
+
         return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
@@ -1312,7 +1448,17 @@ public:
         // Create new module name with _'s between the constants
         UINFOTREE(10, nodep, "", "cell");
         // Evaluate all module constants
-        V3Const::constifyParamsEdit(nodep);
+
+        // EOM
+        //V3Const::constifyParamsEdit(nodep);
+        //
+        // Avoid freezing interface-localparams under default gparams prior to specialization.
+        // (These can still contain unresolved DOT/MEMBERSEL etc and constify to X.)
+        // Keep prior behavior for modules/classes to avoid regressions.
+        //if (!VN_IS(srcModp, Iface)) {
+        if (!(VN_IS(srcModp, Iface) || VN_IS(srcModp, Class))) {
+            V3Const::constifyParamsEdit(nodep);
+        }
         // Set name for warnings for when we param propagate the module
         const string instanceName = someInstanceName + "." + nodep->name();
         srcModp->someInstanceName(instanceName);
@@ -1419,6 +1565,10 @@ class ParamVisitor final : public VNVisitor {
     std::unordered_set<std::string> m_ifacePortNames;  // Interface port names in current module
     std::unordered_set<std::string> m_ifaceInstNames;  // Interface decl names in current module
     string m_generateHierName;  // Generate portion of hierarchy name
+    // EOM
+    // cache of gparam names for current iface/class
+    std::unordered_set<std::string> m_gparamNames;
+    AstNodeModule* m_gparamCacheModp = nullptr;
 
     // METHODS
 
@@ -1502,6 +1652,112 @@ class ParamVisitor final : public VNVisitor {
 
         m_iterateModule = false;
     }
+
+    // EOM
+    // Helper to check if an expression references a global parameter
+    bool exprReferencesGParam(const AstNode* nodep) {
+        if (!nodep) return false;
+        bool hit = false;
+        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
+            if (hit) return;  // cheap early-out
+            if (const AstNodeVarRef* const varrefp = VN_CAST(exprp, NodeVarRef)) {
+                if (const AstVar* const varp = varrefp->varp()) {
+                    if (varp->isGParam()) hit = true;
+                }
+            } else if (const AstVarXRef* const varxrefp = VN_CAST(exprp, VarXRef)) {
+                if (const AstVar* const varp = varxrefp->varp()) {
+                    if (varp->isGParam()) hit = true;
+                }
+            }
+        });
+        return hit;
+    }
+
+    bool exprReferencesGParamOrParseRef(const AstNode* nodep) {
+        if (!nodep) return false;
+
+        // Only meaningful inside iface/class; otherwise keep old behavior
+        buildGParamNameCacheIfNeeded();
+
+        bool hit = false;
+        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
+            if (hit) return;
+
+            if (const AstNodeVarRef* const varrefp = VN_CAST(exprp, NodeVarRef)) {
+                if (const AstVar* const varp = varrefp->varp()) {
+                    if (varp->isGParam() && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) hit = true;
+                }
+            } else if (const AstVarXRef* const varxrefp = VN_CAST(exprp, VarXRef)) {
+                if (const AstVar* const varp = varxrefp->varp()) {
+                    if (varp->isGParam() && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) hit = true;
+                }
+            } else if (const AstParseRef* const parserefp = VN_CAST(exprp, ParseRef)) {
+                // Pre-LinkDot: cfg / types / etc still appear as ParseRef
+                if (m_gparamNames.count(parserefp->name())) hit = true;
+
+            }
+        });
+        return hit;
+    }
+
+    // Helper to check if an expression contains a member selection
+    bool exprContainsMemberSel(const AstNode* nodep) {
+        if (!nodep) return false;
+        bool hit = false;
+        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
+            if (hit) return;
+            if (VN_IS(exprp, MemberSel)) hit = true;
+        });
+        return hit;
+    }
+
+    void buildGParamNameCacheIfNeeded() {
+        if (m_gparamCacheModp == m_modp) return;  // already built for this module (even if empty)
+        m_gparamCacheModp = m_modp;
+        m_gparamNames.clear();
+        if (!m_modp) return;
+
+        for (AstNode* stp = m_modp->stmtsp(); stp; stp = stp->nextp()) {
+            if (const AstVar* const varp = VN_CAST(stp, Var)) {
+                if (varp->isGParam()) m_gparamNames.insert(varp->name());
+            }
+        }
+    }
+
+        bool exprNeedsPostLinkOrWidth(const AstNode* nodep, const AstNode** whyNodepp, const char** whyKindp) {
+        if (whyNodepp) *whyNodepp = nullptr;
+        if (whyKindp) *whyKindp = nullptr;
+        if (!nodep) return false;
+        bool hit = false;
+        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
+            if (hit) return;
+
+            const char* kindp = nullptr;
+            if (VN_IS(exprp, UnlinkedRef)) {
+                kindp = "UnlinkedRef";
+            } else if (VN_IS(exprp, ParseRef)) {
+                kindp = "ParseRef";
+            } else if (VN_IS(exprp, Dot)) {
+                kindp = "Dot";
+            } else if (VN_IS(exprp, MemberSel)) {
+                kindp = "MemberSel";
+            } else if (VN_IS(exprp, StructSel)) {
+                kindp = "StructSel";
+            } else if (VN_IS(exprp, VarXRef)) {
+                kindp = "VarXRef";
+            } else if (VN_IS(exprp, Sel) || VN_IS(exprp, SelBit) || VN_IS(exprp, SelExtract)) {
+                kindp = "Sel";
+            }
+
+            if (kindp) {
+                hit = true;
+                if (whyNodepp) *whyNodepp = exprp;
+                if (whyKindp) *whyKindp = kindp;
+            }
+        });
+        return hit;
+    }
+
 
     // Extract the base reference name from a dotted VarXRef (e.g., "iface.FOO" -> "iface")
     string getRefBaseName(const AstVarXRef* refp) {
@@ -1660,7 +1916,28 @@ class ParamVisitor final : public VNVisitor {
                 nodep->v3error("Parameter without default value is never given value"
                                << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());
             } else {
-                V3Const::constifyParamsEdit(nodep);  // The variable, not just the var->init()
+                /*
+                // EOM: For interface/class localparams, width first then capture before constify
+                const bool inIfaceOrClass = VN_IS(m_modp, Iface) || VN_IS(m_modp, Class);
+                const bool isLocalparam = nodep->varType() == VVarType::LPARAM;
+                if (inIfaceOrClass && isLocalparam && nodep->valuep()
+                    && !VN_IS(nodep->valuep(), Const)) {
+                    // Width to resolve MEMBERSELs
+                    V3Width::widthParamsEdit(nodep);
+                    // Capture the widthed expression before constification
+                    V3LinkDotIfaceCapture::addLocalparam(nodep, nodep->valuep(), m_modp);
+                }
+                */
+
+                // In visit(AstVar*) for localparams, check if expression contains VARXREF
+                bool hasVarXRef = false;
+                nodep->valuep()->foreach([&](const AstVarXRef*) { hasVarXRef = true; });
+                if (hasVarXRef) {
+                    // Don't constify - let it be evaluated later
+                    return;
+                }
+
+                V3Const::constifyParamsEdit(nodep);
             }
         }
     }
@@ -1943,6 +2220,26 @@ public:
     explicit ParamVisitor(ParamState& state, AstNetlist* netlistp)
         : m_state{state}
         , m_processor{netlistp} {
+
+      // EOM: Capture interface/class localparam expressions after widthing
+        // but before constification. Width resolves MEMBERSELs through dtype.
+        for (AstNodeModule* modp = netlistp->modulesp(); modp;
+            modp = VN_AS(modp->nextp(), NodeModule)) {
+            if (VN_IS(modp, Iface) || VN_IS(modp, Class)) {
+                for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                        if (varp->varType() == VVarType::LPARAM && varp->valuep()
+                            && !VN_IS(varp->valuep(), Const)) {
+                            // Width to resolve MEMBERSELs
+                            V3Width::widthParamsEdit(varp);
+                            // Capture the widthed expression before constification
+                            V3LinkDotIfaceCapture::addLocalparam(varp, varp->valuep(), modp);
+                        }
+                    }
+                }
+            }
+        }
+
         // Relies on modules already being in top-down-order
         iterate(netlistp);
     }
