@@ -705,6 +705,7 @@ class ParamProcessor final {
 */
         if (V3LinkDotIfaceCapture::enabled()) {
             UINFO(8, "     [iface-capture] forEachOwned srcModp=" << srcModp->name() << endl);
+            AstCell* const cloneCellp = VN_CAST(ifErrorp, Cell);
             V3LinkDotIfaceCapture::forEachOwned(
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
                     if (!entry.refp) return;
@@ -712,6 +713,17 @@ class ParamProcessor final {
                               << " typedefp=" << entry.typedefp
                               << " paramTypep=" << entry.paramTypep
                               << " cellp=" << entry.cellp << endl);
+
+                    // When matched via typedefOwnerModp (typedef is in the interface being cloned),
+                    // only process entries whose cellp matches the cell being cloned.
+                    // This prevents cross-contamination when multiple cells instantiate the same interface.
+                    // Compare by name since entry.cellp is the original and cloneCellp may be a clone.
+                    if (entry.typedefOwnerModp == srcModp && entry.cellp && cloneCellp
+                        && entry.cellp->name() != cloneCellp->name()) {
+                        UINFO(8, "     [iface-capture] skip entry - cellp mismatch: "
+                                  << entry.cellp->name() << " != " << cloneCellp->name() << endl);
+                        return;
+                    }
 
                     // Handle TYPEDEF references
                     if (AstTypedef* const origTypedefp = entry.typedefp) {
@@ -1876,13 +1888,16 @@ class ParamVisitor final : public VNVisitor {
         valuep->foreachAndNext([&](const AstNodeExpr* exprp) {
             if (const AstVarXRef* const refp = VN_CAST(exprp, VarXRef)) {
                 // Allow hierarchical ref to interface params through interface/modport ports
-                bool isIfacePortRef = false;
+                // or local interface instances
+                bool isIfaceRef = false;
                 if (refp->varp() && refp->varp()->isIfaceParam()) {
                     const string refname = getRefBaseName(refp);
-                    isIfacePortRef = !refname.empty() && m_ifacePortNames.count(refname);
+                    isIfaceRef = !refname.empty()
+                                 && (m_ifacePortNames.count(refname)
+                                     || m_ifaceInstNames.count(refname));
                 }
 
-                if (!isIfacePortRef) {
+                if (!isIfaceRef) {
                     refp->v3warn(HIERPARAM, "Parameter values cannot use hierarchical values"
                                             " (IEEE 1800-2023 6.20.2)");
                 }
