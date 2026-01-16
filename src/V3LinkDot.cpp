@@ -3796,9 +3796,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 m_ds.m_dotText = "";
                             }
                         } else {
-                          // EOM
+                            // EOM
                             //newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
-                            AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                            AstVarRef* const refp
+                                = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                             if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
                             newp = refp;
                         }
@@ -3938,7 +3939,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     UINFO(9, indent() << "modport -> iface varref " << foundp->nodep());
                     // We lose the modport name here, so we cannot detect mismatched modports.
                     // EOM
-                    AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
+                    AstVarRef* const refp
+                        = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                     if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
                     AstNodeExpr* newp = refp;
 
@@ -4048,7 +4050,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             } else if (AstParamTypeDType* const defp = VN_CAST(foundp->nodep(), ParamTypeDType)) {
                 // EOM
                 //ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE);
-                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE || m_ds.m_dotPos == DP_FINAL);
+                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE
+                      || m_ds.m_dotPos == DP_FINAL);
                 if (ok) {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
@@ -5423,13 +5426,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         // Capture when: (1) in iface capture context, OR (2) inside an interface
                         // referencing a PARAMTYPEDTYPE in a different interface via dotted path
                         if (m_statep->forPrimary()) {
-                            AstNodeModule* const defOwnerModp = V3LinkDotIfaceCapture::findOwnerModule(defp);
+                            AstNodeModule* const defOwnerModp
+                                = V3LinkDotIfaceCapture::findOwnerModule(defp);
                             if (defOwnerModp && VN_IS(defOwnerModp, Iface)) {
                                 // Get the cell for the interface containing the PARAMTYPEDTYPE
-                                AstCell* const cellForCapture = capturedCellp ? capturedCellp
-                                    : (m_ds.m_dotSymp ? VN_CAST(m_ds.m_dotSymp->nodep(), Cell) : nullptr);
+                                AstCell* const cellForCapture
+                                    = capturedCellp ? capturedCellp
+                                                    : (m_ds.m_dotSymp
+                                                           ? VN_CAST(m_ds.m_dotSymp->nodep(), Cell)
+                                                           : nullptr);
                                 if (cellForCapture) {
-                                    UINFO(9, indent() << "iface capture add paramtype name=" << nodep->name()
+                                    UINFO(9, indent() << "iface capture add paramtype name="
+                                                      << nodep->name()
                                                       << " iface=" << defOwnerModp->name()
                                                       << " paramtype=" << defp << endl);
                                     V3LinkDotIfaceCapture::addParamType(
@@ -5438,7 +5446,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 }
                             }
                         }
-
                     }
                 } else if (AstClass* const defp
                            = foundp ? VN_CAST(foundp->nodep(), Class) : nullptr) {
