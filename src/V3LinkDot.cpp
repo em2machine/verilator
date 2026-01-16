@@ -5420,15 +5420,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                         // EOM: Capture PARAMTYPEDTYPE references for interface typedef retargeting
                         // Similar to TYPEDEF capture above, but for PARAMTYPEDTYPE nodes
-                        if (m_statep->forPrimary() && ifaceCaptured && capturedCellp) {
+                        // Capture when: (1) in iface capture context, OR (2) inside an interface
+                        // referencing a PARAMTYPEDTYPE in a different interface via dotted path
+                        if (m_statep->forPrimary()) {
                             AstNodeModule* const defOwnerModp = V3LinkDotIfaceCapture::findOwnerModule(defp);
                             if (defOwnerModp && VN_IS(defOwnerModp, Iface)) {
-                                UINFO(9, indent() << "iface capture add paramtype name=" << nodep->name()
-                                                  << " iface=" << defOwnerModp->name()
-                                                  << " paramtype=" << defp << endl);
-                                V3LinkDotIfaceCapture::addParamType(
-                                    nodep, capturedCellp, m_modp, defp, defOwnerModp,
-                                    capEntryp ? capEntryp->ifacePortVarp : nullptr);
+                                // Get the cell for the interface containing the PARAMTYPEDTYPE
+                                AstCell* const cellForCapture = capturedCellp ? capturedCellp
+                                    : (m_ds.m_dotSymp ? VN_CAST(m_ds.m_dotSymp->nodep(), Cell) : nullptr);
+                                if (cellForCapture) {
+                                    UINFO(9, indent() << "iface capture add paramtype name=" << nodep->name()
+                                                      << " iface=" << defOwnerModp->name()
+                                                      << " paramtype=" << defp << endl);
+                                    V3LinkDotIfaceCapture::addParamType(
+                                        nodep, cellForCapture, m_modp, defp, defOwnerModp,
+                                        capEntryp ? capEntryp->ifacePortVarp : nullptr);
+                                }
                             }
                         }
 

@@ -704,9 +704,14 @@ class ParamProcessor final {
         }
 */
         if (V3LinkDotIfaceCapture::enabled()) {
+            UINFO(8, "     [iface-capture] forEachOwned srcModp=" << srcModp->name() << endl);
             V3LinkDotIfaceCapture::forEachOwned(
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
                     if (!entry.refp) return;
+                    UINFO(8, "     [iface-capture] entry refp=" << entry.refp
+                              << " typedefp=" << entry.typedefp
+                              << " paramTypep=" << entry.paramTypep
+                              << " cellp=" << entry.cellp << endl);
 
                     // Handle TYPEDEF references
                     if (AstTypedef* const origTypedefp = entry.typedefp) {
@@ -758,6 +763,7 @@ class ParamProcessor final {
                         AstParamTypeDType* targetParamTypep = nullptr;
                         const string& paramTypeName = origParamTypep->name();
 
+                        // First try ifaceRefRefs (for port connections)
                         for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
                             const AstIfaceRefDType* const portIrefp = it->first;
                             AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
@@ -788,6 +794,42 @@ class ParamProcessor final {
                                 }
                             }
                             if (targetParamTypep) break;
+                        }
+
+                        // If not found via ifaceRefRefs, try searching in newModp
+                        // This handles the case where the entry was matched via typedefOwnerModp
+                        // (i.e., the PARAMTYPEDTYPE is in the interface being cloned)
+                        if (!targetParamTypep && entry.typedefOwnerModp == srcModp) {
+                            // Search in the new cloned module for the PARAMTYPEDTYPE
+                            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
+                                    if (ptdp->name() == paramTypeName) {
+                                        targetParamTypep = ptdp;
+                                        UINFO(8, "     [iface-capture] found paramtype '"
+                                                  << paramTypeName << "' in " << newModp->name()
+                                                  << " via newModp (typedefOwnerModp match)" << endl);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback: try via cellp->modp() for internal cells
+                        if (!targetParamTypep && entry.cellp) {
+                            AstNodeModule* const cellModp = entry.cellp->modp();
+                            if (cellModp) {
+                                for (AstNode* stmtp = cellModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                    if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
+                                        if (ptdp->name() == paramTypeName) {
+                                            targetParamTypep = ptdp;
+                                            UINFO(8, "     [iface-capture] found paramtype '"
+                                                      << paramTypeName << "' in " << cellModp->name()
+                                                      << " via cellp->modp()" << endl);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         if (!targetParamTypep) targetParamTypep = origParamTypep->clonep();
