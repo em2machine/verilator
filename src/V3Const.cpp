@@ -2926,6 +2926,16 @@ class ConstVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
             }
         }
+        // EOM: Handle ARRAYSEL directly on InitArray (not through VarRef)
+        else if (VN_IS(nodep->bitp(), Const) && VN_IS(nodep->fromp(), InitArray)) {
+            const AstInitArray* const initarp = VN_AS(nodep->fromp(), InitArray);
+            const uint32_t bit = VN_AS(nodep->bitp(), Const)->toUInt();
+            const AstNode* const itemp = initarp->getIndexDefaultedValuep(bit);
+            if (VN_IS(itemp, Const)) {
+                const V3Number& num = VN_AS(itemp, Const)->num();
+                VL_DO_DANGLING(replaceNum(nodep, num), nodep);
+            }
+        }
         m_selp = nullptr;
     }
 

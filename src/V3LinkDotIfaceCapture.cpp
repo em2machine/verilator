@@ -61,7 +61,7 @@ void V3LinkDotIfaceCapture::add(AstRefDType* refp, AstCell* cellp, AstNodeModule
     if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
     s_map[refp] = CapturedIfaceTypedef{
         CaptureType::IFACE, refp,    cellp,        nullptr, ownerModp, typedefp,
-        typedefOwnerModp,   nullptr, ifacePortVarp};
+        nullptr, typedefOwnerModp,   nullptr, ifacePortVarp};
 }
 
 void V3LinkDotIfaceCapture::addClass(AstRefDType* refp, AstClass* origClassp,
@@ -72,7 +72,7 @@ void V3LinkDotIfaceCapture::addClass(AstRefDType* refp, AstClass* origClassp,
     if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
     s_map[refp] = CapturedIfaceTypedef{CaptureType::CLASS, refp,      nullptr,
                                        origClassp,         ownerModp, typedefp,
-                                       typedefOwnerModp,   nullptr,   nullptr};
+                                       nullptr, typedefOwnerModp,   nullptr,   nullptr};
 }
 
 const V3LinkDotIfaceCapture::CapturedIfaceTypedef*
@@ -266,4 +266,30 @@ void V3LinkDotIfaceCapture::forEachLocalparamOwned(
             fn(kv.second);
         }
     }
+}
+
+void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, AstCell* cellp,
+                                          AstNodeModule* ownerModp,
+                                          AstParamTypeDType* paramTypep,
+                                          AstNodeModule* paramTypeOwnerModp,
+                                          AstVar* ifacePortVarp) {
+    if (!refp) return;
+    if (!paramTypeOwnerModp && paramTypep) paramTypeOwnerModp = findOwnerModule(paramTypep);
+    s_map[refp] = CapturedIfaceTypedef{
+        CaptureType::IFACE, refp, cellp, nullptr, ownerModp, nullptr,
+        paramTypep, paramTypeOwnerModp, nullptr, ifacePortVarp};
+}
+
+bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
+                                              AstParamTypeDType* newParamTypep) {
+    if (!refp || !newParamTypep) return false;
+    auto it = s_map.find(refp);
+    if (it == s_map.end()) return false;
+    it->second.paramTypep = newParamTypep;
+    it->second.typedefOwnerModp = findOwnerModule(newParamTypep);
+    // Update the RefDType's refDTypep
+    if (it->second.refp) {
+        it->second.refp->refDTypep(newParamTypep);
+    }
+    return true;
 }

@@ -636,6 +636,9 @@ class ParamProcessor final {
         // it lets us follow clonep() into newModp and scrub each clone with the saved
         // interface context before newModp is re-linked.  we have pointers to the same nodes saved
         // in the capture map, so we can use them to scrub the new module.
+
+        // EOM
+/*
         if (V3LinkDotIfaceCapture::enabled()) {
             V3LinkDotIfaceCapture::forEachOwned(
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
@@ -693,6 +696,109 @@ class ParamProcessor final {
                                      << origTypedefp->name() << " -> " << targetTypedefp << endl);
                         V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp);
                     }
+                    // Propagate to cloned RefDType in new module
+                    if (AstRefDType* const clonedRefp = entry.refp->clonep()) {
+                        V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp);
+                    }
+                });
+        }
+*/
+        if (V3LinkDotIfaceCapture::enabled()) {
+            V3LinkDotIfaceCapture::forEachOwned(
+                srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
+                    if (!entry.refp) return;
+
+                    // Handle TYPEDEF references
+                    if (AstTypedef* const origTypedefp = entry.typedefp) {
+                        AstTypedef* targetTypedefp = nullptr;
+                        const string& typedefName = origTypedefp->name();
+
+                        for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
+                            const AstIfaceRefDType* const portIrefp = it->first;
+                            AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
+                            if (!pinIfacep) continue;
+
+                            if (entry.ifacePortVarp) {
+                                AstNodeDType* const portDTypep = entry.ifacePortVarp->subDTypep();
+                                AstIfaceRefDType* entryPortIrefp = VN_CAST(portDTypep, IfaceRefDType);
+                                if (!entryPortIrefp && arraySubDTypep(portDTypep)) {
+                                    entryPortIrefp
+                                        = VN_CAST(arraySubDTypep(portDTypep), IfaceRefDType);
+                                }
+                                if (entryPortIrefp != portIrefp) continue;
+                            }
+
+                            for (AstNode* stmtp = pinIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                                    if (tdp->name() == typedefName) {
+                                        targetTypedefp = tdp;
+                                        UINFO(8, "     [iface-capture] found typedef '"
+                                                  << typedefName << "' in " << pinIfacep->name()
+                                                  << " via port "
+                                                  << (entry.ifacePortVarp ? entry.ifacePortVarp->name()
+                                                                          : "<unknown>")
+                                                  << endl);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (targetTypedefp) break;
+                        }
+
+                        if (!targetTypedefp) targetTypedefp = origTypedefp->clonep();
+
+                        if (targetTypedefp) {
+                            UINFO(8, "     [iface-capture] replaceTypedef "
+                                         << origTypedefp->name() << " -> " << targetTypedefp << endl);
+                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp);
+                        }
+                    }
+                    // Handle PARAMTYPEDTYPE references
+                    else if (AstParamTypeDType* const origParamTypep = entry.paramTypep) {
+                        AstParamTypeDType* targetParamTypep = nullptr;
+                        const string& paramTypeName = origParamTypep->name();
+
+                        for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
+                            const AstIfaceRefDType* const portIrefp = it->first;
+                            AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
+                            if (!pinIfacep) continue;
+
+                            if (entry.ifacePortVarp) {
+                                AstNodeDType* const portDTypep = entry.ifacePortVarp->subDTypep();
+                                AstIfaceRefDType* entryPortIrefp = VN_CAST(portDTypep, IfaceRefDType);
+                                if (!entryPortIrefp && arraySubDTypep(portDTypep)) {
+                                    entryPortIrefp
+                                        = VN_CAST(arraySubDTypep(portDTypep), IfaceRefDType);
+                                }
+                                if (entryPortIrefp != portIrefp) continue;
+                            }
+
+                            for (AstNode* stmtp = pinIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
+                                    if (ptdp->name() == paramTypeName) {
+                                        targetParamTypep = ptdp;
+                                        UINFO(8, "     [iface-capture] found paramtype '"
+                                                  << paramTypeName << "' in " << pinIfacep->name()
+                                                  << " via port "
+                                                  << (entry.ifacePortVarp ? entry.ifacePortVarp->name()
+                                                                          : "<unknown>")
+                                                  << endl);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (targetParamTypep) break;
+                        }
+
+                        if (!targetParamTypep) targetParamTypep = origParamTypep->clonep();
+
+                        if (targetParamTypep) {
+                            UINFO(8, "     [iface-capture] replaceParamType "
+                                         << origParamTypep->name() << " -> " << targetParamTypep << endl);
+                            V3LinkDotIfaceCapture::replaceParamType(entry.refp, targetParamTypep);
+                        }
+                    }
+
                     // Propagate to cloned RefDType in new module
                     if (AstRefDType* const clonedRefp = entry.refp->clonep()) {
                         V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp);
@@ -780,49 +886,6 @@ class ParamProcessor final {
                 }
             }
         }
-
-        // EOM: Restore captured localparam expressions for interfaces/classes
-        // After parameters are assigned, restore original expressions and re-constify
-/*
-        if (VN_IS(newModp, Iface) || VN_IS(newModp, Class)) {
-            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                    if (varp->varType() != VVarType::LPARAM) continue;
-                    // Find the original var in srcModp to look up captured expression
-                    AstVar* srcVarp = nullptr;
-                    for (AstNode* srcStmtp = srcModp->stmtsp(); srcStmtp;
-                         srcStmtp = srcStmtp->nextp()) {
-                        if (AstVar* const svp = VN_CAST(srcStmtp, Var)) {
-                            if (svp->name() == varp->name()) {
-                                srcVarp = svp;
-                                break;
-                            }
-                        }
-                    }
-                    if (!srcVarp) continue;
-                    const auto* captured = V3LinkDotIfaceCapture::findLocalparam(srcVarp);
-                    if (captured && captured->origExprp) {
-                        UINFO(5, "LOCALPARAM-RESTORE var=" << varp->name()
-                              << " in " << newModp->name() << endl);
-                        // Replace constified value with clone of original expression
-                        if (varp->valuep()) varp->valuep()->unlinkFrBack()->deleteTree();
-                        AstNode* newExprp = captured->origExprp->cloneTree(false);
-                        // Relink VarRefs in the cloned expression to point to cloned vars
-                        newExprp->foreach([&](AstVarRef* refp) {
-                            const auto it = clonemapp->find(refp->varp());
-                            if (it != clonemapp->end()) {
-                                refp->varp(VN_AS(it->second, Var));
-                            }
-                        });
-                        varp->valuep(newExprp);
-                        // Width the expression to resolve MEMBERSELs, then constify
-                        V3Width::widthParamsEdit(varp);
-                        V3Const::constifyParamsEdit(varp);
-                    }
-                }
-            }
-        }
-*/
 
         // EOM: Restore captured localparam expressions for interfaces/classes
         // After parameters are assigned, restore original expressions.
@@ -1916,23 +1979,17 @@ class ParamVisitor final : public VNVisitor {
                 nodep->v3error("Parameter without default value is never given value"
                                << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());
             } else {
-                /*
-                // EOM: For interface/class localparams, width first then capture before constify
-                const bool inIfaceOrClass = VN_IS(m_modp, Iface) || VN_IS(m_modp, Class);
-                const bool isLocalparam = nodep->varType() == VVarType::LPARAM;
-                if (inIfaceOrClass && isLocalparam && nodep->valuep()
-                    && !VN_IS(nodep->valuep(), Const)) {
-                    // Width to resolve MEMBERSELs
-                    V3Width::widthParamsEdit(nodep);
-                    // Capture the widthed expression before constification
-                    V3LinkDotIfaceCapture::addLocalparam(nodep, nodep->valuep(), m_modp);
-                }
-                */
-
+                // EOM
                 // In visit(AstVar*) for localparams, check if expression contains VARXREF
-                bool hasVarXRef = false;
-                nodep->valuep()->foreach([&](const AstVarXRef*) { hasVarXRef = true; });
-                if (hasVarXRef) {
+                // to another localparam (not parameter). Parameters are already const,
+                // but localparams may not be evaluated yet.
+                bool hasVarXRefToLparam = false;
+                nodep->valuep()->foreach([&](const AstVarXRef* xrefp) {
+                    if (xrefp->varp() && xrefp->varp()->varType() == VVarType::LPARAM) {
+                        hasVarXRefToLparam = true;
+                    }
+                });
+                if (hasVarXRefToLparam) {
                     // Don't constify - let it be evaluated later
                     return;
                 }

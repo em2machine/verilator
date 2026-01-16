@@ -41,6 +41,8 @@ public:
         AstNodeModule* ownerModp = nullptr;
         // Typedef definition being referenced
         AstTypedef* typedefp = nullptr;
+        // For PARAMTYPEDTYPE
+        AstParamTypeDType* paramTypep = nullptr;
         // Interface/module that owns typedefp
         AstNodeModule* typedefOwnerModp = nullptr;
         // Cloned RefDType awaiting typedef rebinding
@@ -64,7 +66,6 @@ private:
     static LocalparamMap s_localparamMap;
     static bool s_enabled;
 
-    static AstNodeModule* findOwnerModule(AstNode* nodep);
     static bool finalizeCapturedEntry(CapturedMap::iterator it, const char* reasonp);
     static string extractIfacePortName(const string& dotText);
 
@@ -84,12 +85,18 @@ public:
         s_map.clear();
         s_localparamMap.clear();
     }
+    static AstNodeModule* findOwnerModule(AstNode* nodep);
     static void add(AstRefDType* refp, AstCell* cellp, AstNodeModule* ownerModp,
                     AstTypedef* typedefp = nullptr, AstNodeModule* typedefOwnerModp = nullptr,
                     AstVar* ifacePortVarp = nullptr);
     static void addClass(AstRefDType* refp, AstClass* origClassp, AstNodeModule* ownerModp,
                          AstTypedef* typedefp = nullptr,
                          AstNodeModule* typedefOwnerModp = nullptr);
+    static void addParamType(AstRefDType* refp, AstCell* cellp,
+                  AstNodeModule* ownerModp,
+                  AstParamTypeDType* paramTypep,
+                  AstNodeModule* paramTypeOwnerModp,
+                  AstVar* ifacePortVarp);
     static const CapturedIfaceTypedef* find(const AstRefDType* refp);
     static void forEach(const std::function<void(const CapturedIfaceTypedef&)>& fn);
     static void forEachOwned(const AstNodeModule* ownerModp,
@@ -114,6 +121,9 @@ public:
         const AstNodeModule* ownerModp,
         const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
+
+    static bool replaceParamType(const AstRefDType* refp,
+                                              AstParamTypeDType* newParamTypep);
 };
 
 #endif  // VERILATOR_V3LINKDOTIFACECAPTURE_H_

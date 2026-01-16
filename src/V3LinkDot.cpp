@@ -4046,7 +4046,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                 }
             } else if (AstParamTypeDType* const defp = VN_CAST(foundp->nodep(), ParamTypeDType)) {
-                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE);
+                // EOM
+                //ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE);
+                ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE || m_ds.m_dotPos == DP_FINAL);
                 if (ok) {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
@@ -5415,6 +5417,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         nodep->refDTypep(defp);
                         nodep->classOrPackagep(foundp->classOrPackagep());
                         resolvedCapturedTypedef = true;
+
+                        // EOM: Capture PARAMTYPEDTYPE references for interface typedef retargeting
+                        // Similar to TYPEDEF capture above, but for PARAMTYPEDTYPE nodes
+                        if (m_statep->forPrimary() && ifaceCaptured && capturedCellp) {
+                            AstNodeModule* const defOwnerModp = V3LinkDotIfaceCapture::findOwnerModule(defp);
+                            if (defOwnerModp && VN_IS(defOwnerModp, Iface)) {
+                                UINFO(9, indent() << "iface capture add paramtype name=" << nodep->name()
+                                                  << " iface=" << defOwnerModp->name()
+                                                  << " paramtype=" << defp << endl);
+                                V3LinkDotIfaceCapture::addParamType(
+                                    nodep, capturedCellp, m_modp, defp, defOwnerModp,
+                                    capEntryp ? capEntryp->ifacePortVarp : nullptr);
+                            }
+                        }
+
                     }
                 } else if (AstClass* const defp
                            = foundp ? VN_CAST(foundp->nodep(), Class) : nullptr) {
