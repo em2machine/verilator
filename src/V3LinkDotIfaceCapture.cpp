@@ -60,8 +60,8 @@ void V3LinkDotIfaceCapture::add(AstRefDType* refp, AstCell* cellp, AstNodeModule
     if (!typedefp) typedefp = refp->typedefp();
     if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
     s_map[refp] = CapturedIfaceTypedef{
-        CaptureType::IFACE, refp,    cellp,        nullptr, ownerModp, typedefp,
-        nullptr, typedefOwnerModp,   nullptr, ifacePortVarp};
+        CaptureType::IFACE, refp,    cellp,        nullptr, ownerModp, typedefp, nullptr,
+        typedefOwnerModp,   nullptr, ifacePortVarp};
 }
 
 void V3LinkDotIfaceCapture::addClass(AstRefDType* refp, AstClass* origClassp,
@@ -70,9 +70,9 @@ void V3LinkDotIfaceCapture::addClass(AstRefDType* refp, AstClass* origClassp,
     if (!refp) return;
     if (!typedefp) typedefp = refp->typedefp();
     if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
-    s_map[refp] = CapturedIfaceTypedef{CaptureType::CLASS, refp,      nullptr,
-                                       origClassp,         ownerModp, typedefp,
-                                       nullptr, typedefOwnerModp,   nullptr,   nullptr};
+    s_map[refp] = CapturedIfaceTypedef{
+        CaptureType::CLASS, refp,    nullptr,          origClassp, ownerModp,
+        typedefp,           nullptr, typedefOwnerModp, nullptr,    nullptr};
 }
 
 const V3LinkDotIfaceCapture::CapturedIfaceTypedef*
@@ -154,18 +154,18 @@ void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDT
                 // Try to find via user2p which may have been set during cloning
                 clonedCellp = VN_CAST(newRefp->user2p(), Cell);
             }
-            UINFO(9, "propagateClone paramtype: origCellp=" << entry.cellp
-                      << " clonedCellp=" << clonedCellp
-                      << " clonedCellp->modp()=" << (clonedCellp ? clonedCellp->modp() : nullptr)
-                      << endl);
+            UINFO(9, "propagateClone paramtype: origCellp="
+                         << entry.cellp << " clonedCellp=" << clonedCellp
+                         << " clonedCellp->modp()="
+                         << (clonedCellp ? clonedCellp->modp() : nullptr) << endl);
             if (clonedCellp && clonedCellp->modp()) {
                 // Check if the cloned cell's modp() is different from the original
                 // If it's the same, the nested interface hasn't been cloned yet
                 AstNodeModule* const clonedModp = clonedCellp->modp();
                 AstNodeModule* const origModp = entry.cellp->modp();
-                UINFO(9, "propagateClone paramtype: origModp=" << (origModp ? origModp->name() : "<null>")
-                          << " clonedModp=" << (clonedModp ? clonedModp->name() : "<null>")
-                          << endl);
+                UINFO(9, "propagateClone paramtype: origModp="
+                             << (origModp ? origModp->name() : "<null>") << " clonedModp="
+                             << (clonedModp ? clonedModp->name() : "<null>") << endl);
                 if (clonedModp != origModp) {
                     // Search for the PARAMTYPEDTYPE with the same name in the cloned interface
                     const string& paramTypeName = origParamTypep->name();
@@ -173,8 +173,9 @@ void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDT
                         if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
                             if (ptdp->name() == paramTypeName) {
                                 newRefp->refDTypep(ptdp);
-                                UINFO(9, "propagateClone updated cloned RefDType refDTypep: " << newRefp
-                                          << " -> " << ptdp << " in " << clonedModp->name() << endl);
+                                UINFO(9, "propagateClone updated cloned RefDType refDTypep: "
+                                             << newRefp << " -> " << ptdp << " in "
+                                             << clonedModp->name() << endl);
                                 break;
                             }
                         }
@@ -182,7 +183,8 @@ void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDT
                 } else {
                     // Nested interface not cloned yet - store for deferred processing
                     UINFO(9, "propagateClone: nested interface not cloned yet, deferring refp="
-                              << newRefp << " paramTypeName=" << origParamTypep->name() << endl);
+                                 << newRefp << " paramTypeName=" << origParamTypep->name()
+                                 << endl);
                     entry.pendingClonep = newRefp;
                 }
             }
@@ -291,8 +293,7 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
                         << enclosingVarp->prettyName());
 }
 
-void V3LinkDotIfaceCapture::addLocalparam(AstVar* varp, AstNode* exprp,
-                                          AstNodeModule* ownerModp) {
+void V3LinkDotIfaceCapture::addLocalparam(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp) {
     if (!varp || !exprp) return;
     // Only capture if not already captured
     if (s_localparamMap.find(varp) != s_localparamMap.end()) return;
@@ -300,8 +301,8 @@ void V3LinkDotIfaceCapture::addLocalparam(AstVar* varp, AstNode* exprp,
     AstNode* const clonedExprp = exprp->cloneTree(false);
     s_localparamMap[varp] = CapturedIfaceLocalparam{varp, clonedExprp, ownerModp};
     UINFO(5, "LOCALPARAM-CAPTURE var=" << varp->name()
-              << " owner=" << (ownerModp ? ownerModp->name() : "<null>")
-              << " expr=" << clonedExprp << endl);
+                                       << " owner=" << (ownerModp ? ownerModp->name() : "<null>")
+                                       << " expr=" << clonedExprp << endl);
 }
 const V3LinkDotIfaceCapture::CapturedIfaceLocalparam*
 V3LinkDotIfaceCapture::findLocalparam(const AstVar* varp) {
@@ -315,41 +316,36 @@ void V3LinkDotIfaceCapture::forEachLocalparamOwned(
     const std::function<void(const CapturedIfaceLocalparam&)>& fn) {
     if (!ownerModp || !fn) return;
     for (const auto& kv : s_localparamMap) {
-        if (kv.second.ownerModp == ownerModp) {
-            fn(kv.second);
-        }
+        if (kv.second.ownerModp == ownerModp) { fn(kv.second); }
     }
 }
 
 void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, AstCell* cellp,
-                                          AstNodeModule* ownerModp,
-                                          AstParamTypeDType* paramTypep,
-                                          AstNodeModule* paramTypeOwnerModp,
-                                          AstVar* ifacePortVarp) {
+                                         AstNodeModule* ownerModp, AstParamTypeDType* paramTypep,
+                                         AstNodeModule* paramTypeOwnerModp,
+                                         AstVar* ifacePortVarp) {
     if (!refp) return;
     if (!paramTypeOwnerModp && paramTypep) paramTypeOwnerModp = findOwnerModule(paramTypep);
     s_map[refp] = CapturedIfaceTypedef{
-        CaptureType::IFACE, refp, cellp, nullptr, ownerModp, nullptr,
-        paramTypep, paramTypeOwnerModp, nullptr, ifacePortVarp};
+        CaptureType::IFACE, refp,    cellp,        nullptr, ownerModp, nullptr, paramTypep,
+        paramTypeOwnerModp, nullptr, ifacePortVarp};
 }
 
 bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
-                                              AstParamTypeDType* newParamTypep) {
+                                             AstParamTypeDType* newParamTypep) {
     if (!refp || !newParamTypep) return false;
     auto it = s_map.find(refp);
     if (it == s_map.end()) return false;
     it->second.paramTypep = newParamTypep;
     it->second.typedefOwnerModp = findOwnerModule(newParamTypep);
     // Update the RefDType's refDTypep
-    if (it->second.refp) {
-        it->second.refp->refDTypep(newParamTypep);
-    }
+    if (it->second.refp) { it->second.refp->refDTypep(newParamTypep); }
     // Also update any pending cloned RefDType that was deferred because
     // the nested interface wasn't cloned yet at propagateClone time
     if (it->second.pendingClonep) {
         it->second.pendingClonep->refDTypep(newParamTypep);
-        UINFO(9, "replaceParamType also updated pendingClonep: " << it->second.pendingClonep
-                  << " -> " << newParamTypep << endl);
+        UINFO(9, "replaceParamType also updated pendingClonep: "
+                     << it->second.pendingClonep << " -> " << newParamTypep << endl);
     }
     return true;
 }

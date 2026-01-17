@@ -55,8 +55,8 @@ public:
 
     // Captured localparam expression for interfaces/classes
     struct CapturedIfaceLocalparam final {
-        AstVar* varp = nullptr;           // The localparam variable
-        AstNode* origExprp = nullptr;     // Clone of original expression (before constification)
+        AstVar* varp = nullptr;  // The localparam variable
+        AstNode* origExprp = nullptr;  // Clone of original expression (before constification)
         AstNodeModule* ownerModp = nullptr;  // Owning interface/class
     };
     using LocalparamMap = std::unordered_map<const AstVar*, CapturedIfaceLocalparam>;
@@ -92,11 +92,9 @@ public:
     static void addClass(AstRefDType* refp, AstClass* origClassp, AstNodeModule* ownerModp,
                          AstTypedef* typedefp = nullptr,
                          AstNodeModule* typedefOwnerModp = nullptr);
-    static void addParamType(AstRefDType* refp, AstCell* cellp,
-                  AstNodeModule* ownerModp,
-                  AstParamTypeDType* paramTypep,
-                  AstNodeModule* paramTypeOwnerModp,
-                  AstVar* ifacePortVarp);
+    static void addParamType(AstRefDType* refp, AstCell* cellp, AstNodeModule* ownerModp,
+                             AstParamTypeDType* paramTypep, AstNodeModule* paramTypeOwnerModp,
+                             AstVar* ifacePortVarp);
     static const CapturedIfaceTypedef* find(const AstRefDType* refp);
     static void forEach(const std::function<void(const CapturedIfaceTypedef&)>& fn);
     static void forEachOwned(const AstNodeModule* ownerModp,
@@ -117,13 +115,12 @@ public:
     // Localparam expression capture
     static void addLocalparam(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp);
     static const CapturedIfaceLocalparam* findLocalparam(const AstVar* varp);
-    static void forEachLocalparamOwned(
-        const AstNodeModule* ownerModp,
-        const std::function<void(const CapturedIfaceLocalparam&)>& fn);
+    static void
+    forEachLocalparamOwned(const AstNodeModule* ownerModp,
+                           const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
 
-    static bool replaceParamType(const AstRefDType* refp,
-                                              AstParamTypeDType* newParamTypep);
+    static bool replaceParamType(const AstRefDType* refp, AstParamTypeDType* newParamTypep);
 };
 
 #endif  // VERILATOR_V3LINKDOTIFACECAPTURE_H_
