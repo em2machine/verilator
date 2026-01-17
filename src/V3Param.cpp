@@ -68,7 +68,6 @@
 #include <map>
 #include <memory>
 #include <vector>
-// EOM
 #include <unordered_map>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -637,72 +636,6 @@ class ParamProcessor final {
         // interface context before newModp is re-linked.  we have pointers to the same nodes saved
         // in the capture map, so we can use them to scrub the new module.
 
-        // EOM
-/*
-        if (V3LinkDotIfaceCapture::enabled()) {
-            V3LinkDotIfaceCapture::forEachOwned(
-                srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
-                    if (!entry.refp) return;
-                    AstTypedef* const origTypedefp = entry.typedefp;
-                    if (!origTypedefp) return;
-
-                    // Find the correct typedef from the correct interface clone.
-                    // entry.typedefp points to the original interface's typedef,
-                    // but we need the typedef in the interface clone this module connects to.
-                    AstTypedef* targetTypedefp = nullptr;
-                    const string& typedefName = origTypedefp->name();
-
-                    for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
-                        const AstIfaceRefDType* const portIrefp = it->first;
-                        AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
-                        if (!pinIfacep) continue;
-
-                        // If we have a port variable, match against it
-                        if (entry.ifacePortVarp) {
-                            // Get the IfaceRefDType from the captured port variable
-                            AstNodeDType* const portDTypep = entry.ifacePortVarp->subDTypep();
-                            AstIfaceRefDType* entryPortIrefp = VN_CAST(portDTypep, IfaceRefDType);
-                            if (!entryPortIrefp && arraySubDTypep(portDTypep)) {
-                                entryPortIrefp
-                                    = VN_CAST(arraySubDTypep(portDTypep), IfaceRefDType);
-                            }
-                            if (entryPortIrefp != portIrefp) continue;  // Not the right port
-                        }
-
-                        // Search for typedef with same name in the connected interface clone
-                        for (AstNode* stmtp = pinIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                            if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                                if (tdp->name() == typedefName) {
-                                    targetTypedefp = tdp;
-                                    UINFO(8,
-                                          "     [iface-capture] found '"
-                                              << typedefName << "' in " << pinIfacep->name()
-                                              << " via port "
-                                              << (entry.ifacePortVarp ? entry.ifacePortVarp->name()
-                                                                      : "<unknown>")
-                                              << endl);
-                                    break;
-                                }
-                            }
-                        }
-                        if (targetTypedefp) break;
-                    }
-
-                    // Fallback to clone of original typedef (existing behavior)
-                    if (!targetTypedefp) targetTypedefp = origTypedefp->clonep();
-
-                    if (targetTypedefp) {
-                        UINFO(8, "     [iface-capture] replaceTypedef "
-                                     << origTypedefp->name() << " -> " << targetTypedefp << endl);
-                        V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp);
-                    }
-                    // Propagate to cloned RefDType in new module
-                    if (AstRefDType* const clonedRefp = entry.refp->clonep()) {
-                        V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp);
-                    }
-                });
-        }
-*/
         if (V3LinkDotIfaceCapture::enabled()) {
             UINFO(8, "     [iface-capture] forEachOwned srcModp=" << srcModp->name() << endl);
             AstCell* const cloneCellp = VN_CAST(ifErrorp, Cell);
@@ -826,6 +759,93 @@ class ParamProcessor final {
                             }
                         }
 
+                        // DEBUG: Add comprehensive output to understand the structural difference
+                        UINFO(8, "     [iface-capture] DEBUG paramtype '" << paramTypeName << "':" << endl);
+                        UINFO(8, "       entry.typedefp=" << entry.typedefp << endl);
+                        UINFO(8, "       entry.paramTypep=" << entry.paramTypep << endl);
+                        UINFO(8, "       entry.cellp=" << entry.cellp << endl);
+                        if (entry.cellp) {
+                            UINFO(8, "       entry.cellp->name()=" << entry.cellp->name() << endl);
+                            UINFO(8, "       entry.cellp->modp()=" << entry.cellp->modp() << endl);
+                            if (entry.cellp->modp()) {
+                                UINFO(8, "       entry.cellp->modp()->name()="
+                                          << entry.cellp->modp()->name() << endl);
+                            }
+                        }
+                        UINFO(8, "       entry.typedefOwnerModp=" << entry.typedefOwnerModp << endl);
+                        if (entry.typedefOwnerModp) {
+                            UINFO(8, "       entry.typedefOwnerModp->name()="
+                                      << entry.typedefOwnerModp->name() << endl);
+                        }
+                        UINFO(8, "       srcModp=" << srcModp << " srcModp->name()=" << srcModp->name()
+                                  << endl);
+                        UINFO(8, "       origParamTypep=" << origParamTypep << endl);
+
+                        // Check if PARAMTYPEDTYPE is a statement of srcModp
+                        bool paramTypeIsSrcModStmt = false;
+                        for (AstNode* stmtp = srcModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
+                                if (ptdp->name() == paramTypeName) {
+                                    paramTypeIsSrcModStmt = true;
+                                    break;
+                                }
+                            }
+                        }
+                        UINFO(8, "       paramTypeIsSrcModStmt=" << paramTypeIsSrcModStmt << endl);
+
+                        // Check if entry.cellp is inside srcModp (nested interface)
+                        bool cellpInSrcMod = false;
+                        if (entry.cellp) {
+                            for (AstNode* stmtp = srcModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (stmtp == entry.cellp) {
+                                    cellpInSrcMod = true;
+                                    break;
+                                }
+                            }
+                        }
+                        UINFO(8, "       cellpInSrcMod=" << cellpInSrcMod << endl);
+                        UINFO(8, "       typedefOwnerModp==srcModp="
+                                  << (entry.typedefOwnerModp == srcModp) << endl);
+
+                        // Skip replaceParamType if:
+                        // 1. PARAMTYPEDTYPE is a statement of srcModp (the interface being cloned)
+                        // 2. typedefOwnerModp matches srcModp (owned by this interface)
+                        // 3. There's actually a PIN for this PARAMTYPEDTYPE on cloneCellp
+                        // This means PIN processing will assign its type.
+                        bool hasPin = false;
+                        UINFO(8, "       checking for PIN: paramTypeIsSrcModStmt=" << paramTypeIsSrcModStmt
+                                  << " typedefOwnerModp==srcModp=" << (entry.typedefOwnerModp == srcModp)
+                                  << " cloneCellp=" << cloneCellp << endl);
+                        if (paramTypeIsSrcModStmt && entry.typedefOwnerModp == srcModp
+                            && cloneCellp) {
+                            UINFO(8, "       checking PARAMs on cloneCellp=" << cloneCellp->name() << endl);
+                            // Check paramsp() not pinsp() - type parameters are in paramsp()
+                            for (AstPin* pinp = cloneCellp->paramsp(); pinp;
+                                 pinp = VN_AS(pinp->nextp(), Pin)) {
+                                UINFO(8, "         PARAM: " << pinp->name()
+                                          << " modPTypep=" << pinp->modPTypep() << endl);
+                                if (pinp->modPTypep()) {
+                                    UINFO(8, "           modPTypep->name()=" << pinp->modPTypep()->name()
+                                              << " paramTypeName=" << paramTypeName << endl);
+                                }
+                                if (pinp->modPTypep()
+                                    && pinp->modPTypep()->name() == paramTypeName) {
+                                    hasPin = true;
+                                    UINFO(8, "         FOUND matching PARAM!" << endl);
+                                    break;
+                                }
+                            }
+                        }
+                        UINFO(8, "       hasPin=" << hasPin << endl);
+                        if (paramTypeIsSrcModStmt && entry.typedefOwnerModp == srcModp
+                            && hasPin) {
+                            UINFO(8, "     [iface-capture] skipping replaceParamType for '"
+                                      << paramTypeName
+                                      << "' - has PIN, will be assigned during PIN processing"
+                                      << endl);
+                            return;  // Skip to next entry in forEachOwned lambda
+                        }
+
                         // Fallback: try via cellp->modp() for internal cells
                         if (!targetParamTypep && entry.cellp) {
                             AstNodeModule* const cellModp = entry.cellp->modp();
@@ -941,7 +961,7 @@ class ParamProcessor final {
             }
         }
 
-        // EOM: Restore captured localparam expressions for interfaces/classes
+        // Restore captured localparam expressions for interfaces/classes
         // After parameters are assigned, restore original expressions.
         // Do NOT constify here - let the normal passes handle ordering.
         if (VN_IS(newModp, Iface) || VN_IS(newModp, Class)) {
@@ -1565,17 +1585,7 @@ public:
         // Create new module name with _'s between the constants
         UINFOTREE(10, nodep, "", "cell");
         // Evaluate all module constants
-
-        // EOM
-        //V3Const::constifyParamsEdit(nodep);
-        //
-        // Avoid freezing interface-localparams under default gparams prior to specialization.
-        // (These can still contain unresolved DOT/MEMBERSEL etc and constify to X.)
-        // Keep prior behavior for modules/classes to avoid regressions.
-        //if (!VN_IS(srcModp, Iface)) {
-        if (!(VN_IS(srcModp, Iface) || VN_IS(srcModp, Class))) {
-            V3Const::constifyParamsEdit(nodep);
-        }
+        V3Const::constifyParamsEdit(nodep);
         // Set name for warnings for when we param propagate the module
         const string instanceName = someInstanceName + "." + nodep->name();
         srcModp->someInstanceName(instanceName);
@@ -1682,10 +1692,6 @@ class ParamVisitor final : public VNVisitor {
     std::unordered_set<std::string> m_ifacePortNames;  // Interface port names in current module
     std::unordered_set<std::string> m_ifaceInstNames;  // Interface decl names in current module
     string m_generateHierName;  // Generate portion of hierarchy name
-    // EOM
-    // cache of gparam names for current iface/class
-    std::unordered_set<std::string> m_gparamNames;
-    AstNodeModule* m_gparamCacheModp = nullptr;
 
     // METHODS
 
@@ -1768,111 +1774,6 @@ class ParamVisitor final : public VNVisitor {
         }
 
         m_iterateModule = false;
-    }
-
-    // EOM
-    // Helper to check if an expression references a global parameter
-    bool exprReferencesGParam(const AstNode* nodep) {
-        if (!nodep) return false;
-        bool hit = false;
-        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
-            if (hit) return;  // cheap early-out
-            if (const AstNodeVarRef* const varrefp = VN_CAST(exprp, NodeVarRef)) {
-                if (const AstVar* const varp = varrefp->varp()) {
-                    if (varp->isGParam()) hit = true;
-                }
-            } else if (const AstVarXRef* const varxrefp = VN_CAST(exprp, VarXRef)) {
-                if (const AstVar* const varp = varxrefp->varp()) {
-                    if (varp->isGParam()) hit = true;
-                }
-            }
-        });
-        return hit;
-    }
-
-    bool exprReferencesGParamOrParseRef(const AstNode* nodep) {
-        if (!nodep) return false;
-
-        // Only meaningful inside iface/class; otherwise keep old behavior
-        buildGParamNameCacheIfNeeded();
-
-        bool hit = false;
-        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
-            if (hit) return;
-
-            if (const AstNodeVarRef* const varrefp = VN_CAST(exprp, NodeVarRef)) {
-                if (const AstVar* const varp = varrefp->varp()) {
-                    if (varp->isGParam() && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) hit = true;
-                }
-            } else if (const AstVarXRef* const varxrefp = VN_CAST(exprp, VarXRef)) {
-                if (const AstVar* const varp = varxrefp->varp()) {
-                    if (varp->isGParam() && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) hit = true;
-                }
-            } else if (const AstParseRef* const parserefp = VN_CAST(exprp, ParseRef)) {
-                // Pre-LinkDot: cfg / types / etc still appear as ParseRef
-                if (m_gparamNames.count(parserefp->name())) hit = true;
-
-            }
-        });
-        return hit;
-    }
-
-    // Helper to check if an expression contains a member selection
-    bool exprContainsMemberSel(const AstNode* nodep) {
-        if (!nodep) return false;
-        bool hit = false;
-        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
-            if (hit) return;
-            if (VN_IS(exprp, MemberSel)) hit = true;
-        });
-        return hit;
-    }
-
-    void buildGParamNameCacheIfNeeded() {
-        if (m_gparamCacheModp == m_modp) return;  // already built for this module (even if empty)
-        m_gparamCacheModp = m_modp;
-        m_gparamNames.clear();
-        if (!m_modp) return;
-
-        for (AstNode* stp = m_modp->stmtsp(); stp; stp = stp->nextp()) {
-            if (const AstVar* const varp = VN_CAST(stp, Var)) {
-                if (varp->isGParam()) m_gparamNames.insert(varp->name());
-            }
-        }
-    }
-
-        bool exprNeedsPostLinkOrWidth(const AstNode* nodep, const AstNode** whyNodepp, const char** whyKindp) {
-        if (whyNodepp) *whyNodepp = nullptr;
-        if (whyKindp) *whyKindp = nullptr;
-        if (!nodep) return false;
-        bool hit = false;
-        nodep->foreachAndNext([&](const AstNodeExpr* exprp) {
-            if (hit) return;
-
-            const char* kindp = nullptr;
-            if (VN_IS(exprp, UnlinkedRef)) {
-                kindp = "UnlinkedRef";
-            } else if (VN_IS(exprp, ParseRef)) {
-                kindp = "ParseRef";
-            } else if (VN_IS(exprp, Dot)) {
-                kindp = "Dot";
-            } else if (VN_IS(exprp, MemberSel)) {
-                kindp = "MemberSel";
-            } else if (VN_IS(exprp, StructSel)) {
-                kindp = "StructSel";
-            } else if (VN_IS(exprp, VarXRef)) {
-                kindp = "VarXRef";
-            } else if (VN_IS(exprp, Sel) || VN_IS(exprp, SelBit) || VN_IS(exprp, SelExtract)) {
-                kindp = "Sel";
-            }
-
-            if (kindp) {
-                hit = true;
-                if (whyNodepp) *whyNodepp = exprp;
-                if (whyKindp) *whyKindp = kindp;
-            }
-        });
-        return hit;
     }
 
 
@@ -2036,7 +1937,6 @@ class ParamVisitor final : public VNVisitor {
                 nodep->v3error("Parameter without default value is never given value"
                                << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());
             } else {
-                // EOM
                 // In visit(AstVar*) for localparams, check if expression contains VARXREF
                 // to another localparam (not parameter). Parameters are already const,
                 // but localparams may not be evaluated yet.
@@ -2184,7 +2084,6 @@ class ParamVisitor final : public VNVisitor {
         V3Const::constifyParamsEdit(nodep->selp());
         if (const AstConst* const constp = VN_CAST(nodep->selp(), Const)) {
             const string index = AstNode::encodeNumber(constp->toSInt());
-            // EOM
             const string replacestr = nodep->name() + "__BRA__??__KET__";
             // Before searching for "__BRA__??__KET__", synthesize it if missing
             if (m_unlinkedTxt.empty()) m_unlinkedTxt = replacestr;
@@ -2335,7 +2234,7 @@ public:
         : m_state{state}
         , m_processor{netlistp} {
 
-      // EOM: Capture interface/class localparam expressions after widthing
+        // Capture interface/class localparam expressions after widthing
         // but before constification. Width resolves MEMBERSELs through dtype.
         for (AstNodeModule* modp = netlistp->modulesp(); modp;
             modp = VN_AS(modp->nextp(), NodeModule)) {

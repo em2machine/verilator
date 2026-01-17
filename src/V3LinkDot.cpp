@@ -3796,8 +3796,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                 m_ds.m_dotText = "";
                             }
                         } else {
-                          // EOM
-                            //newp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                             AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                             if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
                             newp = refp;
@@ -3836,13 +3834,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotPos = DP_SCOPE;
                     ok = true;
 
-                    // EOM
-                    //AstNode* const newp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
-                    //nodep->replaceWith(newp);
                     AstVarRef* const refp = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
                     if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
-                    AstNode* const newp = refp;
-                    nodep->replaceWith(newp);
+                    nodep->replaceWith(refp);
 
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 } else if (allowVar) {
@@ -3852,7 +3846,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             = new AstVarXRef{nodep->fileline(), nodep->name(), m_ds.m_dotText,
                                              VAccess::READ};  // lvalue'ness computed later
                         refp->varp(varp);
-                        // EOM
                         if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
                         refp->containsGenBlock(m_ds.m_genBlk);
                         if (varp->attrSplitVar()) {
@@ -3890,7 +3883,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         }
                         AstVarRef* const refp = new AstVarRef{
                             nodep->fileline(), varp, VAccess::READ};  // lvalue'ness computed later
-                        // EOM
                         if (varp && !refp->dtypep()) refp->dtypeFrom(varp);
 
                         refp->classOrPackagep(foundp->classOrPackagep());
@@ -3937,7 +3929,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     m_ds.m_dotPos = DP_SCOPE;
                     UINFO(9, indent() << "modport -> iface varref " << foundp->nodep());
                     // We lose the modport name here, so we cannot detect mismatched modports.
-                    // EOM
                     AstVarRef* const refp = new AstVarRef{nodep->fileline(), ifaceRefVarp, VAccess::READ};
                     if (ifaceRefVarp && !refp->dtypep()) refp->dtypeFrom(ifaceRefVarp);
                     AstNodeExpr* newp = refp;
@@ -4046,8 +4037,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     }
                 }
             } else if (AstParamTypeDType* const defp = VN_CAST(foundp->nodep(), ParamTypeDType)) {
-                // EOM
-                //ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE);
                 ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE || m_ds.m_dotPos == DP_FINAL);
                 if (ok) {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
@@ -4116,7 +4105,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             = createImplicitVar(m_curSymp, nodep, m_modp, m_modSymp, err);
                         AstVarRef* const newp
                             = new AstVarRef{nodep->fileline(), varp, VAccess::READ};
-                        // EOM
                         if (varp && !newp->dtypep()) newp->dtypeFrom(varp);
 
                         nodep->replaceWith(newp);
@@ -4236,10 +4224,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             if (AstVar* const varp
                 = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr) {
                 nodep->varp(varp);
-
-                // EOM
                 if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
-
                 updateVarUse(nodep->varp());
                 // Generally set by parse, but might be an import
                 nodep->classOrPackagep(foundp->classOrPackagep());
@@ -4255,10 +4240,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->varp(vscp->varp());
             nodep->varScopep(vscp);
             updateVarUse(nodep->varp());
-
-            // EOM
             if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
-
             UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
         }
     }
@@ -4343,10 +4325,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     = foundp ? foundToVarp(foundp, nodep, nodep->access()) : nullptr;
                 nodep->varp(varp);
                 updateVarUse(nodep->varp());
-
-                // EOM
                 if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
-
                 UINFO(7, indent() << "Resolved " << nodep);  // Also prints varp
                 // If found, check if it's ok to access in case it's in a hier_block
                 if (nodep->varp() && errorHierNonPort(nodep, nodep->varp(), dotSymp)) return;
@@ -4393,10 +4372,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     nodep->varp(vscp->varp());
                     nodep->varScopep(vscp);
                     updateVarUse(nodep->varp());
-
-                    // EOM
                     if (!nodep->dtypep() && nodep->varp()) nodep->dtypeFrom(nodep->varp());
-
                     UINFO(7, indent() << "Resolved " << nodep);  // Also prints taskp
                     AstVarRef* const newvscp
                         = new AstVarRef{nodep->fileline(), vscp, nodep->access()};
@@ -5418,7 +5394,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         nodep->classOrPackagep(foundp->classOrPackagep());
                         resolvedCapturedTypedef = true;
 
-                        // EOM: Capture PARAMTYPEDTYPE references for interface typedef retargeting
+                        // Capture PARAMTYPEDTYPE references for interface typedef retargeting
                         // Similar to TYPEDEF capture above, but for PARAMTYPEDTYPE nodes
                         // Capture when: (1) in iface capture context, OR (2) inside an interface
                         // referencing a PARAMTYPEDTYPE in a different interface via dotted path
