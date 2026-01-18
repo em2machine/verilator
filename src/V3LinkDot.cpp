@@ -67,6 +67,7 @@
 
 #include "V3Global.h"
 #include "V3Graph.h"
+#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3MemberMap.h"
 #include "V3Parse.h"
@@ -4029,6 +4030,23 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         [this](AstVar* v, AstRefDType* r) { return promoteVarToParamType(v, r); },
                         [this]() { return indent(); });
 
+                    // Register cell association for dependency graph (captures cell path info)
+                    // This handles typedefs that reference through interface ports like:
+                    //   typedef io.types_mul.a_t a_mul_t;
+                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                            // Find the enclosing PARAMTYPEDTYPE or typedef that will use this
+                            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                                if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
+                                    V3LinkDotDepGraph::registerCellAssociation(ptdp, cellp);
+                                    break;
+                                }
+                                if (VN_IS(backp, NodeModule)) break;
+                            }
+                        }
+                    }
+
                     if (VN_IS(nodep->backp(), SelExtract)) {
                         m_packedArrayDtp = refp;
                     } else {
@@ -4048,6 +4066,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         m_modp, nodep,
                         [this](AstVar* v, AstRefDType* r) { return promoteVarToParamType(v, r); },
                         [this]() { return indent(); });
+
+                    // Register cell association for dependency graph (captures cell path info)
+                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                            V3LinkDotDepGraph::registerCellAssociation(defp, cellp);
+                        }
+                    }
 
                     replaceWithCheckBreak(nodep, refp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);

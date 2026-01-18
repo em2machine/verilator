@@ -34,6 +34,22 @@ std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes{};
 int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
 
+// Map from (module name, paramtype name) to cell name (captured during linkdot primary)
+// We use names instead of pointers because nodes get cloned during V3Param
+struct CellAssocKey {
+    string moduleName;
+    string paramTypeName;
+    bool operator==(const CellAssocKey& o) const {
+        return moduleName == o.moduleName && paramTypeName == o.paramTypeName;
+    }
+};
+struct CellAssocKeyHash {
+    size_t operator()(const CellAssocKey& k) const {
+        return std::hash<string>()(k.moduleName) ^ (std::hash<string>()(k.paramTypeName) << 1);
+    }
+};
+static std::unordered_map<CellAssocKey, string, CellAssocKeyHash> s_cellAssociations{};
+
 //======================================================================
 // Helper methods
 
@@ -81,10 +97,53 @@ V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
 // Graph management
 
 void V3LinkDotDepGraph::reset() {
+    UINFO(5, "DEPGRAPH: reset() called, clearing graph nodes (keeping "
+              << s_cellAssociations.size() << " cell associations)" << endl);
     for (DepNode* nodep : s_allNodes) delete nodep;
     s_allNodes.clear();
     s_nodes.clear();
+    // Note: Do NOT clear s_cellAssociations here - they are captured during linkdot primary
+    // and need to persist until graph building which happens later
     s_iterationCount = 0;
+}
+
+void V3LinkDotDepGraph::resetAll() {
+    reset();
+    s_cellAssociations.clear();
+}
+
+void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp) {
+    if (!nodep || !cellp) return;
+    AstNodeModule* const ownerModp = findOwnerModule(nodep);
+    if (!ownerModp) return;
+
+    // Get the paramtype name
+    string paramTypeName;
+    if (AstParamTypeDType* const ptdp = VN_CAST(nodep, ParamTypeDType)) {
+        paramTypeName = ptdp->name();
+    } else {
+        return;  // Only handle PARAMTYPEDTYPEs for now
+    }
+
+    // Store the cell name and find the typedef name from the cell's module
+    // The cell points to an interface that contains the typedef we're looking for
+    string typedefName;
+    if (cellp->modp()) {
+        // Find the first typedef in the cell's module - this is typically the one being referenced
+        for (AstNode* stmtp = cellp->modp()->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                typedefName = tdp->name();
+                break;
+            }
+        }
+    }
+
+    // Store as "cellName:typedefName"
+    CellAssocKey key{ownerModp->name(), paramTypeName};
+    s_cellAssociations[key] = cellp->name() + ":" + typedefName;
+    UINFO(5, "DEPGRAPH: registered cell association for " << ownerModp->name()
+              << "::" << paramTypeName << " -> cell '" << cellp->name()
+              << "' typedef '" << typedefName << "'" << endl);
 }
 
 const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::find(AstNode* nodep) {
@@ -161,8 +220,13 @@ private:
     AstNodeModule* m_modp = nullptr;  // Current module/interface
 
     void visit(AstNodeModule* nodep) override {
-        // Skip dead modules
+        // Skip dead modules and template modules (unspecialized parameterized modules)
+        // Template modules have GParams but no specialization suffix
         if (nodep->dead()) return;
+        if (nodep->hasGParam() && nodep->name().find("__") == string::npos) {
+            UINFO(9, "DEPGRAPH: skip template module " << nodep->name() << endl);
+            return;
+        }
 
         VL_RESTORER(m_modp);
         m_modp = nodep;
@@ -222,6 +286,69 @@ private:
 
         V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
             nodep, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, m_modp);
+
+        // Check for cell association registered during linkdot primary pass
+        // The key uses the base module name (without specialization suffix) and paramtype name
+        // For specialized modules like "sc__Cz1_Iz2", we need to check the original "sc" module
+        string baseModName = m_modp->name();
+        // Strip specialization suffix (everything after "__")
+        const size_t suffixPos = baseModName.find("__");
+        if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
+
+        CellAssocKey key{baseModName, nodep->name()};
+        auto it = s_cellAssociations.find(key);
+        if (it != s_cellAssociations.end()) {
+            // Value is "cellName:typedefName"
+            depNodep->cellName = it->second;
+            UINFO(5, "DEPGRAPH: paramtype '" << nodep->name()
+                      << "' in " << m_modp->name() << " (base=" << baseModName
+                      << ") has registered cell:typedef '" << it->second << "'" << endl);
+
+            // Parse cellName:typedefName and find the typedef node to add dependency edge
+            // This ensures the PARAMTYPEDTYPE is resolved AFTER the typedef it references
+            string cellName, typedefName;
+            const size_t colonPos = it->second.find(':');
+            if (colonPos != string::npos) {
+                cellName = it->second.substr(0, colonPos);
+                typedefName = it->second.substr(colonPos + 1);
+            }
+
+            // Find the typedef in a cell with this name within the owner module's hierarchy
+            // We need to find the specialized interface's typedef
+            if (!typedefName.empty()) {
+                // Search for cells with this name in the owner module or its interfaces
+                for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                        if (cellp->name() == cellName && cellp->modp()) {
+                            // Found the cell - look for typedef in cell's module
+                            for (AstNode* childStmtp = cellp->modp()->stmtsp(); childStmtp;
+                                 childStmtp = childStmtp->nextp()) {
+                                if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
+                                    if (tdp->name() == typedefName) {
+                                        // Find or create node for this typedef and add edge
+                                        V3LinkDotDepGraph::DepNode* const tdNodep
+                                            = V3LinkDotDepGraph::findOrCreateNode(
+                                                tdp, V3LinkDotDepGraph::NodeType::TYPEDEF,
+                                                cellp->modp());
+                                        depNodep->dependsOn.insert(tdNodep);
+                                        UINFO(5, "DEPGRAPH: added edge from paramtype '"
+                                                  << nodep->name() << "' to typedef '"
+                                                  << typedefName << "' in " << cellp->modp()->name()
+                                                  << endl);
+                                        break;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            UINFO(9, "DEPGRAPH: paramtype '" << nodep->name()
+                      << "' in " << m_modp->name() << " (base=" << baseModName
+                      << ") has NO registered cell (map size=" << s_cellAssociations.size() << ")" << endl);
+        }
 
         // Collect dependencies from the subtype
         if (AstNodeDType* const dtypep = nodep->subDTypep()) {
@@ -300,6 +427,14 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
 void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
     if (!nodep || !nodep->nodep) return;
 
+    // Skip nodes in dead/template modules - only process specialized modules
+    AstNodeModule* const ownerModp = nodep->ownerModp;
+    if (ownerModp && (ownerModp->dead() || ownerModp->hasGParam())) {
+        UINFO(9, "DEPGRAPH: skip re-evaluate '" << nodeName(nodep)
+                  << "' in dead/template module " << ownerModp->name() << endl);
+        return;
+    }
+
     if (nodep->nodeType == NodeType::TYPEDEF) {
         AstTypedef* const tdp = VN_CAST(nodep->nodep, Typedef);
         if (!tdp) return;
@@ -325,6 +460,73 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         if (!ptdp) return;
 
         const int oldWidth = ptdp->subDTypep() ? ptdp->subDTypep()->width() : 0;
+
+        // If this PARAMTYPEDTYPE has a cell:typedef association, find the correct specialized typedef
+        // nodep->cellName contains "cellName:typedefName" (e.g., "types_mul:a_t")
+        if (!nodep->cellName.empty() && ownerModp) {
+            // Parse "cellName:typedefName"
+            string cellName, typedefName;
+            const size_t colonPos = nodep->cellName.find(':');
+            if (colonPos != string::npos) {
+                cellName = nodep->cellName.substr(0, colonPos);
+                typedefName = nodep->cellName.substr(colonPos + 1);
+            } else {
+                cellName = nodep->cellName;
+            }
+
+            UINFO(9, "DEPGRAPH: looking for cell '" << cellName << "' typedef '" << typedefName
+                      << "' for paramtype '" << ptdp->name() << "' in " << ownerModp->name() << endl);
+
+            // Find the typedef by searching for a cell with this name in any interface
+            AstTypedef* targetTdp = nullptr;
+            if (!typedefName.empty()) {
+                // Search all graph nodes for interfaces that have a cell with this name
+                for (auto& pair : s_nodes) {
+                    if (pair.second->ownerModp && VN_IS(pair.second->ownerModp, Iface)) {
+                        AstNodeModule* const ifaceModp = pair.second->ownerModp;
+                        // Check if this interface has a cell with the target name
+                        for (AstNode* stmtp = ifaceModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                                if (cellp->name() == cellName && cellp->modp()) {
+                                    // Found the cell - look for the typedef in the cell's module
+                                    for (AstNode* childStmtp = cellp->modp()->stmtsp(); childStmtp;
+                                         childStmtp = childStmtp->nextp()) {
+                                        if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
+                                            if (tdp->name() == typedefName) {
+                                                targetTdp = tdp;
+                                                UINFO(9, "DEPGRAPH: found typedef '" << tdp->name()
+                                                          << "' in " << cellp->modp()->name()
+                                                          << " via cell '" << cellName << "'" << endl);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (targetTdp) break;
+                                }
+                            }
+                        }
+                        if (targetTdp) break;
+                    }
+                }
+            }
+
+            if (targetTdp) {
+                // Update the PARAMTYPEDTYPE to reference the correct typedef's subDTypep
+                // This sets the dtypep to point to the specialized typedef's underlying type
+                // We must also clear childDTypep since V3Broken checks that it's null after width
+                ptdp->dtypep(targetTdp->subDTypep());
+                if (AstNodeDType* const childp = ptdp->childDTypep()) {
+                    childp->unlinkFrBack();
+                    VL_DO_DANGLING(childp->deleteTree(), childp);
+                }
+                UINFO(5, "DEPGRAPH: updated paramtype '" << ptdp->name()
+                          << "' dtypep to typedef '" << typedefName << "' from cell '" << cellName
+                          << "' (width=" << (targetTdp->subDTypep() ? targetTdp->subDTypep()->width() : 0) << ")" << endl);
+            } else {
+                UINFO(9, "DEPGRAPH: typedef '" << typedefName << "' not found via cell '"
+                          << cellName << "' for " << ownerModp->name() << endl);
+            }
+        }
 
         ptdp->didWidth(false);
         if (ptdp->subDTypep()) ptdp->subDTypep()->didWidth(false);

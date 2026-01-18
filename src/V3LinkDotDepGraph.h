@@ -47,6 +47,7 @@ public:
         NodeType nodeType = NodeType::GPARAM;
         AstNodeModule* ownerModp = nullptr;  // Specialized module/interface owning this
         AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
+        std::string cellName;                // Cell name for typedef lookup (survives cloning)
 
         std::set<DepNode*> dependsOn;        // Nodes this depends on
         std::set<DepNode*> dependents;       // Nodes that depend on this
@@ -83,8 +84,10 @@ public:
     }
     static bool enabled() { return s_enabled; }
 
-    // Reset/clear the graph
+    // Reset/clear the graph (keeps cell associations)
     static void reset();
+    // Reset everything including cell associations
+    static void resetAll();
 
     // Build the graph from the AST (call after V3Param)
     static void build(AstNetlist* netlistp);
@@ -95,6 +98,10 @@ public:
 
     // Apply resolved typedefs to RefDType nodes
     static void apply();
+
+    // Register cell association for a node (called from linkdot during primary pass)
+    // This captures which cell a PARAMTYPEDTYPE references through
+    static void registerCellAssociation(AstNode* nodep, AstCell* cellp);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }

@@ -4,30 +4,6 @@
 // without warranty, 2024 by Todd Strader
 // SPDX-License-Identifier: CC0-1.0
 
-/*
-Dump from experimental dependency graph code (enable with --debugi 5)
-
-- V3LinkDotDepGraph.cpp:582:DEPGRAPH: ========== DEPENDENCY TREE ==========
-- V3LinkDotDepGraph.cpp:584:DEPGRAPH: Total nodes: 31  Iterations: 0
-- V3LinkDotDepGraph.cpp:597:DEPGRAPH: t (top)
-- V3LinkDotDepGraph.cpp:436:DEPGRAPH: ├── sc_if__Cz1 : IFACE
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH: │   ├── GPARAM cfg [pending]
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH: │   ├── LPARAM LP_MUL = 32'h6 [pending]
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH: │   ├── LPARAM LP_ADD = 32'h5 [pending]
-- V3LinkDotDepGraph.cpp:512:DEPGRAPH: │   ├── types_mul : a_if__A6
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │   │   ├── GPARAM a_p=32'h6 [P]
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │   │   ├── LPARAM LP0=32'hc [P]
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │   │   └── TYPEDEF a_t[w1] [P]
-- V3LinkDotDepGraph.cpp:512:DEPGRAPH: │   └── types_add : a_if__A5
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │       ├── GPARAM a_p=32'h5 [P]
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │       ├── LPARAM LP0=32'ha [P]
-- V3LinkDotDepGraph.cpp:563:DEPGRAPH: │       └── TYPEDEF a_t[w1] [P]
-- V3LinkDotDepGraph.cpp:436:DEPGRAPH: └── sc__Cz1_Iz2 : MODULE
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH:     ├── GPARAM cfg [pending]
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH:     ├── PARAMTYPE a_mul_t [pending]
-- V3LinkDotDepGraph.cpp:491:DEPGRAPH:     └── PARAMTYPE a_add_t [pending]
-*/
-
 // verilog_format: off
 `define stop $stop
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d (%s !== %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
