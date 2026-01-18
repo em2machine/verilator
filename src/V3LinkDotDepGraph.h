@@ -1,0 +1,123 @@
+// -*- mode: C++; c-file-style: "cc-mode" -*-
+//*************************************************************************
+// DESCRIPTION: Dependency graph for parameter/localparam/typedef resolution.
+//   Builds a dependency graph after V3Param to correctly resolve
+//   interface typedefs that depend on localparams which depend on
+//   parameters across module boundaries.
+//
+// Code available from: https://verilator.org
+//
+//*************************************************************************
+//
+// Copyright 2003-2026 by Wilson Snyder. This program is free software; you
+// can redistribute it and/or modify it under the terms of either the GNU
+// Lesser General Public License Version 3 or the Perl Artistic License
+// Version 2.0.
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//*************************************************************************
+
+#ifndef VERILATOR_V3LINKDOTDEPGRAPH_H_
+#define VERILATOR_V3LINKDOTDEPGRAPH_H_
+
+#include "config_build.h"
+
+#include "V3Ast.h"
+
+#include <cstddef>
+#include <functional>
+#include <set>
+#include <unordered_map>
+#include <vector>
+
+class V3LinkDotDepGraph final {
+public:
+    // Node types in the dependency graph
+    enum class NodeType {
+        GPARAM,         // Parameter (AstVar with isGParam)
+        LPARAM,         // Localparam (AstVar with isLParam)
+        TYPEDEF,        // Typedef (AstTypedef)
+        PARAMTYPEDTYPE, // Type parameter (AstParamTypeDType)
+        REFDTYPE        // Reference to a type (AstRefDType)
+    };
+
+    // A node in the dependency graph
+    struct DepNode final {
+        AstNode* nodep = nullptr;            // The AST node
+        NodeType nodeType = NodeType::GPARAM;
+        AstNodeModule* ownerModp = nullptr;  // Specialized module/interface owning this
+        AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
+
+        std::set<DepNode*> dependsOn;        // Nodes this depends on
+        std::set<DepNode*> dependents;       // Nodes that depend on this
+
+        bool resolved = false;               // Has this been fully resolved?
+        int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
+    };
+
+    using NodeMap = std::unordered_map<AstNode*, DepNode*>;
+
+private:
+    static NodeMap s_nodes;                  // All nodes in the graph
+    static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
+    static int s_iterationCount;             // Number of resolution iterations
+    static bool s_enabled;                   // Is the graph active?
+
+    // Forward declare visitor classes as friends
+    friend class DepExprVisitor;
+    friend class DepGraphBuildVisitor;
+
+    // Internal helpers
+    static DepNode* findOrCreateNode(AstNode* nodep, NodeType type, AstNodeModule* ownerModp);
+    static void addEdge(DepNode* from, DepNode* to);
+    static void collectExpressionDeps(AstNode* exprp, DepNode* depNode, AstNodeModule* scopeModp);
+    static NodeType classifyVar(const AstVar* varp);
+    static AstNodeModule* findOwnerModule(AstNode* nodep);
+    static const char* nodeTypeName(NodeType type);
+
+public:
+    // Enable/disable the graph
+    static void enable(bool flag) {
+        s_enabled = flag;
+        if (!flag) reset();
+    }
+    static bool enabled() { return s_enabled; }
+
+    // Reset/clear the graph
+    static void reset();
+
+    // Build the graph from the AST (call after V3Param)
+    static void build(AstNetlist* netlistp);
+
+    // Resolve all dependencies using fixed-point iteration
+    // Returns number of iterations needed
+    static int resolve();
+
+    // Apply resolved typedefs to RefDType nodes
+    static void apply();
+
+    // Statistics
+    static std::size_t size() { return s_allNodes.size(); }
+    static int iterationCount() { return s_iterationCount; }
+
+    // Find a node by AST pointer
+    static const DepNode* find(AstNode* nodep);
+
+    // Iterate over all nodes
+    static void forEach(const std::function<void(const DepNode&)>& fn);
+
+    // Debugging - print the entire graph
+    static void dumpGraph();
+    static void dumpGraphTree(AstNetlist* netlistp);  // Hierarchical tree view
+    static void dumpNode(const DepNode* nodep);
+    static string nodeName(const DepNode* nodep);
+    static string nodeOwnerName(const DepNode* nodep);
+
+private:
+    // Helper for tree dump
+    static void dumpModuleTree(AstNodeModule* modp, const string& prefix, bool isLast);
+    // Helper for resolution - re-evaluate a single node
+    static void reEvaluateNode(DepNode* nodep);
+};
+
+#endif  // VERILATOR_V3LINKDOTDEPGRAPH_H_

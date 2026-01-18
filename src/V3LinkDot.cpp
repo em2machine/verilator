@@ -5182,13 +5182,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 VL_DO_DANGLING(pushDeletep(nodep), nodep);
                 // If the resolved dtype is a RefDType with an interface typedef,
                 // ensure it's captured for re-resolution during paramed pass
-                if (AstRefDType* const resolvedRefp = VN_CAST(resolvedDTypep, RefDType)) {
-                    if (resolvedRefp->user2p() && !V3LinkDotIfaceCapture::find(resolvedRefp)) {
-                        AstCell* const cellp = VN_AS(resolvedRefp->user2p(), Cell);
-                        UINFO(9, indent() << "iface capture re-capture resolved RefDType="
-                                          << resolvedRefp << " cell=" << cellp << "\n");
-                        V3LinkDotIfaceCapture::add(resolvedRefp, cellp, m_modp,
-                                                   resolvedRefp->typedefp());
+                if (V3LinkDotIfaceCapture::enabled()) {
+                    if (AstRefDType* const resolvedRefp = VN_CAST(resolvedDTypep, RefDType)) {
+                        if (resolvedRefp->user2p() && !V3LinkDotIfaceCapture::find(resolvedRefp)) {
+                            AstCell* const cellp = VN_AS(resolvedRefp->user2p(), Cell);
+                            UINFO(9, indent() << "iface capture re-capture resolved RefDType="
+                                              << resolvedRefp << " cell=" << cellp << "\n");
+                            V3LinkDotIfaceCapture::add(resolvedRefp, cellp, m_modp,
+                                                       resolvedRefp->typedefp());
+                        }
                     }
                 }
             }
@@ -5371,7 +5373,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     // class capture: capture typedef references inside parameterized classes
                     // Only capture if we're referencing from OUTSIDE the class (not
                     // self-references)
-                    if (m_statep->forPrimary()) {
+                    if (V3LinkDotIfaceCapture::enabled() && m_statep->forPrimary()) {
                         AstClass* const classp = VN_CAST(nodep->classOrPackagep(), Class);
                         if (classp && classp->hasGParam() && classp != m_modp) {
                             UINFO(9, indent()
@@ -5398,7 +5400,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         // Similar to TYPEDEF capture above, but for PARAMTYPEDTYPE nodes
                         // Capture when: (1) in iface capture context, OR (2) inside an interface
                         // referencing a PARAMTYPEDTYPE in a different interface via dotted path
-                        if (m_statep->forPrimary()) {
+                        if (V3LinkDotIfaceCapture::enabled() && m_statep->forPrimary()) {
                             AstNodeModule* const defOwnerModp = V3LinkDotIfaceCapture::findOwnerModule(defp);
                             if (defOwnerModp && VN_IS(defOwnerModp, Iface)) {
                                 // Get the cell for the interface containing the PARAMTYPEDTYPE

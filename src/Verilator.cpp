@@ -68,6 +68,8 @@
 #include "V3Life.h"
 #include "V3LifePost.h"
 #include "V3LinkDot.h"
+#include "V3LinkDotDepGraph.h"
+#include "V3LinkDotIfaceCapture.h"
 #include "V3LinkInc.h"
 #include "V3LinkJump.h"
 #include "V3LinkLValue.h"
@@ -176,6 +178,27 @@ static void process() {
         //   This requires some width calculations and constant propagation
         // No more AstGenCase/AstGenFor/AstGenIf after this
         V3Param::param(v3Global.rootp());
+
+        // Build dependency graph for param/localparam/typedef resolution (experimental)
+        // This runs alongside the existing mechanism for now - enable with --debugi 5
+        // When enabled, we disable V3LinkDotIfaceCapture to avoid conflicts
+        if (debug() >= 5) {
+            // Disable the old mechanism - they cannot coexist
+            V3LinkDotIfaceCapture::enable(false);
+
+            V3LinkDotDepGraph::enable(true);
+            V3LinkDotDepGraph::build(v3Global.rootp());
+            V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());
+            V3LinkDotDepGraph::dumpGraph();
+            // Run resolution to determine correct ordering
+            const int iters = V3LinkDotDepGraph::resolve();
+            UINFO(1, "DEPGRAPH: Resolution completed in " << iters << " iterations" << endl);
+            // Apply: update RefDType pointers
+            V3LinkDotDepGraph::apply();
+            V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());  // Dump again to see updated widths
+            V3LinkDotDepGraph::enable(false);
+        }
+
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs
         V3Error::abortIfErrors();

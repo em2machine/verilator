@@ -2150,7 +2150,7 @@ public:
         // but before constification. Width resolves MEMBERSELs through dtype.
         for (AstNodeModule* modp = netlistp->modulesp(); modp;
             modp = VN_AS(modp->nextp(), NodeModule)) {
-            if (VN_IS(modp, Iface) || VN_IS(modp, Class)) {
+            if (V3LinkDotIfaceCapture::enabled() && (VN_IS(modp, Iface) || VN_IS(modp, Class))) {
                 for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                     if (AstVar* const varp = VN_CAST(stmtp, Var)) {
                         if (varp->varType() == VVarType::LPARAM && varp->valuep()

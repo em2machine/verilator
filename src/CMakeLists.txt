@@ -123,6 +123,7 @@ set(HEADERS
     V3LinkCells.h
     V3LinkDot.h
     V3LinkDotIfaceCapture.h
+    V3LinkDotDepGraph.h
     V3LinkInc.h
     V3LinkJump.h
     V3LinkLValue.h
@@ -295,6 +296,7 @@ set(COMMON_SOURCES
     V3LinkCells.cpp
     V3LinkDot.cpp
     V3LinkDotIfaceCapture.cpp
+    V3LinkDotDepGraph.cpp
     V3LinkInc.cpp
     V3LinkJump.cpp
     V3LinkLValue.cpp
