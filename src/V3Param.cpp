@@ -642,29 +642,8 @@ class ParamProcessor final {
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
                     if (!entry.refp) return;
 
-                    // When matched via typedefOwnerModp (typedef is in the interface being cloned),
-                    // only process entries whose cellp matches the cell being cloned.
-                    // This prevents cross-contamination when multiple sibling cells instantiate
-                    // the same interface type (e.g., types_mul vs types_add in t_lparam_dep_iface10).
-                    // However, we should NOT filter when entry.cellp is in a different hierarchy
-                    // (e.g., nested interface chains like cca_io.axi_tlb_io.r_chan_t).
-                    // Only filter if both entry.cellp and cloneCellp are direct children of srcModp.
-                    if (entry.typedefOwnerModp == srcModp && entry.cellp && cloneCellp
-                        && entry.cellp->name() != cloneCellp->name()) {
-                        // Check if entry.cellp is a direct child of srcModp (sibling of cloneCellp)
-                        bool entryCellpIsSibling = false;
-                        for (AstNode* stmtp = srcModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                                if (cellp->name() == entry.cellp->name()) {
-                                    entryCellpIsSibling = true;
-                                    break;
-                                }
-                            }
-                        }
-                        // Only skip if entry.cellp is a sibling cell with mismatched name
-                        if (entryCellpIsSibling) {
-                            return;
-                        }
+                    if (!V3LinkDotIfaceCapture::shouldApplyToClone(entry, srcModp, cloneCellp)) {
+                        return;
                     }
 
                     // Handle TYPEDEF references

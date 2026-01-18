@@ -44,6 +44,25 @@ bool V3LinkDotIfaceCapture::finalizeCapturedEntry(CapturedMap::iterator it, cons
     return true;
 }
 
+bool V3LinkDotIfaceCapture::shouldApplyToClone(const CapturedIfaceTypedef& entry,
+                                               const AstNodeModule* srcModp,
+                                               const AstCell* cloneCellp) {
+    if (!entry.cellp || !cloneCellp) return true;
+    if (entry.typedefOwnerModp != srcModp) return true;
+    if (entry.cellp == cloneCellp) return true;
+    if (entry.cellp->name() == cloneCellp->name()) return true;
+
+    // If the entry cell is a direct child of srcModp, treat as a sibling and skip.
+    for (AstNode* stmtp = srcModp ? srcModp->stmtsp() : nullptr; stmtp; stmtp = stmtp->nextp()) {
+        if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+            if (cellp->name() == entry.cellp->name()) return false;
+        }
+    }
+
+    // Otherwise, keep entry (nested interface chains should still apply).
+    return true;
+}
+
 string V3LinkDotIfaceCapture::extractIfacePortName(const string& dotText) {
     string name = dotText;
     const size_t dotPos = name.find('.');

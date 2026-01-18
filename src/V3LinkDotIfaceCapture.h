@@ -107,6 +107,10 @@ public:
     static std::size_t size() { return s_map.size(); }
     static void propagateClone(const AstRefDType* origRefp, AstRefDType* newRefp);
 
+    static bool shouldApplyToClone(const CapturedIfaceTypedef& entry,
+                                   const AstNodeModule* srcModp,
+                                   const AstCell* cloneCellp);
+
     static void
     captureTypedefContext(AstRefDType* refp, const char* stageLabel, int dotPos, bool dotIsFinal,
                           const std::string& dotText, VSymEnt* dotSymp, VSymEnt* curSymp,
