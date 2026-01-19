@@ -223,9 +223,14 @@ public:
         V3Error::errorExitCb(preErrorDumpHandler);  // If get error, dump self
         const std::size_t capturedCount = V3LinkDotIfaceCapture::size();
         if (forPrimary()) {
-            V3LinkDotIfaceCapture::enable(true);
-            UINFO(9, "iface capture enabled for primary pass (persisting entries) size="
-                         << capturedCount);
+            // Only enable if not explicitly disabled (e.g., by V3LinkDotDepGraph)
+            if (!V3LinkDotIfaceCapture::explicitlyDisabled()) {
+                V3LinkDotIfaceCapture::enable(true);
+                UINFO(9, "iface capture enabled for primary pass (persisting entries) size="
+                             << capturedCount);
+            } else {
+                UINFO(9, "iface capture explicitly disabled, skipping enable for primary pass");
+            }
         } else if (forParamed()) {
             UINFO(9,
                   "iface capture entering paramed pass captured typedef count=" << capturedCount);
@@ -4009,10 +4014,12 @@ class LinkDotResolveVisitor final : public VNVisitor {
                       && VN_IS(m_ds.m_dotSymp->nodep(), Cell)
                       && VN_CAST(m_ds.m_dotSymp->nodep(), Cell)->modp()
                       && VN_IS(VN_CAST(m_ds.m_dotSymp->nodep(), Cell)->modp(), Iface);
+                // Allow interface typedef references even without IfaceCapture
+                // The dependency graph handles resolution when IfaceCapture is disabled
                 ok = (m_ds.m_dotPos == DP_NONE || m_ds.m_dotPos == DP_SCOPE
-                      || (V3LinkDotIfaceCapture::enabled() && ifaceFinalSegmentAllowed));
-                if (V3LinkDotIfaceCapture::enabled() && ifaceFinalSegmentAllowed) {
-                    UINFO(9, indent() << "iface capture allow final-segment typedef name="
+                      || ifaceFinalSegmentAllowed);
+                if (ifaceFinalSegmentAllowed) {
+                    UINFO(9, indent() << "allow final-segment typedef name="
                                       << nodep->name() << " dotText='" << m_ds.m_dotText
                                       << "' dotSym=" << m_ds.m_dotSymp);
                 }
@@ -4039,7 +4046,10 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             // Find the enclosing PARAMTYPEDTYPE or typedef that will use this
                             for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
                                 if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
-                                    V3LinkDotDepGraph::registerCellAssociation(ptdp, cellp);
+                                    // Pass the typedef name from the reference (defp->name())
+                                    // Also pass the current module (m_modp) as the context module
+                                    V3LinkDotDepGraph::registerCellAssociation(
+                                        ptdp, cellp, defp->name(), m_modp);
                                     break;
                                 }
                                 if (VN_IS(backp, NodeModule)) break;
@@ -4067,11 +4077,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         [this](AstVar* v, AstRefDType* r) { return promoteVarToParamType(v, r); },
                         [this]() { return indent(); });
 
-                    // Register cell association for dependency graph (captures cell path info)
+                    // Register cell association for dependency graph when a PARAMTYPEDTYPE
+                    // references another PARAMTYPEDTYPE through a cell (e.g., typedef types.a_t a_t;)
+                    // We need to find the enclosing PARAMTYPEDTYPE in the current module
                     if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
                         AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
                         if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            V3LinkDotDepGraph::registerCellAssociation(defp, cellp);
+                            // Find the enclosing PARAMTYPEDTYPE in the current module
+                            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                                if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
+                                    // Register with the enclosing PARAMTYPEDTYPE and current module
+                                    V3LinkDotDepGraph::registerCellAssociation(
+                                        ptdp, cellp, defp->name(), m_modp);
+                                    break;
+                                }
+                                if (VN_IS(backp, NodeModule)) break;
+                            }
                         }
                     }
 
@@ -5337,7 +5358,22 @@ class LinkDotResolveVisitor final : public VNVisitor {
             nodep->classOrPackagep(cpackagerefp->classOrPackageSkipp());
             m_ds.m_dotPos = DP_SCOPE;
         } else if (!ifaceCaptured) {
-            checkNoDot(nodep);
+            // Allow REFDTYPE under DOT when referencing interface typedefs
+            // This is needed for patterns like: typedef iface.a_t a_t;
+            // The dependency graph handles resolution when IfaceCapture is disabled
+            const bool ifaceFinalSegmentAllowed
+                = (m_ds.m_dotPos == DP_FINAL) && m_ds.m_dotSymp
+                  && VN_IS(m_ds.m_dotSymp->nodep(), Cell)
+                  && VN_CAST(m_ds.m_dotSymp->nodep(), Cell)->modp()
+                  && VN_IS(VN_CAST(m_ds.m_dotSymp->nodep(), Cell)->modp(), Iface);
+            if (!ifaceFinalSegmentAllowed) {
+                checkNoDot(nodep);
+            } else {
+                UINFO(9, indent() << "allow REFDTYPE under DOT for iface typedef name="
+                                  << nodep->name() << " dotSym=" << m_ds.m_dotSymp);
+                // Clear the dot state so we don't propagate errors
+                m_ds.m_dotPos = DP_SCOPE;
+            }
         } else {
             UINFO(9, indent() << "iface capture consume captured iface context name="
                               << nodep->name() << " cell=" << capturedCellp);

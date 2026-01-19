@@ -157,6 +157,12 @@ static void process() {
         // Convert parseref's to varrefs, and other directly post parsing fixups
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
+        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary if using DepGraph
+        // This must happen before the primary pass to prevent IfaceCapture from running at all
+        if (debug() >= 5) {
+            V3LinkDotIfaceCapture::enable(false);
+        }
+
         // Cross-link dotted hierarchical references
         V3LinkDot::linkDotPrimary(v3Global.rootp());
         v3Global.checkTree();  // Force a check, as link is most likely place for problems
@@ -180,10 +186,11 @@ static void process() {
         V3Param::param(v3Global.rootp());
 
         // Build dependency graph for param/localparam/typedef resolution (experimental)
-        // This runs alongside the existing mechanism for now - enable with --debugi 5
-        // When enabled, we disable V3LinkDotIfaceCapture to avoid conflicts
+        // This REPLACES V3LinkDotIfaceCapture - enable with --debugi 5
+        // The graph handles both resolution ORDER and pointer UPDATES
         if (debug() >= 5) {
-            // Disable the old mechanism - they cannot coexist
+            // Disable V3LinkDotIfaceCapture - the graph replaces it entirely
+            // IfaceCapture has fundamental issues with sibling instances
             V3LinkDotIfaceCapture::enable(false);
 
             V3LinkDotDepGraph::enable(true);

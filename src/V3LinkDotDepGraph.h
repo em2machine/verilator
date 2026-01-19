@@ -54,6 +54,7 @@ public:
 
         bool resolved = false;               // Has this been fully resolved?
         int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
+        int resolvedWidth = 0;               // Resolved width (for PARAMTYPEDTYPEs)
     };
 
     using NodeMap = std::unordered_map<AstNode*, DepNode*>;
@@ -101,7 +102,11 @@ public:
 
     // Register cell association for a node (called from linkdot during primary pass)
     // This captures which cell a PARAMTYPEDTYPE references through
-    static void registerCellAssociation(AstNode* nodep, AstCell* cellp);
+    // typedefName is the name of the typedef being referenced (e.g., "a_t" in "types.a_t")
+    // contextModp is the module where the typedef reference is made (may differ from PARAMTYPEDTYPE owner)
+    static void registerCellAssociation(AstNode* nodep, AstCell* cellp,
+                                        const string& typedefName,
+                                        AstNodeModule* contextModp = nullptr);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
