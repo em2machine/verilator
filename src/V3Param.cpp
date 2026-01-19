@@ -1487,6 +1487,10 @@ class ParamProcessor final {
                                                                   << typedefp << " in "
                                                                   << newClassp->name());
             }
+            if (refDTypep->classOrPackageOpp() == nodep) {
+                nodep->unlinkFrBack();
+                refDTypep->classOrPackageOpp(nullptr);
+            }
         }
         return newModp;
     }

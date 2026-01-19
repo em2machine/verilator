@@ -5261,6 +5261,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 UINFO(9, indent() << "iface capture skip revisit name=" << nodep->name()
                                   << " already user3 and captured cell=" << nodep->user2p());
             }
+            if (m_statep->forParamed()) {
+                if (AstNode* const cpackagep = nodep->classOrPackageOpp()) {
+                    if (AstClassOrPackageRef* const cpackagerefp
+                        = VN_CAST(cpackagep, ClassOrPackageRef)) {
+                        if (!cpackagerefp->classOrPackageSkipp()) {
+                            VSymEnt* const foundp = m_statep->resolveClassOrPackage(
+                                m_ds.m_dotSymp, cpackagerefp, true, false,
+                                "class/package reference");
+                            if (!foundp) return;
+                        }
+                        nodep->classOrPackagep(cpackagerefp->classOrPackageSkipp());
+                    }
+                    VL_DO_DANGLING(pushDeletep(cpackagep->unlinkFrBack()), cpackagep);
+                }
+            }
             return;
         }
         LINKDOT_VISIT_START();
