@@ -467,7 +467,31 @@ private:
                                 ifaceModp = ifaceRefp->cellp()->modp();
                             }
                             if (ifaceModp) {
-                                // Search cells inside this interface
+                                // First, look directly in the interface module for the typedef/paramtype
+                                for (AstNode* ifaceStmtp = ifaceModp->stmtsp();
+                                     ifaceStmtp && !targetTdp && !targetPtdp; ifaceStmtp = ifaceStmtp->nextp()) {
+                                    if (AstTypedef* const tdp = VN_CAST(ifaceStmtp, Typedef)) {
+                                        if (tdp->name() == typedefName) {
+                                            targetTdp = tdp;
+                                            targetModp = ifaceModp;
+                                            UINFO(5, "DEPGRAPH: found typedef '" << typedefName
+                                                      << "' via iface port '" << varp->name()
+                                                      << "' in " << ifaceModp->name() << endl);
+                                            break;
+                                        }
+                                    } else if (AstParamTypeDType* const ptdp = VN_CAST(ifaceStmtp, ParamTypeDType)) {
+                                        if (ptdp->name() == typedefName) {
+                                            targetPtdp = ptdp;
+                                            targetModp = ifaceModp;
+                                            UINFO(5, "DEPGRAPH: found paramtype '" << typedefName
+                                                      << "' via iface port '" << varp->name()
+                                                      << "' in " << ifaceModp->name() << endl);
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // If not found, search cells inside this interface
                                 for (AstNode* ifaceStmtp = ifaceModp->stmtsp();
                                      ifaceStmtp && !targetTdp && !targetPtdp; ifaceStmtp = ifaceStmtp->nextp()) {
                                     if (AstCell* const cellp = VN_CAST(ifaceStmtp, Cell)) {
