@@ -126,7 +126,9 @@ void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
                                                 const string& typedefName,
                                                 AstNodeModule* contextModp,
                                                 const string& assocCellName) {
-    if (!cellp || !cellp->modp()) return;
+    UINFO(5, "DEPGRAPH: register assoc request typedef='" << typedefName
+              << "' assocCell='" << assocCellName
+              << "' context=" << (contextModp ? contextModp->name() : "<null>") << "\n");
     // Use contextModp if provided, otherwise find owner from node
     AstNodeModule* const ownerModp = contextModp ? contextModp : findOwnerModule(nodep);
     if (!ownerModp) return;
@@ -142,10 +144,11 @@ void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
     // Store as "cellName:typedefName"
     // The typedefName is passed from the caller who knows the actual typedef being referenced
     CellAssocKey key{ownerModp->name(), paramTypeName};
-    string assocName = assocCellName.empty() ? cellp->name() : assocCellName;
+    string assocName = assocCellName;
+    if (assocName.empty() && cellp) assocName = cellp->name();
     const size_t bra = assocName.find("__BRA__");
     if (bra != string::npos) assocName = assocName.substr(0, bra);
-    if (assocName.empty()) assocName = cellp->name();
+    if (assocName.empty()) return;
     string newAssoc = assocName + ":" + typedefName;
     s_cellAssociations[key] = newAssoc;
     UINFO(5, "DEPGRAPH: registered cell association for " << ownerModp->name()
@@ -359,6 +362,8 @@ private:
 
         CellAssocKey key{baseModName, nodep->name()};
         auto it = s_cellAssociations.find(key);
+        UINFO(5, "DEPGRAPH: lookup assoc key " << baseModName << "::" << nodep->name()
+                  << (it != s_cellAssociations.end() ? " hit" : " miss") << "\n");
         if (it != s_cellAssociations.end()) {
             // Value is "cellName:typedefName"
             depNodep->cellName = it->second;
@@ -492,11 +497,11 @@ private:
                             // For interface ports, use ifacep() which points to the interface module
                             // For interface cells, use cellp()->modp()
                             AstNodeModule* ifaceModp = nullptr;
-                            if (ifaceRefp && ifaceRefp->ifacep()) {
-                                ifaceModp = ifaceRefp->ifacep();
-                            } else if (ifaceRefp && ifaceRefp->cellp() && ifaceRefp->cellp()->modp()
-                                       && VN_IS(ifaceRefp->cellp()->modp(), Iface)) {
+                            if (ifaceRefp && ifaceRefp->cellp() && ifaceRefp->cellp()->modp()
+                                && VN_IS(ifaceRefp->cellp()->modp(), Iface)) {
                                 ifaceModp = ifaceRefp->cellp()->modp();
+                            } else if (ifaceRefp && ifaceRefp->ifacep()) {
+                                ifaceModp = ifaceRefp->ifacep();
                             }
                             if (ifaceModp) {
                                 // First, look directly in the interface module for the typedef/paramtype
@@ -660,9 +665,34 @@ private:
 
         // If this RefDType points to a typedef, add edge
         if (AstTypedef* const tdp = nodep->typedefp()) {
-            AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+            AstTypedef* targetTdp = tdp;
+            AstNodeModule* tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+            if (m_modp && tdOwnerp && tdOwnerp->hasGParam()
+                && tdOwnerp->name().find("__") == string::npos) {
+                for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    AstCell* const cellp = VN_CAST(stmtp, Cell);
+                    if (!cellp || !cellp->modp()) continue;
+                    if (!VN_IS(cellp->modp(), Iface)) continue;
+                    string cellBase = cellp->modp()->name();
+                    const size_t suffixPos = cellBase.find("__");
+                    if (suffixPos != string::npos) cellBase = cellBase.substr(0, suffixPos);
+                    if (cellBase != tdOwnerp->name()) continue;
+                    for (AstNode* cellStmtp = cellp->modp()->stmtsp(); cellStmtp;
+                         cellStmtp = cellStmtp->nextp()) {
+                        if (AstTypedef* const cellTdp = VN_CAST(cellStmtp, Typedef)) {
+                            if (cellTdp->name() == tdp->name()) {
+                                targetTdp = cellTdp;
+                                tdOwnerp = cellp->modp();
+                                break;
+                            }
+                        }
+                    }
+                    if (targetTdp != tdp) break;
+                }
+            }
             V3LinkDotDepGraph::DepNode* const tdNodep
-                = V3LinkDotDepGraph::findOrCreateNode(tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                = V3LinkDotDepGraph::findOrCreateNode(targetTdp, V3LinkDotDepGraph::NodeType::TYPEDEF,
+                                                      tdOwnerp);
             V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
         }
 
