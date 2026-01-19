@@ -641,6 +641,37 @@ private:
                 ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
             V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
         }
+
+        // If this RefDType has an explicit class/package scope, add edge to that typedef/paramtype
+        if (AstNodeModule* const scopeModp = nodep->classOrPackagep()) {
+            AstNodeModule* searchModp = scopeModp;
+            if (AstClassPackage* const pkgp = VN_CAST(scopeModp, ClassPackage)) {
+                if (pkgp->classp()) searchModp = pkgp->classp();
+            }
+            if (searchModp) {
+                for (AstNode* stmtp = searchModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                        if (tdp->name() == nodep->name()) {
+                            AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+                            V3LinkDotDepGraph::DepNode* const tdNodep
+                                = V3LinkDotDepGraph::findOrCreateNode(
+                                    tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                            V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
+                            break;
+                        }
+                    } else if (AstParamTypeDType* const scopePtdp = VN_CAST(stmtp, ParamTypeDType)) {
+                        if (scopePtdp->name() == nodep->name()) {
+                            AstNodeModule* const ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(scopePtdp);
+                            V3LinkDotDepGraph::DepNode* const ptdNodep
+                                = V3LinkDotDepGraph::findOrCreateNode(
+                                    scopePtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                            V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }

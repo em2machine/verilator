@@ -1459,12 +1459,28 @@ class ParamProcessor final {
         nodep->classOrPackagep(newModp);  // Might be unchanged if not cloned (newModp == srcModp)
 
         // If this ClassOrPackageRef is a child of a RefDType (e.g., typedef class#(T)::member_t),
-        // resolve the RefDType's typedef to point to the typedef inside the specialized class
+        // resolve the RefDType's typedef to point to the typedef inside the specialized class.
+        // This must also retarget existing typedefp that still points at the original class.
         AstRefDType* const refDTypep = VN_CAST(nodep->backp(), RefDType);
         AstClass* const newClassp = refDTypep ? VN_CAST(newModp, Class) : nullptr;
-        if (newClassp && !refDTypep->typedefp() && !refDTypep->subDTypep()) {
-            if (AstTypedef* const typedefp
-                = VN_CAST(m_memberMap.findMember(newClassp, refDTypep->name()), Typedef)) {
+        if (newClassp) {
+            AstTypedef* typedefp = VN_CAST(m_memberMap.findMember(newClassp, refDTypep->name()), Typedef);
+            if (!typedefp) {
+                for (AstNode* stmtp = newClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                        if (tdp->name() == refDTypep->name()) {
+                            typedefp = tdp;
+                            break;
+                        }
+                    }
+                }
+            }
+            UINFO(5, "classRefDeparam: ref=" << refDTypep
+                                              << " name=" << refDTypep->name()
+                                              << " old=" << refDTypep->typedefp()
+                                              << " newClass=" << newClassp
+                                              << " found=" << typedefp << endl);
+            if (typedefp && refDTypep->typedefp() != typedefp) {
                 refDTypep->typedefp(typedefp);
                 refDTypep->classOrPackagep(newClassp);
                 UINFO(9, "Resolved parameterized class typedef: " << refDTypep->name() << " -> "
@@ -1479,9 +1495,53 @@ class ParamProcessor final {
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
         if (!newModp) return nullptr;
+        AstClass* const oldClassp = nodep->classp();
         AstClass* const newClassp = VN_AS(newModp, Class);
         nodep->classp(newClassp);  // Might be unchanged if not cloned (newModp == srcModp)
         nodep->classOrPackagep(newClassp);
+
+        if (oldClassp && newClassp && oldClassp != newClassp && m_modp) {
+            std::unordered_map<string, AstTypedef*> memberTypedefs;
+            for (AstNode* stmtp = newClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                    memberTypedefs.emplace(tdp->name(), tdp);
+                }
+            }
+
+            class RefDTypeRetargetVisitor final : public VNVisitor {
+                const AstClass* m_oldClassp;
+                AstClass* m_newClassp;
+                const std::unordered_map<string, AstTypedef*>& m_memberTypedefs;
+
+                void visit(AstRefDType* refp) override {
+                    if (refp->classOrPackagep() == m_oldClassp) {
+                        auto it = m_memberTypedefs.find(refp->name());
+                        if (it != m_memberTypedefs.end() && refp->typedefp() != it->second) {
+                            refp->typedefp(it->second);
+                            refp->classOrPackagep(m_newClassp);
+                            UINFO(5, "classRefDeparam: retarget refdtype name=" << refp->name()
+                                                                                << " ref=" << refp
+                                                                                << " typedef=" << it->second
+                                                                                << " class=" << m_newClassp << endl);
+                        }
+                    }
+                    iterateChildren(refp);
+                }
+                void visit(AstNode* nodep) override { iterateChildren(nodep); }
+
+            public:
+                RefDTypeRetargetVisitor(const AstClass* oldClassp, AstClass* newClassp,
+                                        const std::unordered_map<string, AstTypedef*>& memberTypedefs,
+                                        const AstNodeModule* ownerModp)
+                    : m_oldClassp(oldClassp)
+                    , m_newClassp(newClassp)
+                    , m_memberTypedefs(memberTypedefs) {
+                    if (ownerModp) iterate(const_cast<AstNodeModule*>(ownerModp));
+                }
+            } visitor{oldClassp, newClassp, memberTypedefs, m_modp};
+            (void)visitor;
+        }
+
         return newClassp;
     }
 
