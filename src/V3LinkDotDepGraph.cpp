@@ -303,7 +303,7 @@ private:
                 }
             }
             // For RefDType pointing to another typedef (e.g., typedef c_inst.c_t b_t;)
-            // Add edge from this typedef to the referenced typedef
+            // Add edge from this typedef to the referenced typedef/paramtype
             if (AstRefDType* const rdtp = VN_CAST(dtypep, RefDType)) {
                 if (AstTypedef* const refTdp = rdtp->typedefp()) {
                     AstNodeModule* const refOwnerp = V3LinkDotDepGraph::findOwnerModule(refTdp);
@@ -312,6 +312,14 @@ private:
                     V3LinkDotDepGraph::addEdge(depNodep, refNodep);
                     UINFO(9, "DEPGRAPH: typedef '" << nodep->name() << "' depends on typedef '"
                               << refTdp->name() << "' in " << (refOwnerp ? refOwnerp->name() : "<null>") << endl);
+                } else if (AstParamTypeDType* const refPtdp = VN_CAST(rdtp->refDTypep(), ParamTypeDType)) {
+                    AstNodeModule* const refOwnerp = V3LinkDotDepGraph::findOwnerModule(refPtdp);
+                    V3LinkDotDepGraph::DepNode* const refNodep
+                        = V3LinkDotDepGraph::findOrCreateNode(
+                            refPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, refOwnerp);
+                    V3LinkDotDepGraph::addEdge(depNodep, refNodep);
+                    UINFO(9, "DEPGRAPH: typedef '" << nodep->name() << "' depends on paramtype '"
+                              << refPtdp->name() << "' in " << (refOwnerp ? refOwnerp->name() : "<null>") << endl);
                 }
             }
             // For other types, iterate children
