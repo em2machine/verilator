@@ -396,6 +396,27 @@ private:
 
                 // If not found, search cells in interfaces this module references (via cells)
                 if (!targetTdp && !targetPtdp) {
+                    bool portNameMatch = false;
+                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !portNameMatch; stmtp = stmtp->nextp()) {
+                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                            AstIfaceRefDType* ifaceRefp = VN_CAST(varp->dtypep(), IfaceRefDType);
+                            if (!ifaceRefp && varp->dtypep()) {
+                                ifaceRefp = VN_CAST(varp->dtypep()->skipRefp(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->subDTypep()) {
+                                ifaceRefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->subDTypep()) {
+                                ifaceRefp = VN_CAST(varp->subDTypep()->skipRefp(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->isIfaceRef()) {
+                                if (varp->childDTypep()) {
+                                    ifaceRefp = VN_CAST(varp->childDTypep(), IfaceRefDType);
+                                }
+                            }
+                            if (ifaceRefp && varp->name() == cellName) portNameMatch = true;
+                        }
+                    }
                     for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
                         if (AstCell* const ifaceCellp = VN_CAST(stmtp, Cell)) {
                             if (ifaceCellp->modp() && VN_IS(ifaceCellp->modp(), Iface)) {
@@ -433,6 +454,27 @@ private:
                 if (!targetTdp && !targetPtdp) {
                     UINFO(9, "DEPGRAPH: searching iface ports in " << m_modp->name()
                               << " for cell '" << cellName << "' typedef '" << typedefName << "'" << endl);
+                    bool portNameMatch = false;
+                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !portNameMatch; stmtp = stmtp->nextp()) {
+                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                            AstIfaceRefDType* ifaceRefp = VN_CAST(varp->dtypep(), IfaceRefDType);
+                            if (!ifaceRefp && varp->dtypep()) {
+                                ifaceRefp = VN_CAST(varp->dtypep()->skipRefp(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->subDTypep()) {
+                                ifaceRefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->subDTypep()) {
+                                ifaceRefp = VN_CAST(varp->subDTypep()->skipRefp(), IfaceRefDType);
+                            }
+                            if (!ifaceRefp && varp->isIfaceRef()) {
+                                if (varp->childDTypep()) {
+                                    ifaceRefp = VN_CAST(varp->childDTypep(), IfaceRefDType);
+                                }
+                            }
+                            if (ifaceRefp && varp->name() == cellName) portNameMatch = true;
+                        }
+                    }
                     for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
                         if (AstVar* const varp = VN_CAST(stmtp, Var)) {
                             // Try to get IfaceRefDType - may be direct, via skipRefp, or via subDTypep
@@ -455,7 +497,7 @@ private:
                                 }
                             }
                             if (ifaceRefp) {
-                                if (varp->name() != cellName) continue;
+                                if (portNameMatch && varp->name() != cellName) continue;
                                 UINFO(9, "DEPGRAPH: checking iface port '" << varp->name()
                                           << "' cellp=" << ifaceRefp->cellp()
                                           << " ifacep=" << ifaceRefp->ifacep() << endl);
