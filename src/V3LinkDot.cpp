@@ -4124,6 +4124,14 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (ok) {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
+                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellp->name(), m_modp);
+                        }
+                    } else if (!m_ds.m_dotText.empty()) {
+                        V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
+                    }
 
                     V3LinkDotIfaceCapture::captureTypedefContext(
                         refp, "paramtype", static_cast<int>(m_ds.m_dotPos),

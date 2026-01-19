@@ -64,6 +64,7 @@ private:
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
     static bool s_enabled;                   // Is the graph active?
+    static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
 
     // Forward declare visitor classes as friends
     friend class DepExprVisitor;
@@ -108,6 +109,9 @@ public:
                                         const string& typedefName,
                                         AstNodeModule* contextModp = nullptr,
                                         const string& assocCellName = "");
+    // Register transient cell context for RefDType created from dotted datatype references
+    static void registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
+                                        AstNodeModule* contextModp = nullptr);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }

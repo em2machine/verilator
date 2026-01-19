@@ -29,10 +29,11 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 //======================================================================
 // Static member definitions
 
-V3LinkDotDepGraph::NodeMap V3LinkDotDepGraph::s_nodes{};
-std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes{};
+V3LinkDotDepGraph::NodeMap V3LinkDotDepGraph::s_nodes;
+std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes;
 int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
+std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 
 // Map from (module name, paramtype name) to cell name (captured during linkdot primary)
 // We use names instead of pointers because nodes get cloned during V3Param
@@ -108,18 +109,43 @@ V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
 
 void V3LinkDotDepGraph::reset() {
     UINFO(5, "DEPGRAPH: reset() called, clearing graph nodes (keeping "
-              << s_cellAssociations.size() << " cell associations)" << endl);
+                  << s_cellAssociations.size() << " cell associations, "
+                  << s_refDTypeDotPathRegistry.size() << " refdtype dotpath registrations)"
+                  << endl);
     for (DepNode* nodep : s_allNodes) delete nodep;
     s_allNodes.clear();
     s_nodes.clear();
     // Note: Do NOT clear s_cellAssociations here - they are captured during linkdot primary
     // and need to persist until graph building which happens later
+    // Note: Do NOT clear s_refDTypeDotPathRegistry here - populated during linkdot primary
+    // and needed during graph build which occurs later.
     s_iterationCount = 0;
 }
 
 void V3LinkDotDepGraph::resetAll() {
     reset();
     s_cellAssociations.clear();
+    s_refDTypeDotPathRegistry.clear();
+}
+
+void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
+                                                AstNodeModule* contextModp) {
+    if (!refp || cellName.empty()) return;
+    auto it = s_refDTypeDotPathRegistry.find(refp);
+    if (it != s_refDTypeDotPathRegistry.end()) {
+        UASSERT_OBJ(it->second == cellName, refp,
+                    "Duplicate refdtype dotpath registry for '" << refp->name() << "' in "
+                                                                  << (contextModp
+                                                                          ? contextModp->name()
+                                                                          : "<unknown>")
+                                                                  << " old='" << it->second
+                                                                  << "' new='" << cellName
+                                                                  << "'");
+        return;
+    }
+    s_refDTypeDotPathRegistry.emplace(refp, cellName);
+    UINFO(5, "DEPGRAPH: registered refdtype dotpath '" << cellName << "' for '" << refp->name()
+                  << "' in " << (contextModp ? contextModp->name() : "<unknown>") << endl);
 }
 
 void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
@@ -663,6 +689,11 @@ private:
         V3LinkDotDepGraph::DepNode* const depNodep
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp);
 
+        const auto regIt = V3LinkDotDepGraph::s_refDTypeDotPathRegistry.find(nodep);
+        if (regIt != V3LinkDotDepGraph::s_refDTypeDotPathRegistry.end()) {
+            depNodep->cellName = regIt->second;
+        }
+
         // If this RefDType points to a typedef, add edge
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstTypedef* targetTdp = tdp;
@@ -706,16 +737,21 @@ private:
             if (m_modp && ptdOwnerp && ptdOwnerp->hasGParam()
                 && ptdOwnerp->name().find("__") == string::npos) {
                 string dotCellName;
-                for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                    if (AstDot* const dotp = VN_CAST(backp, Dot)) {
-                        if (dotp->rhsp() == nodep) {
-                            if (AstVarRef* const varrefp = VN_CAST(dotp->lhsp(), VarRef)) {
-                                dotCellName = varrefp->name();
+                if (!depNodep->cellName.empty()) {
+                    dotCellName = depNodep->cellName;
+                } else {
+                    for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                        if (AstDot* const dotp = VN_CAST(backp, Dot)) {
+                            if (dotp->rhsp() == nodep) {
+                                if (AstVarRef* const varrefp = VN_CAST(dotp->lhsp(), VarRef)) {
+                                    dotCellName = varrefp->name();
+                                    depNodep->cellName = dotCellName;
+                                }
+                                break;
                             }
-                            break;
                         }
+                        if (VN_IS(backp, NodeModule)) break;
                     }
-                    if (VN_IS(backp, NodeModule)) break;
                 }
 
                 for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
@@ -1056,9 +1092,15 @@ void V3LinkDotDepGraph::dumpNode(const DepNode* nodep) {
         deps << "'" << nodeName(depp) << "'@" << nodeOwnerName(depp);
     }
 
+    string extra;
+    if (nodep->nodeType == NodeType::REFDTYPE && !nodep->cellName.empty()) {
+        extra = " cell=" + nodep->cellName;
+    }
+
     UINFO(1, "DEPGRAPH:   " << nodeTypeName(nodep->nodeType) << " '" << nodeName(nodep) << "'"
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " iter=" << nodep->resolvedIteration
+              << extra
               << " deps=[" << deps.str() << "]"
               << endl);
 }
@@ -1107,6 +1149,22 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
             else cellStr = " via " + cellName;
         }
         return string{" -> "} + dtypep->prettyDTypeName(false) + widthStr + cellStr;
+    };
+
+    const auto formatRefDTypeResolution = [](const DepNode* dnp) -> string {
+        if (!dnp) return "";
+        string cellStr;
+        if (!dnp->cellName.empty()) cellStr = " cell=" + dnp->cellName;
+        string targetStr;
+        for (DepNode* const depNodep : dnp->dependsOn) {
+            if ((depNodep->nodeType == NodeType::TYPEDEF
+                 || depNodep->nodeType == NodeType::PARAMTYPEDTYPE)
+                && depNodep->ownerModp) {
+                targetStr = " -> " + depNodep->ownerModp->name();
+                break;
+            }
+        }
+        return cellStr + targetStr;
     };
 
     const string connector = isLast ? "└── " : "├── ";
@@ -1167,6 +1225,14 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
             string targetStr = formatParamTypeResolution(ptdp, dnp);
             items.push_back({"", "PARAMTYPE " + ptdp->name() + resolved + targetStr});
         }
+    }
+
+    // Include module-level REFDTYPE nodes to surface instance context in tree
+    for (DepNode* const dnp : s_allNodes) {
+        if (!dnp || dnp->nodeType != NodeType::REFDTYPE) continue;
+        if (dnp->ownerModp != modp) continue;
+        string suffix = formatRefDTypeResolution(dnp);
+        items.push_back({"", "REFDTYPE " + nodeName(dnp) + suffix});
     }
 
     // Print items
