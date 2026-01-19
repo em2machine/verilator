@@ -4141,14 +4141,24 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             // Find the enclosing PARAMTYPEDTYPE in the current module
                             for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
                                 if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
+                                    auto findOwnerModule = [](AstNode* nodep) -> AstNodeModule* {
+                                        for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+                                            if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
+                                        }
+                                        return nullptr;
+                                    };
+                                    string assocCellName = cellp->name();
+                                    if (m_modp && findOwnerModule(cellp) != m_modp) {
+                                        if (!m_ds.m_dotText.empty()) assocCellName = m_ds.m_dotText;
+                                    }
                                     UINFO(5, indent() << "DEPGRAPH: register paramtype assoc paramtype='"
                                                       << ptdp->name() << "' cell='"
-                                                      << cellp->name() << "' typedef='"
+                                                      << assocCellName << "' typedef='"
                                                       << defp->name() << "' in "
                                                       << (m_modp ? m_modp->name() : "<null>") << "\n");
                                     // Register with the enclosing PARAMTYPEDTYPE and current module
                                     V3LinkDotDepGraph::registerCellAssociation(
-                                        ptdp, cellp, defp->name(), m_modp);
+                                        ptdp, cellp, defp->name(), m_modp, assocCellName);
                                     break;
                                 }
                                 if (VN_IS(backp, NodeModule)) break;
