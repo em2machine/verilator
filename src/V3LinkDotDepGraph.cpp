@@ -75,6 +75,16 @@ string V3LinkDotDepGraph::nodeOwnerName(const DepNode* nodep) {
     return nodep->ownerModp->name();
 }
 
+static AstIfaceRefDType* findIfaceRefDType(AstNodeDType* dtypep) {
+    if (!dtypep) return nullptr;
+    if (AstIfaceRefDType* const ifaceRefp = VN_CAST(dtypep, IfaceRefDType)) return ifaceRefp;
+    if (AstIfaceRefDType* const ifaceRefp = VN_CAST(dtypep->skipRefp(), IfaceRefDType)) return ifaceRefp;
+    if (AstNodeDType* const subp = dtypep->subDTypep()) {
+        if (AstIfaceRefDType* const ifaceRefp = findIfaceRefDType(subp)) return ifaceRefp;
+    }
+    return nullptr;
+}
+
 const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     switch (type) {
     case NodeType::GPARAM: return "GPARAM";
@@ -132,10 +142,14 @@ void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
     // Store as "cellName:typedefName"
     // The typedefName is passed from the caller who knows the actual typedef being referenced
     CellAssocKey key{ownerModp->name(), paramTypeName};
-    string newAssoc = (assocCellName.empty() ? cellp->name() : assocCellName) + ":" + typedefName;
+    string assocName = assocCellName.empty() ? cellp->name() : assocCellName;
+    const size_t bra = assocName.find("__BRA__");
+    if (bra != string::npos) assocName = assocName.substr(0, bra);
+    if (assocName.empty()) assocName = cellp->name();
+    string newAssoc = assocName + ":" + typedefName;
     s_cellAssociations[key] = newAssoc;
     UINFO(5, "DEPGRAPH: registered cell association for " << ownerModp->name()
-              << "::" << paramTypeName << " -> cell '" << cellp->name()
+              << "::" << paramTypeName << " -> cell '" << assocName
               << "' typedef '" << typedefName << "'" << endl);
 }
 
@@ -457,45 +471,18 @@ private:
                     bool portNameMatch = false;
                     for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !portNameMatch; stmtp = stmtp->nextp()) {
                         if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                            AstIfaceRefDType* ifaceRefp = VN_CAST(varp->dtypep(), IfaceRefDType);
-                            if (!ifaceRefp && varp->dtypep()) {
-                                ifaceRefp = VN_CAST(varp->dtypep()->skipRefp(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep()->skipRefp(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->isIfaceRef()) {
-                                if (varp->childDTypep()) {
-                                    ifaceRefp = VN_CAST(varp->childDTypep(), IfaceRefDType);
-                                }
-                            }
+                            AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
                             if (ifaceRefp && varp->name() == cellName) portNameMatch = true;
                         }
                     }
                     for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
                         if (AstVar* const varp = VN_CAST(stmtp, Var)) {
                             // Try to get IfaceRefDType - may be direct, via skipRefp, or via subDTypep
-                            AstIfaceRefDType* ifaceRefp = VN_CAST(varp->dtypep(), IfaceRefDType);
-                            if (!ifaceRefp && varp->dtypep()) {
-                                ifaceRefp = VN_CAST(varp->dtypep()->skipRefp(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep()->skipRefp(), IfaceRefDType);
-                            }
-                            // Also check if this is an IFACEREF var by checking isIfaceRef()
-                            if (!ifaceRefp && varp->isIfaceRef()) {
-                                // For IFACEREF vars, the dtype might be stored differently
-                                // Try childDTypep
-                                if (varp->childDTypep()) {
-                                    ifaceRefp = VN_CAST(varp->childDTypep(), IfaceRefDType);
-                                }
-                            }
+                            AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
                             if (ifaceRefp) {
                                 if (portNameMatch && varp->name() != cellName) continue;
                                 UINFO(9, "DEPGRAPH: checking iface port '" << varp->name()
