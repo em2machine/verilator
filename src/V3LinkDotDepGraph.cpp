@@ -86,6 +86,34 @@ static AstIfaceRefDType* findIfaceRefDType(AstNodeDType* dtypep) {
     return nullptr;
 }
 
+static AstNodeModule* findConnectedIfaceModpFromPort(AstNodeModule* modp,
+                                                     const string& portName) {
+    if (!modp || portName.empty()) return nullptr;
+    AstNetlist* const rootp = v3Global.rootp();
+    if (!rootp) return nullptr;
+    for (AstNodeModule* topmodp = rootp->modulesp(); topmodp; topmodp = VN_AS(topmodp->nextp(), NodeModule)) {
+        for (AstNode* stmtp = topmodp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            AstCell* const cellp = VN_CAST(stmtp, Cell);
+            if (!cellp || cellp->modp() != modp) continue;
+            for (AstPin* pinp = cellp->pinsp(); pinp; pinp = VN_CAST(pinp->nextp(), Pin)) {
+                AstVar* const modVarp = pinp->modVarp();
+                if (!modVarp || modVarp->name() != portName) continue;
+                AstNode* exprp = pinp->exprp();
+                if (!exprp) continue;
+                while (AstNodePreSel* const preSelp = VN_CAST(exprp, NodePreSel)) exprp = preSelp->fromp();
+                if (AstVarRef* const varRefp = VN_CAST(exprp, VarRef)) {
+                    AstVar* const varp = varRefp->varp();
+                    AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->childDTypep());
+                    if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                    if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->dtypep());
+                    if (ifaceRefp && ifaceRefp->ifaceViaCellp()) return ifaceRefp->ifaceViaCellp();
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
 const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     switch (type) {
     case NodeType::GPARAM: return "GPARAM";
@@ -528,6 +556,16 @@ private:
                                 ifaceModp = ifaceRefp->cellp()->modp();
                             } else if (ifaceRefp && ifaceRefp->ifacep()) {
                                 ifaceModp = ifaceRefp->ifacep();
+                            }
+                            if (ifaceModp && varp->name() == cellName) {
+                                if (AstNodeModule* const connectedIfaceModp
+                                    = findConnectedIfaceModpFromPort(m_modp, cellName)) {
+                                    ifaceModp = connectedIfaceModp;
+                                    UINFO(5, "DEPGRAPH: resolved iface port '" << cellName
+                                              << "' to connected interface " << ifaceModp->name()
+                                              << " for typedef '" << typedefName << "' in "
+                                              << m_modp->name() << endl);
+                                }
                             }
                             if (ifaceModp) {
                                 // First, look directly in the interface module for the typedef/paramtype
