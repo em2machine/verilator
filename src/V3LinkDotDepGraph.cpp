@@ -895,6 +895,15 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         AstTypedef* const tdp = VN_CAST(nodep->nodep, Typedef);
         if (!tdp) return;
 
+        if (AstRefDType* const refp = VN_CAST(tdp->subDTypep(), RefDType)) {
+            if (!refp->subDTypep() && !refp->typedefp() && !refp->refDTypep()) {
+                UINFO(5, "DEPGRAPH: skip re-evaluate typedef '" << tdp->name()
+                          << "' in " << nodeOwnerName(nodep)
+                          << " (unlinked refdtype)" << endl);
+                return;
+            }
+        }
+
         const int oldWidth = tdp->subDTypep() ? tdp->subDTypep()->width() : 0;
 
         // Clear the didWidth flag to force re-widthing

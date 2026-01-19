@@ -860,8 +860,10 @@ public:
         };
 
         if (const AstTypedef* const typedefp = VN_CAST(symp->nodep(), Typedef)) {
-            if (VN_IS(typedefp->childDTypep(), ClassRefDType)) return true;
-            if (checkUnresolvedRef(VN_CAST(typedefp->childDTypep(), RefDType))) return true;
+            const AstNodeDType* dtypep = typedefp->subDTypep();
+            if (!dtypep) dtypep = typedefp->childDTypep();
+            if (VN_IS(dtypep, ClassRefDType)) return true;
+            if (checkUnresolvedRef(VN_CAST(dtypep, RefDType))) return true;
         } else if (const AstParamTypeDType* const paramTypep
                    = VN_CAST(symp->nodep(), ParamTypeDType)) {
             // ParamTypeDType child may be wrapped in RequireDType or unwrapped
@@ -878,15 +880,36 @@ public:
                                    bool classOnly, const string& forWhat) {
         if (nodep->classOrPackageSkipp()) return getNodeSym(nodep->classOrPackageSkipp());
         VSymEnt* foundp;
+        VSymEnt* searchSymp = lookSymp;
+        if (searchSymp && VN_IS(searchSymp->nodep(), ParamTypeDType)) {
+            AstNode* childp = VN_AS(searchSymp->nodep(), ParamTypeDType)->childDTypep();
+            if (const AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) childp = reqp->lhsp();
+            while (const AstRefDType* const refp = VN_CAST(childp, RefDType)) {
+                if (refp->typedefp()) {
+                    childp = refp->typedefp()->subDTypep();
+                } else if (refp->subDTypep()) {
+                    childp = refp->subDTypep();
+                } else {
+                    break;
+                }
+            }
+            if (const AstClassRefDType* const classrefp = VN_CAST(childp, ClassRefDType)) {
+                if (AstClass* const classp = classrefp->classp()) searchSymp = getNodeSym(classp);
+            } else if (AstClass* const classp = VN_CAST(childp, Class)) {
+                searchSymp = getNodeSym(classp);
+            } else if (AstPackage* const pkgp = VN_CAST(childp, Package)) {
+                searchSymp = getNodeSym(pkgp);
+            }
+        }
         if (fallback) {
-            VSymEnt* currentLookSymp = lookSymp;
+            VSymEnt* currentLookSymp = searchSymp;
             do {
                 foundp = currentLookSymp->findIdFlat(nodep->name());
                 if (foundp && !checkIfClassOrPackage(foundp)) foundp = nullptr;
                 if (!foundp) currentLookSymp = currentLookSymp->fallbackp();
             } while (!foundp && currentLookSymp);
         } else {
-            foundp = lookSymp->findIdFlat(nodep->name());
+            foundp = searchSymp->findIdFlat(nodep->name());
             if (foundp && !checkIfClassOrPackage(foundp)) foundp = nullptr;
         }
         if (!foundp && v3Global.rootp()->stdPackagep()) {  // Look under implied std::
