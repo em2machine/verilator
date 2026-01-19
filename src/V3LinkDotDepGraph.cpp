@@ -113,9 +113,10 @@ void V3LinkDotDepGraph::resetAll() {
 }
 
 void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
-                                                 const string& typedefName,
-                                                 AstNodeModule* contextModp) {
-    if (!nodep || !cellp) return;
+                                                const string& typedefName,
+                                                AstNodeModule* contextModp,
+                                                const string& assocCellName) {
+    if (!cellp || !cellp->modp()) return;
     // Use contextModp if provided, otherwise find owner from node
     AstNodeModule* const ownerModp = contextModp ? contextModp : findOwnerModule(nodep);
     if (!ownerModp) return;
@@ -131,7 +132,8 @@ void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
     // Store as "cellName:typedefName"
     // The typedefName is passed from the caller who knows the actual typedef being referenced
     CellAssocKey key{ownerModp->name(), paramTypeName};
-    s_cellAssociations[key] = cellp->name() + ":" + typedefName;
+    string newAssoc = (assocCellName.empty() ? cellp->name() : assocCellName) + ":" + typedefName;
+    s_cellAssociations[key] = newAssoc;
     UINFO(5, "DEPGRAPH: registered cell association for " << ownerModp->name()
               << "::" << paramTypeName << " -> cell '" << cellp->name()
               << "' typedef '" << typedefName << "'" << endl);
@@ -453,6 +455,7 @@ private:
                                 }
                             }
                             if (ifaceRefp) {
+                                if (varp->name() != cellName) continue;
                                 UINFO(9, "DEPGRAPH: checking iface port '" << varp->name()
                                           << "' cellp=" << ifaceRefp->cellp()
                                           << " ifacep=" << ifaceRefp->ifacep() << endl);

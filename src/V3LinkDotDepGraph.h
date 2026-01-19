@@ -106,7 +106,8 @@ public:
     // contextModp is the module where the typedef reference is made (may differ from PARAMTYPEDTYPE owner)
     static void registerCellAssociation(AstNode* nodep, AstCell* cellp,
                                         const string& typedefName,
-                                        AstNodeModule* contextModp = nullptr);
+                                        AstNodeModule* contextModp = nullptr,
+                                        const string& assocCellName = "");
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }

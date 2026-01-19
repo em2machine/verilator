@@ -4046,10 +4046,15 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             // Find the enclosing PARAMTYPEDTYPE or typedef that will use this
                             for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
                                 if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
+                                    const string assocCellName
+                                        = (!m_ds.m_dotText.empty()
+                                           && m_ds.m_dotText.find('.') == string::npos)
+                                              ? m_ds.m_dotText
+                                              : cellp->name();
                                     // Pass the typedef name from the reference (defp->name())
                                     // Also pass the current module (m_modp) as the context module
                                     V3LinkDotDepGraph::registerCellAssociation(
-                                        ptdp, cellp, defp->name(), m_modp);
+                                        ptdp, cellp, defp->name(), m_modp, assocCellName);
                                     break;
                                 }
                                 if (VN_IS(backp, NodeModule)) break;
