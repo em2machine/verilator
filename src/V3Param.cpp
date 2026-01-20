@@ -377,6 +377,42 @@ class ParamProcessor final {
                 key += ",";
             }
             key += "}";
+        } else if (const AstClassRefDType* const classRefp = VN_CAST(nodep, ClassRefDType)) {
+            // For parameterized class types, use the original class name (without specialization
+            // suffix) plus the actual type parameter values. This ensures equivalent class types
+            // get the same string representation regardless of which AST node is used.
+            if (classRefp->classp()) {
+                const string& className = classRefp->classp()->name();
+                const string& origName = classRefp->classp()->origName();
+                const bool isSpecialized = (className != origName);
+                UINFO(9, "paramValueString ClassRefDType: name=" << className
+                         << " origName=" << origName << " isSpecialized=" << isSpecialized
+                         << " hasParams=" << (classRefp->paramsp() ? "Y" : "N")
+                         << " classHasGParam=" << classRefp->classp()->hasGParam() << endl);
+
+                if (classRefp->paramsp()) {
+                    // Has explicit type parameters - use origName + params
+                    key = origName;
+                    key += "#(";
+                    for (AstPin* pinp = classRefp->paramsp(); pinp;
+                         pinp = VN_AS(pinp->nextp(), Pin)) {
+                        if (pinp != classRefp->paramsp()) key += ",";
+                        if (pinp->exprp()) {
+                            key += paramValueString(pinp->exprp());
+                        }
+                    }
+                    key += ")";
+                } else if (isSpecialized) {
+                    // Already specialized class (e.g., c1__Tz1_TBz1) - use full name
+                    // This ensures different specializations are distinguished
+                    key = className;
+                } else {
+                    // Unspecialized class with no params - use origName
+                    key = origName;
+                }
+            } else {
+                key += classRefp->prettyDTypeName(true);
+            }
         } else if (const AstNodeDType* const dtypep = VN_CAST(nodep, NodeDType)) {
             key += dtypep->prettyDTypeName(true);
         }
@@ -385,13 +421,20 @@ class ParamProcessor final {
     }
 
     string paramValueNumber(AstNode* nodep) {
-        // TODO: This parameter value number lookup via a constructed key string is not
-        //       particularly robust for type parameters. We should really have a type
-        //       equivalence predicate function.
+        // For type parameters (NodeDType), use only the string representation for hashing.
+        // Using V3Hasher::uncachedHash includes AST node pointer which differs for equivalent
+        // types represented by different AST nodes (e.g., parameterized class specializations).
+        // For value parameters, we can still use the AST hash for better collision resistance.
         if (AstRefDType* const refp = VN_CAST(nodep, RefDType)) nodep = refp->skipRefToNonRefp();
         const string paramStr = paramValueString(nodep);
-        // cppcheck-suppress unreadVariable
-        V3Hash hash = V3Hasher::uncachedHash(nodep) + paramStr;
+        V3Hash hash;
+        if (VN_IS(nodep, NodeDType)) {
+            // Type parameter: use only string-based hash for type equivalence
+            hash = V3Hash{paramStr};
+        } else {
+            // Value parameter: use AST hash + string for better collision resistance
+            hash = V3Hasher::uncachedHash(nodep) + paramStr;
+        }
         // Force hash collisions -- for testing only
         // cppcheck-suppress unreadVariable
         if (VL_UNLIKELY(v3Global.opt.debugCollision())) hash = V3Hash{paramStr};
@@ -873,6 +916,12 @@ class ParamProcessor final {
                     if (modptp->childDTypep()) modptp->childDTypep()->unlinkFrBack()->deleteTree();
                     // Set this parameter to value requested by cell
                     modptp->childDTypep(dtypep->cloneTree(false));
+                    // Capture type parameter binding for DepGraph resolution
+                    if (V3LinkDotDepGraph::preserveCapturedExprs()) {
+                        UINFO(5, "DEPGRAPH: capture type param binding for '" << modptp->name()
+                                  << "' in " << (newModp ? newModp->name() : "<null>") << endl);
+                        V3LinkDotDepGraph::captureParamTypeDType(modptp, dtypep, newModp);
+                    }
                     // Later V3LinkDot will convert the ParamDType to a Typedef
                     // Not done here as may be localparams, etc, that also need conversion
                 }

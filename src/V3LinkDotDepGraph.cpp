@@ -287,6 +287,25 @@ void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNode* exprp,
               << "' in " << ownerModp->name() << endl);
 }
 
+void V3LinkDotDepGraph::captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
+                                               AstNodeModule* ownerModp) {
+    // Capture type parameter binding for specialized classes.
+    // This ensures that when a class like my_pool#(T) is specialized with a concrete type,
+    // the DepGraph has the binding information needed to resolve T inside the specialized class.
+    if (!ptdp || !dtypep || !ownerModp) return;
+
+    DepNode* const depNodep = findOrCreateNode(ptdp, NodeType::PARAMTYPEDTYPE, ownerModp);
+    if (!depNodep) return;
+
+    // Store the bound dtype as the origExprp (reusing this field for type params)
+    if (!depNodep->origExprp) {
+        depNodep->origExprp = dtypep->cloneTree(false);
+        UINFO(5, "DEPGRAPH: captured type param binding for '" << ptdp->name()
+                  << "' = " << dtypep->prettyDTypeName(true)
+                  << " in " << ownerModp->name() << endl);
+    }
+}
+
 void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
     if (!from || !to || from == to) return;
     from->dependsOn.insert(to);
@@ -1410,6 +1429,17 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                               << "' in " << nodeOwnerName(nodep) << endl);
                     break;
                 }
+            }
+        }
+
+        // If no dependency edge found, check for captured type binding from V3Param
+        if (!targetDTypep && nodep->origExprp) {
+            if (AstNodeDType* const boundDTypep = VN_CAST(nodep->origExprp, NodeDType)) {
+                targetDTypep = boundDTypep;
+                targetName = boundDTypep->prettyDTypeName(true);
+                UINFO(5, "DEPGRAPH: found captured type binding '" << targetName
+                          << "' for paramtype '" << ptdp->name()
+                          << "' in " << nodeOwnerName(nodep) << endl);
             }
         }
 

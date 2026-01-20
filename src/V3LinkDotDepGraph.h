@@ -126,6 +126,10 @@ public:
     static void captureParamExpr(AstVar* varp, AstNodeModule* ownerModp);
     static void captureParamExpr(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp);
 
+    // Capture type parameter binding for specialized classes
+    static void captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
+                                      AstNodeModule* ownerModp);
+
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
     static int iterationCount() { return s_iterationCount; }

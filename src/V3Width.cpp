@@ -1001,11 +1001,14 @@ class WidthVisitor final : public VNVisitor {
                                << std::hex << width << std::dec);
             }
             // Note width() not set on range; use elementsConst()
-            // EOM: Removed prelim() guard - want ASCRANGE to fire early to catch
-            // incorrect static resolution of parameter graph. If DepGraph is working
-            // correctly, we should not see spurious ASCRANGE warnings.
+            // EOM: Skip ASCRANGE during widthParamsEdit (m_paramsOnly) - parameters may not
+            // be fully resolved yet. The check will run again during the full V3Width pass
+            // after DepGraph resolution when parameters have their final values.
+            const bool inDeadModule = m_modep && m_modep->dead();
             if (nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
-                && !VN_IS(nodep->backp(), Cell)) {  // For cells we warn in V3Inst
+                && !VN_IS(nodep->backp(), Cell)  // For cells we warn in V3Inst
+                && !m_paramsOnly  // Skip during parameter evaluation
+                && !inDeadModule) {
                 nodep->v3warn(ASCRANGE, "Ascending bit range vector: left < right of bit range: ["
                                             << nodep->leftConst() << ":" << nodep->rightConst()
                                             << "]");
