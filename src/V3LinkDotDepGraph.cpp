@@ -363,11 +363,67 @@ private:
             V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         }
     }
+    void visit(AstVarXRef* nodep) override {
+        // Hierarchical reference like io.types.ABits
+        if (AstVar* const varp = nodep->varp()) {
+            AstVar* targetVarp = varp;
+            AstNodeModule* targetModp = V3LinkDotDepGraph::findOwnerModule(varp);
+            if (m_depNode && m_depNode->ownerModp && !nodep->dotted().empty()) {
+                const string dotted = nodep->dotted();
+                const size_t firstDot = dotted.find('.');
+                const string cellName = firstDot == string::npos
+                                            ? dotted
+                                            : dotted.substr(0, firstDot);
+                const string rest = firstDot == string::npos ? "" : dotted.substr(firstDot + 1);
+                if (!cellName.empty()) {
+                    if (AstNodeModule* ifaceModp
+                        = findConnectedIfaceModpFromPort(m_depNode->ownerModp, cellName)) {
+                        AstNodeModule* searchModp = ifaceModp;
+                        if (!rest.empty()) {
+                            const size_t nextDot = rest.find('.');
+                            const string innerCell = nextDot == string::npos
+                                                         ? rest
+                                                         : rest.substr(0, nextDot);
+                            for (AstNode* stmtp = ifaceModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                                    if (cellp->name() == innerCell && cellp->modp()) {
+                                        searchModp = cellp->modp();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        for (AstNode* stmtp = searchModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstVar* const candp = VN_CAST(stmtp, Var)) {
+                                if (candp->name() == nodep->name()) {
+                                    targetVarp = candp;
+                                    targetModp = searchModp;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(targetVarp);
+            V3LinkDotDepGraph::DepNode* const targetp
+                = V3LinkDotDepGraph::findOrCreateNode(targetVarp, type, targetModp);
+            V3LinkDotDepGraph::addEdge(m_depNode, targetp);
+            UINFO(5, "DEPGRAPH: xref '" << nodep->name() << "' dotted='" << nodep->dotted()
+                      << "' -> " << V3LinkDotDepGraph::nodeName(targetp) << "@"
+                      << (targetModp ? targetModp->name() : "<null>") << endl);
+        }
+    }
     void visit(AstRefDType* nodep) override {
         AstNodeModule* const ownerp = V3LinkDotDepGraph::findOwnerModule(nodep);
         V3LinkDotDepGraph::DepNode* const targetp
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
-        V3LinkDotDepGraph::addEdge(m_depNode, targetp);
+        // Skip edge if parent is PARAMTYPE with same name in same module (would create cycle)
+        const bool isSelfRef = (m_depNode
+                                && m_depNode->nodeType == V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE
+                                && m_depNode->ownerModp == ownerp
+                                && V3LinkDotDepGraph::nodeName(m_depNode) == nodep->name());
+        if (!isSelfRef) V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             V3LinkDotDepGraph::DepNode* const tdNodep
@@ -395,11 +451,16 @@ private:
             V3LinkDotDepGraph::DepNode* const ptNodep
                 = V3LinkDotDepGraph::findOrCreateNode(
                     targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
-            V3LinkDotDepGraph::addEdge(targetp, ptNodep);
-            UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
-                      << targetPtdp->name() << "' in "
-                      << (ptOwnerp ? ptOwnerp->name() : "<null>")
-                      << (targetPtdp != ptdp ? " (retargeted)" : "") << endl);
+            // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
+            const bool isSelfRef = (ptOwnerp == V3LinkDotDepGraph::findOwnerModule(nodep)
+                                    && targetPtdp->name() == nodep->name());
+            if (!isSelfRef) {
+                V3LinkDotDepGraph::addEdge(targetp, ptNodep);
+                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
+                          << targetPtdp->name() << "' in "
+                          << (ptOwnerp ? ptOwnerp->name() : "<null>")
+                          << (targetPtdp != ptdp ? " (retargeted)" : "") << endl);
+            }
         }
         iterateChildrenConst(nodep);
     }
@@ -493,10 +554,50 @@ private:
                     }
                     AstNode* const clonedExprp = candp->origExprp->cloneTree(false);
                     int relinkedRefs = 0;
+                    const auto resolveXRef = [&](AstVarXRef* xrefp) -> AstVar* {
+                        if (!xrefp || !m_modp || xrefp->dotted().empty()) return nullptr;
+                        const string dotted = xrefp->dotted();
+                        const size_t firstDot = dotted.find('.');
+                        const string cellName = firstDot == string::npos
+                                                    ? dotted
+                                                    : dotted.substr(0, firstDot);
+                        const string rest = firstDot == string::npos ? "" : dotted.substr(firstDot + 1);
+                        if (cellName.empty()) return nullptr;
+                        AstNodeModule* ifaceModp
+                            = findConnectedIfaceModpFromPort(m_modp, cellName);
+                        if (!ifaceModp) return nullptr;
+                        AstNodeModule* searchModp = ifaceModp;
+                        if (!rest.empty()) {
+                            const size_t nextDot = rest.find('.');
+                            const string innerCell = nextDot == string::npos
+                                                         ? rest
+                                                         : rest.substr(0, nextDot);
+                            for (AstNode* stmtp = ifaceModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                                    if (cellp->name() == innerCell && cellp->modp()) {
+                                        searchModp = cellp->modp();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        for (AstNode* stmtp = searchModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstVar* const candp = VN_CAST(stmtp, Var)) {
+                                if (candp->name() == xrefp->name()) return candp;
+                            }
+                        }
+                        return nullptr;
+                    };
                     clonedExprp->foreach([&](AstVarRef* refp) {
                         const auto it = m_varsByName.find(refp->varp()->name());
                         if (it != m_varsByName.end()) refp->varp(it->second);
                         if (it != m_varsByName.end()) ++relinkedRefs;
+                    });
+                    clonedExprp->foreach([&](AstVarXRef* xrefp) {
+                        if (AstVar* const resolvedp = resolveXRef(xrefp)) {
+                            xrefp->varp(resolvedp);
+                            ++relinkedRefs;
+                        }
                     });
                     depNodep->origExprp = clonedExprp;
                     UINFO(5, "DEPGRAPH: inherited expr for param '" << nodep->name()
@@ -1150,16 +1251,13 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             }
 
             // The childDTypep (RequireDType) is normally removed after dtype resolution.
-            // Keep it when depgraph is enabled to avoid dangling RefDType nodes.
+            // The RefDType inside it was already retargeted above, so safe to delete.
             if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
-                if (s_enabled) {
-                    UINFO(5, "DEPGRAPH: keeping paramtype childDTypep for '" << ptdp->name()
-                              << "' in " << nodeOwnerName(nodep) << endl);
-                } else {
-                    childp->unlinkFrBack();
-                    ptdp->childDTypep(nullptr);
-                    VL_DO_DANGLING(childp->deleteTree(), childp);
-                }
+                UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
+                          << "' in " << nodeOwnerName(nodep) << endl);
+                childp->unlinkFrBack();
+                ptdp->childDTypep(nullptr);
+                VL_DO_DANGLING(childp->deleteTree(), childp);
             }
         } else {
             UINFO(9, "DEPGRAPH: no resolved dependency for paramtype '" << ptdp->name()
@@ -1184,9 +1282,39 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                                     targetTdp = cloneTdp;
                                 }
                             } else {
-                                UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
-                                          << "' typedef target is template '" << tdOwnerp->name()
-                                          << "' with no clone" << endl);
+                                // clonep() failed, search graph for specialized typedef
+                                for (const auto& entry : s_nodes) {
+                                    DepNode* const searchNodep = entry.second;
+                                    if (searchNodep->nodeType == NodeType::TYPEDEF
+                                        && searchNodep != depNodep) {
+                                        if (AstTypedef* const searchTdp
+                                            = VN_CAST(searchNodep->nodep, Typedef)) {
+                                            if (searchTdp->name() == tdp->name()) {
+                                                AstNodeModule* const searchOwnerp
+                                                    = findOwnerModule(searchTdp);
+                                                if (searchOwnerp
+                                                    && searchOwnerp->name().find(
+                                                           tdOwnerp->name() + "__")
+                                                           != string::npos) {
+                                                    UINFO(5, "DEPGRAPH: refdtype '"
+                                                              << rdp->name()
+                                                              << "' typedef target is template '"
+                                                              << tdOwnerp->name()
+                                                              << "', found specialized clone in '"
+                                                              << searchOwnerp->name() << "'"
+                                                              << endl);
+                                                    targetTdp = searchTdp;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (targetTdp == tdp) {
+                                    UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                              << "' typedef target is template '"
+                                              << tdOwnerp->name() << "' with no clone" << endl);
+                                }
                             }
                         }
                     }
