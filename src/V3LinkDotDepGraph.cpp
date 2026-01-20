@@ -1341,6 +1341,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                     if (needsUpdate) {
                         rdp->refDTypep(nullptr);
                         rdp->typedefp(targetTdp);
+                        rdp->dtypep(nullptr);  // Clear stale dtypep to avoid broken link
                         rdp->didWidth(false);
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
                                   << "' typedefp to '" << targetTdp->name() << "' in "
@@ -1354,6 +1355,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                     if (needsUpdate) {
                         rdp->typedefp(nullptr);
                         rdp->refDTypep(ptdp);
+                        rdp->dtypep(nullptr);  // Clear stale dtypep to avoid broken link
                         rdp->didWidth(false);
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
                                   << "' refDTypep to '" << ptdp->name() << "' in "
