@@ -161,6 +161,7 @@ static void process() {
         // This must happen before the primary pass to prevent IfaceCapture from running at all
         if (debug() >= 5) {
             V3LinkDotIfaceCapture::enable(false);
+            V3LinkDotDepGraph::preserveCapturedExprs(true);
         }
 
         // Cross-link dotted hierarchical references
@@ -196,6 +197,7 @@ static void process() {
             V3LinkDotDepGraph::enable(true);
             V3LinkDotDepGraph::build(v3Global.rootp());
             V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());
+            V3LinkDotDepGraph::dumpGraphDepsTree();
             V3LinkDotDepGraph::dumpGraph();
             // Run resolution to determine correct ordering
             const int iters = V3LinkDotDepGraph::resolve();
@@ -203,6 +205,7 @@ static void process() {
             // Apply: update RefDType pointers
             V3LinkDotDepGraph::apply();
             V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());  // Dump again to see updated widths
+            V3LinkDotDepGraph::dumpGraphDepsTree();
             V3LinkDotDepGraph::enable(false);
         }
 

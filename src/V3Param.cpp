@@ -53,6 +53,7 @@
 #include "V3Const.h"
 #include "V3EmitV.h"
 #include "V3Hasher.h"
+#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3MemberMap.h"
 #include "V3Os.h"
@@ -850,6 +851,11 @@ class ParamProcessor final {
         for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
             if (pinp->exprp()) {
                 if (AstVar* const modvarp = pinp->modVarp()) {
+                    if (V3LinkDotDepGraph::preserveCapturedExprs()) {
+                        UINFO(5, "DEPGRAPH: capture override expr for '" << modvarp->name()
+                                  << "' in " << (newModp ? newModp->name() : "<null>") << endl);
+                        V3LinkDotDepGraph::captureParamExpr(modvarp, pinp->exprp(), newModp);
+                    }
                     AstNode* const newp = pinp->exprp();  // Const or InitArray
                     AstConst* const exprp = VN_CAST(newp, Const);
                     AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
@@ -2210,19 +2216,18 @@ public:
         : m_state{state}
         , m_processor{netlistp} {
 
-        // Capture interface/class localparam expressions after widthing
-        // but before constification. Width resolves MEMBERSELs through dtype.
-        for (AstNodeModule* modp = netlistp->modulesp(); modp;
-            modp = VN_AS(modp->nextp(), NodeModule)) {
-            if (V3LinkDotIfaceCapture::enabled() && (VN_IS(modp, Iface) || VN_IS(modp, Class))) {
+        // Capture localparam expressions after widthing but before constification
+        // for dependency graph resolution. Width resolves MEMBERSELs through dtype.
+        if (V3LinkDotDepGraph::preserveCapturedExprs()) {
+            for (AstNodeModule* modp = netlistp->modulesp(); modp;
+                modp = VN_AS(modp->nextp(), NodeModule)) {
                 for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                     if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                        if (varp->varType() == VVarType::LPARAM && varp->valuep()
-                            && !VN_IS(varp->valuep(), Const)) {
-                            // Width to resolve MEMBERSELs
-                            V3Width::widthParamsEdit(varp);
-                            // Capture the widthed expression before constification
-                            V3LinkDotIfaceCapture::addLocalparam(varp, varp->valuep(), modp);
+                        if ((varp->isGParam() || varp->varType() == VVarType::LPARAM)
+                            && varp->valuep() && !VN_IS(varp->valuep(), Const)) {
+                            UINFO(5, "DEPGRAPH: capture default expr for '" << varp->name()
+                                      << "' in " << (modp ? modp->name() : "<null>") << endl);
+                            V3LinkDotDepGraph::captureParamExpr(varp, varp->valuep(), modp);
                         }
                     }
                 }

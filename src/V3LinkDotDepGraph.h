@@ -48,6 +48,7 @@ public:
         AstNodeModule* ownerModp = nullptr;  // Specialized module/interface owning this
         AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
         std::string cellName;                // Cell name for typedef lookup (survives cloning)
+        AstNode* origExprp = nullptr;         // Original expression (pre-constify) for params
 
         std::set<DepNode*> dependsOn;        // Nodes this depends on
         std::set<DepNode*> dependents;       // Nodes that depend on this
@@ -64,6 +65,7 @@ private:
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
     static bool s_enabled;                   // Is the graph active?
+    static bool s_preserveCapturedExprs;     // Preserve captured param exprs across reset
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
 
     // Forward declare visitor classes as friends
@@ -82,9 +84,16 @@ public:
     // Enable/disable the graph
     static void enable(bool flag) {
         s_enabled = flag;
-        if (!flag) reset();
+        if (!flag) {
+            s_preserveCapturedExprs = false;
+            reset();
+        }
     }
     static bool enabled() { return s_enabled; }
+
+    // Preserve captured param/localparam expressions across reset/build
+    static void preserveCapturedExprs(bool flag) { s_preserveCapturedExprs = flag; }
+    static bool preserveCapturedExprs() { return s_preserveCapturedExprs; }
 
     // Reset/clear the graph (keeps cell associations)
     static void reset();
@@ -113,6 +122,10 @@ public:
     static void registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
                                         AstNodeModule* contextModp = nullptr);
 
+    // Capture original param/localparam expression before constification
+    static void captureParamExpr(AstVar* varp, AstNodeModule* ownerModp);
+    static void captureParamExpr(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp);
+
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
     static int iterationCount() { return s_iterationCount; }
@@ -125,7 +138,8 @@ public:
 
     // Debugging - print the entire graph
     static void dumpGraph();
-    static void dumpGraphTree(AstNetlist* netlistp);  // Hierarchical tree view
+    static void dumpGraphDepsTree();  // Dependency edge tree view
+    static void dumpGraphTree(AstNetlist* netlistp);  // Hierarchy tree view
     static void dumpNode(const DepNode* nodep);
     static string nodeName(const DepNode* nodep);
     static string nodeOwnerName(const DepNode* nodep);

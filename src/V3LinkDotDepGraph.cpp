@@ -17,6 +17,7 @@
 #include "V3LinkDotDepGraph.h"
 
 #include "V3Ast.h"
+#include "V3Const.h"
 #include "V3Global.h"
 #include "V3Width.h"
 
@@ -33,6 +34,7 @@ V3LinkDotDepGraph::NodeMap V3LinkDotDepGraph::s_nodes;
 std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes;
 int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
+bool V3LinkDotDepGraph::s_preserveCapturedExprs = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 
 // Map from (module name, paramtype name) to cell name (captured during linkdot primary)
@@ -140,9 +142,36 @@ void V3LinkDotDepGraph::reset() {
                   << s_cellAssociations.size() << " cell associations, "
                   << s_refDTypeDotPathRegistry.size() << " refdtype dotpath registrations)"
                   << endl);
-    for (DepNode* nodep : s_allNodes) delete nodep;
-    s_allNodes.clear();
-    s_nodes.clear();
+    if (!s_preserveCapturedExprs) {
+        for (DepNode* nodep : s_allNodes) {
+            if (nodep && nodep->origExprp) {
+                nodep->origExprp->deleteTree();
+                nodep->origExprp = nullptr;
+            }
+            delete nodep;
+        }
+        s_allNodes.clear();
+        s_nodes.clear();
+    } else {
+        std::vector<DepNode*> preserved;
+        NodeMap preservedMap;
+        preserved.reserve(s_allNodes.size());
+        for (DepNode* nodep : s_allNodes) {
+            if (nodep && nodep->origExprp
+                && (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM)) {
+                preserved.push_back(nodep);
+                preservedMap[nodep->nodep] = nodep;
+            } else {
+                if (nodep && nodep->origExprp) {
+                    nodep->origExprp->deleteTree();
+                    nodep->origExprp = nullptr;
+                }
+                delete nodep;
+            }
+        }
+        s_allNodes.swap(preserved);
+        s_nodes.swap(preservedMap);
+    }
     // Note: Do NOT clear s_cellAssociations here - they are captured during linkdot primary
     // and need to persist until graph building which happens later
     // Note: Do NOT clear s_refDTypeDotPathRegistry here - populated during linkdot primary
@@ -234,6 +263,30 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     return depNodep;
 }
 
+void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNodeModule* ownerModp) {
+    if (!varp || !ownerModp) return;
+    if (!varp->isGParam() && !varp->isParam()) return;
+    if (!varp->valuep()) return;
+
+    DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
+    if (!depNodep || depNodep->origExprp) return;
+    depNodep->origExprp = varp->valuep()->cloneTree(false);
+    UINFO(5, "DEPGRAPH: captured default expr for param '" << varp->name()
+              << "' in " << ownerModp->name() << endl);
+}
+
+void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNode* exprp,
+                                         AstNodeModule* ownerModp) {
+    if (!varp || !exprp || !ownerModp) return;
+    if (!varp->isGParam() && !varp->isParam()) return;
+
+    DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
+    if (!depNodep || depNodep->origExprp) return;
+    depNodep->origExprp = exprp->cloneTree(false);
+    UINFO(5, "DEPGRAPH: captured override expr for param '" << varp->name()
+              << "' in " << ownerModp->name() << endl);
+}
+
 void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
     if (!from || !to || from == to) return;
     from->dependsOn.insert(to);
@@ -310,6 +363,46 @@ private:
             V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         }
     }
+    void visit(AstRefDType* nodep) override {
+        AstNodeModule* const ownerp = V3LinkDotDepGraph::findOwnerModule(nodep);
+        V3LinkDotDepGraph::DepNode* const targetp
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
+        V3LinkDotDepGraph::addEdge(m_depNode, targetp);
+        if (AstTypedef* const tdp = nodep->typedefp()) {
+            AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+            V3LinkDotDepGraph::DepNode* const tdNodep
+                = V3LinkDotDepGraph::findOrCreateNode(
+                    tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+            V3LinkDotDepGraph::addEdge(targetp, tdNodep);
+            UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> typedef '"
+                      << tdp->name() << "' in "
+                      << (tdOwnerp ? tdOwnerp->name() : "<null>") << endl);
+        } else if (AstParamTypeDType* const ptdp = VN_CAST(nodep->refDTypep(), ParamTypeDType)) {
+            AstParamTypeDType* targetPtdp = ptdp;
+            AstNodeModule* ptOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+            if (ptOwnerp && m_depNode && m_depNode->ownerModp
+                && ptOwnerp->hasGParam() && ptOwnerp->name().find("__") == string::npos) {
+                for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstParamTypeDType* const cellPtdp = VN_CAST(stmtp, ParamTypeDType)) {
+                        if (cellPtdp->name() == ptdp->name()) {
+                            targetPtdp = cellPtdp;
+                            ptOwnerp = m_depNode->ownerModp;
+                            break;
+                        }
+                    }
+                }
+            }
+            V3LinkDotDepGraph::DepNode* const ptNodep
+                = V3LinkDotDepGraph::findOrCreateNode(
+                    targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
+            V3LinkDotDepGraph::addEdge(targetp, ptNodep);
+            UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
+                      << targetPtdp->name() << "' in "
+                      << (ptOwnerp ? ptOwnerp->name() : "<null>")
+                      << (targetPtdp != ptdp ? " (retargeted)" : "") << endl);
+        }
+        iterateChildrenConst(nodep);
+    }
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
 public:
@@ -329,6 +422,15 @@ void V3LinkDotDepGraph::collectExpressionDeps(AstNode* exprp, DepNode* depNode,
 class DepGraphBuildVisitor final : public VNVisitorConst {
 private:
     AstNodeModule* m_modp = nullptr;  // Current module/interface
+    std::unordered_map<string, AstVar*> m_varsByName;  // Vars in current module
+
+    void rebuildVarMap() {
+        m_varsByName.clear();
+        if (!m_modp) return;
+        for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstVar* const varp = VN_CAST(stmtp, Var)) m_varsByName[varp->name()] = varp;
+        }
+    }
 
     void visit(AstNodeModule* nodep) override {
         // Skip dead modules and template modules (unspecialized parameterized modules)
@@ -341,6 +443,7 @@ private:
 
         VL_RESTORER(m_modp);
         m_modp = nodep;
+        rebuildVarMap();
         UINFO(9, "DEPGRAPH: visiting module " << nodep->name() << endl);
         iterateChildrenConst(nodep);
     }
@@ -354,9 +457,74 @@ private:
         V3LinkDotDepGraph::DepNode* const depNodep
             = V3LinkDotDepGraph::findOrCreateNode(nodep, type, m_modp);
 
-        // Collect dependencies from the value expression
-        if (AstNode* const valuep = nodep->valuep()) {
-            V3LinkDotDepGraph::collectExpressionDeps(valuep, depNodep, m_modp);
+        // If this is a specialized clone, inherit captured expression from original
+        if (!depNodep->origExprp) {
+            if (AstVar* const origVarp = nodep->clonep()) {
+                if (const V3LinkDotDepGraph::DepNode* const origNodep
+                    = V3LinkDotDepGraph::find(origVarp)) {
+                    if (origNodep->origExprp) {
+                        AstNode* const clonedExprp = origNodep->origExprp->cloneTree(false);
+                        int relinkedRefs = 0;
+                        clonedExprp->foreach([&](AstVarRef* refp) {
+                            const auto it = m_varsByName.find(refp->varp()->name());
+                            if (it != m_varsByName.end()) refp->varp(it->second);
+                            if (it != m_varsByName.end()) ++relinkedRefs;
+                        });
+                        depNodep->origExprp = clonedExprp;
+                        UINFO(5, "DEPGRAPH: inherited expr for param '" << nodep->name()
+                                  << "' in " << m_modp->name() << " from template "
+                                  << origNodep->ownerModp->name() << " (relinked "
+                                  << relinkedRefs << " refs)" << endl);
+                    }
+                }
+            }
+        }
+        if (!depNodep->origExprp && m_modp) {
+            string baseModName = m_modp->name();
+            const size_t suffixPos = baseModName.find("__");
+            if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
+            if (baseModName != m_modp->name()) {
+                for (const V3LinkDotDepGraph::DepNode* const candp : V3LinkDotDepGraph::s_allNodes) {
+                    if (!candp || !candp->origExprp) continue;
+                    if (candp->nodeType != depNodep->nodeType) continue;
+                    if (!candp->ownerModp || candp->ownerModp->name() != baseModName) continue;
+                    if (V3LinkDotDepGraph::nodeName(candp) != V3LinkDotDepGraph::nodeName(depNodep)) {
+                        continue;
+                    }
+                    AstNode* const clonedExprp = candp->origExprp->cloneTree(false);
+                    int relinkedRefs = 0;
+                    clonedExprp->foreach([&](AstVarRef* refp) {
+                        const auto it = m_varsByName.find(refp->varp()->name());
+                        if (it != m_varsByName.end()) refp->varp(it->second);
+                        if (it != m_varsByName.end()) ++relinkedRefs;
+                    });
+                    depNodep->origExprp = clonedExprp;
+                    UINFO(5, "DEPGRAPH: inherited expr for param '" << nodep->name()
+                              << "' in " << m_modp->name() << " from template "
+                              << baseModName << " (name match, relinked "
+                              << relinkedRefs << " refs)" << endl);
+                    break;
+                }
+            }
+        }
+
+        // Collect dependencies from the value expression (prefer captured pre-constify)
+        AstNode* exprp = depNodep->origExprp ? depNodep->origExprp : nodep->valuep();
+        if (exprp) {
+            V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp);
+            if (debug() >= 5) {
+                std::ostringstream deps;
+                bool first = true;
+                for (V3LinkDotDepGraph::DepNode* const dep : depNodep->dependsOn) {
+                    if (!dep) continue;
+                    if (!first) deps << ", ";
+                    first = false;
+                    deps << V3LinkDotDepGraph::nodeName(dep)
+                         << "@" << V3LinkDotDepGraph::nodeOwnerName(dep);
+                }
+                UINFO(5, "DEPGRAPH: deps for '" << nodep->name() << "'@" << m_modp->name()
+                          << " = [" << deps.str() << "]" << endl);
+            }
         }
     }
 
@@ -990,6 +1158,47 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             UINFO(9, "DEPGRAPH: no resolved dependency for paramtype '" << ptdp->name()
                       << "' in " << nodeOwnerName(nodep) << endl);
         }
+    } else if (nodep->nodeType == NodeType::REFDTYPE) {
+        AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType);
+        if (!rdp) return;
+        for (DepNode* const depNodep : nodep->dependsOn) {
+            if (depNodep->nodeType == NodeType::TYPEDEF) {
+                if (AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef)) {
+                    if (rdp->typedefp() != tdp) {
+                        rdp->typedefp(tdp);
+                        rdp->didWidth(false);
+                        UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
+                                  << "' typedefp to '" << tdp->name() << "' in "
+                                  << nodeOwnerName(nodep) << endl);
+                    }
+                }
+                break;
+            } else if (depNodep->nodeType == NodeType::PARAMTYPEDTYPE) {
+                if (AstParamTypeDType* const ptdp = VN_CAST(depNodep->nodep, ParamTypeDType)) {
+                    if (rdp->refDTypep() != ptdp) {
+                        rdp->refDTypep(ptdp);
+                        rdp->didWidth(false);
+                        UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
+                                  << "' refDTypep to '" << ptdp->name() << "' in "
+                                  << nodeOwnerName(nodep) << endl);
+                    }
+                }
+                break;
+            }
+        }
+    } else if (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM) {
+        AstVar* const varp = VN_CAST(nodep->nodep, Var);
+        if (!varp) return;
+        if (nodep->origExprp) {
+            if (varp->valuep()) varp->valuep()->unlinkFrBack()->deleteTree();
+            varp->valuep(nodep->origExprp->cloneTree(false));
+        }
+        if (!varp->valuep()) return;
+
+        varp->didWidth(false);
+        if (AstNode* const valuep = varp->valuep()) valuep->didWidth(false);
+        V3Width::widthParamsEdit(varp);
+        V3Const::constifyParamsEdit(varp);
     }
     // GPARAM and LPARAM values are already computed by V3Param, no need to re-evaluate
 }
@@ -1056,6 +1265,30 @@ int V3LinkDotDepGraph::resolve() {
         UINFO(5, "DEPGRAPH: " << unresolvedCount << " unresolved nodes (possible cycles)" << endl);
     }
 
+    if (debug() >= 5) {
+        UINFO(1, "DEPGRAPH: ========== REFDTYPE RESOLUTION SUMMARY ==========" << endl);
+        for (DepNode* const nodep : s_allNodes) {
+            if (!nodep || nodep->nodeType != NodeType::REFDTYPE) continue;
+            if (!nodep->resolved) continue;
+            AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType);
+            if (!rdp) continue;
+            string target;
+            if (AstTypedef* const tdp = rdp->typedefp()) {
+                AstNodeModule* const tdOwnerp = findOwnerModule(tdp);
+                target = string{"typedef "} + tdp->name() + "@"
+                         + (tdOwnerp ? tdOwnerp->name() : "<null>");
+            } else if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
+                AstNodeModule* const ptOwnerp = findOwnerModule(ptdp);
+                target = string{"paramtype "} + ptdp->name() + "@"
+                         + (ptOwnerp ? ptOwnerp->name() : "<null>");
+            }
+            UINFO(1, "DEPGRAPH: RESOLVED REFDTYPE " << nodeName(nodep)
+                      << "@" << nodeOwnerName(nodep) << " -> "
+                      << (target.empty() ? "<unlinked>" : target) << endl);
+        }
+        UINFO(1, "DEPGRAPH: ========== END REFDTYPE SUMMARY ==========" << endl);
+    }
+
     return s_iterationCount;
 }
 
@@ -1068,36 +1301,34 @@ void V3LinkDotDepGraph::apply() {
 
     int updatedCount = 0;
 
-    for (DepNode* nodep : s_allNodes) {
-        if (!nodep->resolved) continue;
+    for (DepNode* const nodep : s_allNodes) {
+        if (!nodep || nodep->resolved) continue;
+        if (nodep->nodeType != NodeType::REFDTYPE) continue;
+        if (nodep->dependsOn.empty()) continue;
+        AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType);
+        if (!rdp) continue;
 
-        // Update RefDType pointers to point to correct specialized typedefs
-        if (nodep->nodeType == NodeType::REFDTYPE) {
-            AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType);
-            if (!rdp) continue;
-
-            // Find the correct typedef or paramtype from the dependencies
-            for (DepNode* depp : nodep->dependsOn) {
-                if (depp->nodeType == NodeType::TYPEDEF) {
-                    AstTypedef* const tdp = VN_CAST(depp->nodep, Typedef);
-                    if (tdp && rdp->typedefp() != tdp) {
-                        UINFO(9, "DEPGRAPH: updating RefDType '" << rdp->name()
-                                  << "' typedefp from '"
-                                  << (rdp->typedefp() ? rdp->typedefp()->name() : "<null>")
-                                  << "' to '" << tdp->name() << "'" << endl);
-                        rdp->typedefp(tdp);
-                        ++updatedCount;
-                    }
-                } else if (depp->nodeType == NodeType::PARAMTYPEDTYPE) {
-                    AstParamTypeDType* const ptdp = VN_CAST(depp->nodep, ParamTypeDType);
-                    if (ptdp && rdp->refDTypep() != ptdp) {
-                        UINFO(9, "DEPGRAPH: updating RefDType '" << rdp->name()
-                                  << "' refDTypep from '"
-                                  << (rdp->refDTypep() ? rdp->refDTypep()->name() : "<null>")
-                                  << "' to '" << ptdp->name() << "'" << endl);
-                        rdp->refDTypep(ptdp);
-                        ++updatedCount;
-                    }
+        // Find the correct typedef or paramtype from the dependencies
+        for (DepNode* depp : nodep->dependsOn) {
+            if (depp->nodeType == NodeType::TYPEDEF) {
+                AstTypedef* const tdp = VN_CAST(depp->nodep, Typedef);
+                if (tdp && rdp->typedefp() != tdp) {
+                    UINFO(9, "DEPGRAPH: updating RefDType '" << rdp->name()
+                              << "' typedefp from '"
+                              << (rdp->typedefp() ? rdp->typedefp()->name() : "<null>")
+                              << "' to '" << tdp->name() << "'" << endl);
+                    rdp->typedefp(tdp);
+                    ++updatedCount;
+                }
+            } else if (depp->nodeType == NodeType::PARAMTYPEDTYPE) {
+                AstParamTypeDType* const ptdp = VN_CAST(depp->nodep, ParamTypeDType);
+                if (ptdp && rdp->refDTypep() != ptdp) {
+                    UINFO(9, "DEPGRAPH: updating RefDType '" << rdp->name()
+                              << "' refDTypep from '"
+                              << (rdp->refDTypep() ? rdp->refDTypep()->name() : "<null>")
+                              << "' to '" << ptdp->name() << "'" << endl);
+                    rdp->refDTypep(ptdp);
+                    ++updatedCount;
                 }
             }
         }
@@ -1388,8 +1619,55 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
     }
 }
 
+void V3LinkDotDepGraph::dumpGraphDepsTree() {
+    UINFO(1, "DEPGRAPH: ========== DEPENDENCY EDGE TREE ==========" << endl);
+    UINFO(1, "DEPGRAPH: Total nodes: " << s_allNodes.size()
+              << "  Iterations: " << s_iterationCount << endl);
+
+    auto nodeLabel = [](const DepNode* nodep) {
+        std::ostringstream label;
+        label << nodeTypeName(nodep->nodeType) << " " << nodeName(nodep)
+              << "@" << nodeOwnerName(nodep);
+        if (nodep->resolved) label << " [R]";
+        return label.str();
+    };
+
+    std::map<string, std::vector<const DepNode*>> byOwner;
+    for (const DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        byOwner[nodeOwnerName(nodep)].push_back(nodep);
+    }
+
+    for (const auto& kv : byOwner) {
+        UINFO(1, "DEPGRAPH: " << kv.first << endl);
+        const auto& nodes = kv.second;
+        for (size_t i = 0; i < nodes.size(); ++i) {
+            const DepNode* const nodep = nodes[i];
+            if (!nodep) continue;
+            const bool isLastNode = (i + 1 == nodes.size());
+            const string nodeConnector = isLastNode ? "└── " : "├── ";
+            const string nodePrefix = isLastNode ? "    " : "│   ";
+            UINFO(1, "DEPGRAPH: " << nodeConnector << nodeLabel(nodep) << endl);
+            if (nodep->dependsOn.empty()) {
+                UINFO(1, "DEPGRAPH: " << nodePrefix << "(no deps)" << endl);
+                continue;
+            }
+            size_t depIdx = 0;
+            for (const DepNode* dep : nodep->dependsOn) {
+                if (!dep) continue;
+                const bool isLastDep = (++depIdx == nodep->dependsOn.size());
+                const string depConnector = isLastDep ? "└── " : "├── ";
+                UINFO(1, "DEPGRAPH: " << nodePrefix << depConnector
+                          << nodeLabel(dep) << endl);
+            }
+        }
+    }
+
+    UINFO(1, "DEPGRAPH: ========== END EDGE TREE ==========" << endl);
+}
+
 void V3LinkDotDepGraph::dumpGraphTree(AstNetlist* netlistp) {
-    UINFO(1, "DEPGRAPH: ========== DEPENDENCY TREE ==========" << endl);
+    UINFO(1, "DEPGRAPH: ========== HIERARCHY TREE ==========" << endl);
     UINFO(1, "DEPGRAPH: Total nodes: " << s_allNodes.size()
               << "  Iterations: " << s_iterationCount << endl);
 
