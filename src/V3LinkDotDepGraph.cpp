@@ -376,8 +376,18 @@ private:
                                             : dotted.substr(0, firstDot);
                 const string rest = firstDot == string::npos ? "" : dotted.substr(firstDot + 1);
                 if (!cellName.empty()) {
-                    if (AstNodeModule* ifaceModp
-                        = findConnectedIfaceModpFromPort(m_depNode->ownerModp, cellName)) {
+                    AstNodeModule* ifaceModp = findConnectedIfaceModpFromPort(m_depNode->ownerModp, cellName);
+                    if (!ifaceModp) {
+                        for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                                if (cellp->name() == cellName && cellp->modp()) {
+                                    ifaceModp = cellp->modp();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (ifaceModp) {
                         AstNodeModule* searchModp = ifaceModp;
                         if (!rest.empty()) {
                             const size_t nextDot = rest.find('.');
@@ -563,8 +573,17 @@ private:
                                                     : dotted.substr(0, firstDot);
                         const string rest = firstDot == string::npos ? "" : dotted.substr(firstDot + 1);
                         if (cellName.empty()) return nullptr;
-                        AstNodeModule* ifaceModp
-                            = findConnectedIfaceModpFromPort(m_modp, cellName);
+                        AstNodeModule* ifaceModp = findConnectedIfaceModpFromPort(m_modp, cellName);
+                        if (!ifaceModp) {
+                            for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                                    if (cellp->name() == cellName && cellp->modp()) {
+                                        ifaceModp = cellp->modp();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         if (!ifaceModp) return nullptr;
                         AstNodeModule* searchModp = ifaceModp;
                         if (!rest.empty()) {
@@ -1352,6 +1371,55 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             varp->valuep(nodep->origExprp->cloneTree(false));
         }
         if (!varp->valuep()) return;
+
+        if (ownerModp) {
+            const auto resolveXRef = [&](AstVarXRef* xrefp) -> AstVar* {
+                if (!xrefp || xrefp->dotted().empty()) return nullptr;
+                const string dotted = xrefp->dotted();
+                const size_t firstDot = dotted.find('.');
+                const string cellName = firstDot == string::npos
+                                            ? dotted
+                                            : dotted.substr(0, firstDot);
+                const string rest = firstDot == string::npos ? "" : dotted.substr(firstDot + 1);
+                if (cellName.empty()) return nullptr;
+                AstNodeModule* ifaceModp = findConnectedIfaceModpFromPort(ownerModp, cellName);
+                if (!ifaceModp) {
+                    for (AstNode* stmtp = ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                            if (cellp->name() == cellName && cellp->modp()) {
+                                ifaceModp = cellp->modp();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!ifaceModp) return nullptr;
+                AstNodeModule* searchModp = ifaceModp;
+                if (!rest.empty()) {
+                    const size_t nextDot = rest.find('.');
+                    const string innerCell = nextDot == string::npos
+                                                 ? rest
+                                                 : rest.substr(0, nextDot);
+                    for (AstNode* stmtp = ifaceModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                            if (cellp->name() == innerCell && cellp->modp()) {
+                                searchModp = cellp->modp();
+                                break;
+                            }
+                        }
+                    }
+                }
+                for (AstNode* stmtp = searchModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstVar* const candp = VN_CAST(stmtp, Var)) {
+                        if (candp->name() == xrefp->name()) return candp;
+                    }
+                }
+                return nullptr;
+            };
+            varp->valuep()->foreach([&](AstVarXRef* xrefp) {
+                if (AstVar* const resolvedp = resolveXRef(xrefp)) xrefp->varp(resolvedp);
+            });
+        }
 
         varp->didWidth(false);
         if (AstNode* const valuep = varp->valuep()) valuep->didWidth(false);
