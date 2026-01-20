@@ -346,6 +346,53 @@ static void findTypedefInHierarchy(AstNodeModule* modp, const string& cellName,
     }
 }
 
+static AstNodeModule* resolveCellPathModule(AstNodeModule* modp, const string& cellPath) {
+    if (!modp) return nullptr;
+
+    AstNodeModule* curModp = modp;
+    size_t start = 0;
+    while (start < cellPath.size()) {
+        const size_t dotPos = cellPath.find('.', start);
+        const string seg = (dotPos == string::npos)
+                               ? cellPath.substr(start)
+                               : cellPath.substr(start, dotPos - start);
+        if (seg.empty()) return nullptr;
+
+        AstNodeModule* nextModp = nullptr;
+
+        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
+            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                if (varp->name() != seg) continue;
+                AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
+                if (!ifaceRefp) continue;
+                if (AstNodeModule* const connected = findConnectedIfaceModpFromPort(curModp, seg)) {
+                    nextModp = connected;
+                } else if (ifaceRefp->cellp() && ifaceRefp->cellp()->modp()) {
+                    nextModp = ifaceRefp->cellp()->modp();
+                } else if (ifaceRefp->ifacep()) {
+                    nextModp = ifaceRefp->ifacep();
+                }
+            }
+        }
+
+        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
+            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                if (cellp->name() == seg && cellp->modp()) nextModp = cellp->modp();
+            }
+        }
+
+        if (!nextModp) return nullptr;
+        curModp = nextModp;
+
+        if (dotPos == string::npos) break;
+        start = dotPos + 1;
+    }
+
+    return curModp;
+}
+
 //======================================================================
 // Graph building
 
@@ -722,6 +769,9 @@ private:
                 typedefName = it->second.substr(colonPos + 1);
             }
 
+            AstNodeModule* const dottedModp =
+                cellName.find('.') != string::npos ? resolveCellPathModule(m_modp, cellName) : nullptr;
+
             // Find the typedef or PARAMTYPEDTYPE in a cell with this name
             // We need to find the specialized interface's typedef or PARAMTYPEDTYPE
             // Search: 1) direct cells in this module, 2) cells in interfaces this module references
@@ -729,6 +779,25 @@ private:
                 AstTypedef* targetTdp = nullptr;
                 AstParamTypeDType* targetPtdp = nullptr;
                 AstNodeModule* targetModp = nullptr;
+
+                if (dottedModp) {
+                    for (AstNode* childStmtp = dottedModp->stmtsp(); childStmtp;
+                         childStmtp = childStmtp->nextp()) {
+                        if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
+                            if (tdp->name() == typedefName) {
+                                targetTdp = tdp;
+                                targetModp = dottedModp;
+                                break;
+                            }
+                        } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
+                            if (ptdp->name() == typedefName) {
+                                targetPtdp = ptdp;
+                                targetModp = dottedModp;
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 // First, search for cells directly in this module
                 for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
@@ -1020,6 +1089,35 @@ private:
             depNodep->cellName = regIt->second;
         }
 
+        // If the REFDTYPE is a child of a PARAMTYPEDTYPE, try to get the full dotpath from
+        // the PARAMTYPE's cell association (which has the complete path like "cca_io.tlb_io")
+        if (depNodep->cellName.empty() || depNodep->cellName.find('.') == string::npos) {
+            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                if (AstParamTypeDType* const parentPtdp = VN_CAST(backp, ParamTypeDType)) {
+                    string baseModName = m_modp->name();
+                    const size_t suffixPos = baseModName.find("__");
+                    if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
+                    CellAssocKey key{baseModName, parentPtdp->name()};
+                    auto assocIt = s_cellAssociations.find(key);
+                    if (assocIt != s_cellAssociations.end()) {
+                        const size_t colonPos = assocIt->second.find(':');
+                        if (colonPos != string::npos) {
+                            const string fullCellPath = assocIt->second.substr(0, colonPos);
+                            if (!fullCellPath.empty() && fullCellPath.find('.') != string::npos) {
+                                depNodep->cellName = fullCellPath;
+                                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                                          << "' inherited full dotpath '" << fullCellPath
+                                          << "' from parent paramtype '" << parentPtdp->name()
+                                          << "'" << endl);
+                            }
+                        }
+                    }
+                    break;
+                }
+                if (VN_IS(backp, NodeModule)) break;
+            }
+        }
+
         // If this RefDType points to a typedef, add edge
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstTypedef* targetTdp = tdp;
@@ -1080,26 +1178,98 @@ private:
                     }
                 }
 
-                for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    AstCell* const cellp = VN_CAST(stmtp, Cell);
-                    if (!cellp || !cellp->modp()) continue;
-                    if (!VN_IS(cellp->modp(), Iface)) continue;
-                    if (!dotCellName.empty() && cellp->name() != dotCellName) continue;
-                    string cellBase = cellp->modp()->name();
-                    const size_t suffixPos = cellBase.find("__");
-                    if (suffixPos != string::npos) cellBase = cellBase.substr(0, suffixPos);
-                    if (cellBase != ptdOwnerp->name()) continue;
-                    for (AstNode* cellStmtp = cellp->modp()->stmtsp(); cellStmtp;
-                         cellStmtp = cellStmtp->nextp()) {
-                        if (AstParamTypeDType* const cellPtdp = VN_CAST(cellStmtp, ParamTypeDType)) {
-                            if (cellPtdp->name() == ptdp->name()) {
-                                targetPtdp = cellPtdp;
-                                ptdOwnerp = cellp->modp();
-                                break;
+                // Try to resolve dotted path using resolveCellPathModule (handles interface ports)
+                if (!dotCellName.empty()) {
+                    if (AstNodeModule* const resolvedModp = resolveCellPathModule(m_modp, dotCellName)) {
+                        // Check if resolved module base name matches ptdOwnerp
+                        string resolvedBase = resolvedModp->name();
+                        const size_t suffixPos = resolvedBase.find("__");
+                        if (suffixPos != string::npos) resolvedBase = resolvedBase.substr(0, suffixPos);
+                        string ptdOwnerBase = ptdOwnerp->name();
+                        const size_t ptdSuffixPos = ptdOwnerBase.find("__");
+                        if (ptdSuffixPos != string::npos) ptdOwnerBase = ptdOwnerBase.substr(0, ptdSuffixPos);
+                        if (resolvedBase == ptdOwnerBase) {
+                            for (AstNode* cellStmtp = resolvedModp->stmtsp(); cellStmtp;
+                                 cellStmtp = cellStmtp->nextp()) {
+                                if (AstParamTypeDType* const cellPtdp = VN_CAST(cellStmtp, ParamTypeDType)) {
+                                    if (cellPtdp->name() == ptdp->name()) {
+                                        targetPtdp = cellPtdp;
+                                        ptdOwnerp = resolvedModp;
+                                        UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                                                  << "' retargeted via resolveCellPathModule to "
+                                                  << resolvedModp->name() << endl);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
-                    if (targetPtdp != ptdp) break;
+                }
+
+                // Fallback: search direct cells in current module
+                if (targetPtdp == ptdp) {
+                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        AstCell* const cellp = VN_CAST(stmtp, Cell);
+                        if (!cellp || !cellp->modp()) continue;
+                        if (!VN_IS(cellp->modp(), Iface)) continue;
+                        if (!dotCellName.empty() && cellp->name() != dotCellName) continue;
+                        string cellBase = cellp->modp()->name();
+                        const size_t suffixPos = cellBase.find("__");
+                        if (suffixPos != string::npos) cellBase = cellBase.substr(0, suffixPos);
+                        if (cellBase != ptdOwnerp->name()) continue;
+                        for (AstNode* cellStmtp = cellp->modp()->stmtsp(); cellStmtp;
+                             cellStmtp = cellStmtp->nextp()) {
+                            if (AstParamTypeDType* const cellPtdp = VN_CAST(cellStmtp, ParamTypeDType)) {
+                                if (cellPtdp->name() == ptdp->name()) {
+                                    targetPtdp = cellPtdp;
+                                    ptdOwnerp = cellp->modp();
+                                    break;
+                                }
+                            }
+                        }
+                        if (targetPtdp != ptdp) break;
+                    }
+                }
+
+                // Fallback: search interface ports in current module
+                if (targetPtdp == ptdp && !dotCellName.empty()) {
+                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                            if (varp->name() != dotCellName) continue;
+                            AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
+                            if (!ifaceRefp) continue;
+                            AstNodeModule* ifaceModp = findConnectedIfaceModpFromPort(m_modp, dotCellName);
+                            if (!ifaceModp && ifaceRefp->cellp() && ifaceRefp->cellp()->modp()) {
+                                ifaceModp = ifaceRefp->cellp()->modp();
+                            }
+                            if (!ifaceModp && ifaceRefp->ifacep()) {
+                                ifaceModp = ifaceRefp->ifacep();
+                            }
+                            if (ifaceModp) {
+                                string ifaceBase = ifaceModp->name();
+                                const size_t suffixPos = ifaceBase.find("__");
+                                if (suffixPos != string::npos) ifaceBase = ifaceBase.substr(0, suffixPos);
+                                if (ifaceBase == ptdOwnerp->name()) {
+                                    for (AstNode* ifaceStmtp = ifaceModp->stmtsp(); ifaceStmtp;
+                                         ifaceStmtp = ifaceStmtp->nextp()) {
+                                        if (AstParamTypeDType* const ifacePtdp = VN_CAST(ifaceStmtp, ParamTypeDType)) {
+                                            if (ifacePtdp->name() == ptdp->name()) {
+                                                targetPtdp = ifacePtdp;
+                                                ptdOwnerp = ifaceModp;
+                                                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                                                          << "' retargeted via iface port to "
+                                                          << ifaceModp->name() << endl);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (targetPtdp != ptdp) break;
+                    }
                 }
             }
 
@@ -1351,14 +1521,143 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 break;
             } else if (depNodep->nodeType == NodeType::PARAMTYPEDTYPE) {
                 if (AstParamTypeDType* const ptdp = VN_CAST(depNodep->nodep, ParamTypeDType)) {
-                    const bool needsUpdate = (rdp->refDTypep() != ptdp) || rdp->typedefp();
+                    AstParamTypeDType* targetPtdp = ptdp;
+                    AstNodeModule* const ptdOwnerp = depNodep->ownerModp;
+
+                    UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE '" << rdp->name()
+                              << "'@" << nodeOwnerName(nodep)
+                              << " dep->" << ptdp->name() << "@"
+                              << (ptdOwnerp ? ptdOwnerp->name() : "<null>")
+                              << " cellName='" << nodep->cellName << "'"
+                              << " hasGParam=" << (ptdOwnerp ? ptdOwnerp->hasGParam() : false)
+                              << " hasSuffix=" << (ptdOwnerp && ptdOwnerp->name().find("__") != string::npos)
+                              << endl);
+
+                    // If the dependency points to a template PARAMTYPEDTYPE, find the specialized one
+                    // based on the REFDTYPE's context (its owner module and cell path)
+                    if (ptdOwnerp && ptdOwnerp->hasGParam()
+                        && ptdOwnerp->name().find("__") == string::npos) {
+                        // The dependency is to a template - need to find specialized version
+                        // Use the cellName from the REFDTYPE node to resolve the correct path
+                        string cellPath = nodep->cellName;
+                        UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE template detected, initial cellPath='"
+                                  << cellPath << "'" << endl);
+                        if (cellPath.empty()) {
+                            // Try to get from parent PARAMTYPE's cell association
+                            for (AstNode* backp = rdp->backp(); backp; backp = backp->backp()) {
+                                UINFO(9, "DEPGRAPH: REFDTYPE-RESOLVE walking backp: "
+                                          << backp->typeName() << endl);
+                                if (AstParamTypeDType* const parentPtdp = VN_CAST(backp, ParamTypeDType)) {
+                                    string baseModName = ownerModp ? ownerModp->name() : "";
+                                    const size_t suffixPos = baseModName.find("__");
+                                    if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
+                                    CellAssocKey key{baseModName, parentPtdp->name()};
+                                    auto assocIt = s_cellAssociations.find(key);
+                                    UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE parent PARAMTYPE '"
+                                              << parentPtdp->name() << "' baseModName='" << baseModName
+                                              << "' assoc " << (assocIt != s_cellAssociations.end() ? "HIT" : "MISS")
+                                              << (assocIt != s_cellAssociations.end() ? (" -> " + assocIt->second) : "")
+                                              << endl);
+                                    if (assocIt != s_cellAssociations.end()) {
+                                        const size_t colonPos = assocIt->second.find(':');
+                                        if (colonPos != string::npos) {
+                                            cellPath = assocIt->second.substr(0, colonPos);
+                                            UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE extracted cellPath='"
+                                                      << cellPath << "'" << endl);
+                                        }
+                                    }
+                                    break;
+                                }
+                                if (VN_IS(backp, NodeModule)) break;
+                            }
+                        }
+
+                        UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE final cellPath='" << cellPath
+                                  << "' ownerModp=" << (ownerModp ? ownerModp->name() : "<null>") << endl);
+
+                        if (!cellPath.empty() && ownerModp) {
+                            // Resolve the cell path to get the specialized interface module
+                            AstNodeModule* const resolvedModp = resolveCellPathModule(ownerModp, cellPath);
+                            UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE resolveCellPathModule('"
+                                      << ownerModp->name() << "', '" << cellPath << "') -> "
+                                      << (resolvedModp ? resolvedModp->name() : "<null>") << endl);
+                            if (resolvedModp) {
+                                // Check if resolved module is a specialization of ptdOwnerp
+                                string resolvedBase = resolvedModp->name();
+                                const size_t suffixPos = resolvedBase.find("__");
+                                if (suffixPos != string::npos) resolvedBase = resolvedBase.substr(0, suffixPos);
+                                UINFO(5, "DEPGRAPH: REFDTYPE-RESOLVE resolvedBase='" << resolvedBase
+                                          << "' ptdOwnerp='" << ptdOwnerp->name() << "' match="
+                                          << (resolvedBase == ptdOwnerp->name()) << endl);
+                                if (resolvedBase == ptdOwnerp->name()) {
+                                    // Found specialized interface - find the PARAMTYPEDTYPE in it
+                                    for (AstNode* stmtp = resolvedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                                        if (AstParamTypeDType* const specPtdp = VN_CAST(stmtp, ParamTypeDType)) {
+                                            if (specPtdp->name() == ptdp->name()) {
+                                                targetPtdp = specPtdp;
+                                                UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                                          << "' paramtype target is template '"
+                                                          << ptdOwnerp->name()
+                                                          << "', resolved via cellPath '" << cellPath
+                                                          << "' to specialized '" << resolvedModp->name()
+                                                          << "'" << endl);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback: search graph for specialized PARAMTYPEDTYPE
+                        if (targetPtdp == ptdp) {
+                            for (const auto& entry : s_nodes) {
+                                DepNode* const searchNodep = entry.second;
+                                if (searchNodep->nodeType == NodeType::PARAMTYPEDTYPE
+                                    && searchNodep != depNodep) {
+                                    if (AstParamTypeDType* const searchPtdp
+                                        = VN_CAST(searchNodep->nodep, ParamTypeDType)) {
+                                        if (searchPtdp->name() == ptdp->name()) {
+                                            AstNodeModule* const searchOwnerp = searchNodep->ownerModp;
+                                            if (searchOwnerp
+                                                && searchOwnerp->name().find(ptdOwnerp->name() + "__")
+                                                       != string::npos) {
+                                                // Found a specialized version - but which one?
+                                                // Need to match based on the owner module's suffix
+                                                if (ownerModp) {
+                                                    // Extract suffix from owner module
+                                                    const size_t ownerSuffixPos = ownerModp->name().find("__");
+                                                    if (ownerSuffixPos != string::npos) {
+                                                        const string ownerSuffix = ownerModp->name().substr(ownerSuffixPos);
+                                                        // Check if search owner has matching suffix components
+                                                        if (searchOwnerp->name().find(ownerSuffix.substr(0, ownerSuffix.find('_', 2) + 1)) != string::npos
+                                                            || ownerSuffix.find(searchOwnerp->name().substr(searchOwnerp->name().find("__"))) != string::npos) {
+                                                            targetPtdp = searchPtdp;
+                                                            UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                                                      << "' paramtype target is template '"
+                                                                      << ptdOwnerp->name()
+                                                                      << "', found specialized in '"
+                                                                      << searchOwnerp->name() << "'" << endl);
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    const bool needsUpdate = (rdp->refDTypep() != targetPtdp) || rdp->typedefp();
                     if (needsUpdate) {
                         rdp->typedefp(nullptr);
-                        rdp->refDTypep(ptdp);
+                        rdp->refDTypep(targetPtdp);
                         rdp->dtypep(nullptr);  // Clear stale dtypep to avoid broken link
                         rdp->didWidth(false);
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
-                                  << "' refDTypep to '" << ptdp->name() << "' in "
+                                  << "' refDTypep to '" << targetPtdp->name() << "' in "
                                   << nodeOwnerName(nodep) << endl);
                     }
                 }
