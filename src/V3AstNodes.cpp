@@ -2360,7 +2360,15 @@ void AstRefDType::dumpSmall(std::ostream& str) const {
     str << "ref";
 }
 AstNodeDType* AstRefDType::subDTypep() const VL_MT_STABLE {
-    if (typedefp()) return typedefp()->subDTypep();
+    auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
+    if (typedefp()) {
+        if (!typedefp()->backp()) {  // EOM
+            UINFO(1, "DEPGRAPH: RefDType has dangling typedefp=" << typedefp()
+                      << " name=" << name() << " refDTypep=" << refDTypep()
+                      << " this=" << this << endl);  // EOM
+        }
+        return typedefp()->subDTypep();
+    }
     return refDTypep();  // Maybe nullptr
 }
 void AstNodeUOrStructDType::dump(std::ostream& str) const {

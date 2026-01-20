@@ -1142,17 +1142,24 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                                       << "' required-type RefDType typedefp to '"
                                       << targetTypedefp->name() << "' in "
                                       << nodeOwnerName(nodep) << endl);
+                            refp->refDTypep(nullptr);
                             refp->typedefp(targetTypedefp);
                         }
                     }
                 }
             }
 
-            // The childDTypep (RequireDType) should be removed after dtype resolution
+            // The childDTypep (RequireDType) is normally removed after dtype resolution.
+            // Keep it when depgraph is enabled to avoid dangling RefDType nodes.
             if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
-                childp->unlinkFrBack();
-                ptdp->childDTypep(nullptr);
-                VL_DO_DANGLING(childp->deleteTree(), childp);
+                if (s_enabled) {
+                    UINFO(5, "DEPGRAPH: keeping paramtype childDTypep for '" << ptdp->name()
+                              << "' in " << nodeOwnerName(nodep) << endl);
+                } else {
+                    childp->unlinkFrBack();
+                    ptdp->childDTypep(nullptr);
+                    VL_DO_DANGLING(childp->deleteTree(), childp);
+                }
             }
         } else {
             UINFO(9, "DEPGRAPH: no resolved dependency for paramtype '" << ptdp->name()
@@ -1164,18 +1171,41 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         for (DepNode* const depNodep : nodep->dependsOn) {
             if (depNodep->nodeType == NodeType::TYPEDEF) {
                 if (AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef)) {
-                    if (rdp->typedefp() != tdp) {
-                        rdp->typedefp(tdp);
+                    AstTypedef* targetTdp = tdp;
+                    if (AstNodeModule* const tdOwnerp = findOwnerModule(tdp)) {
+                        if (tdOwnerp->hasGParam() && tdOwnerp->name().find("__") == string::npos) {
+                            AstNode* const cloneNodep = tdp->clonep();
+                            if (AstTypedef* const cloneTdp = VN_CAST(cloneNodep, Typedef)) {
+                                AstNodeModule* const cloneOwnerp = findOwnerModule(cloneTdp);
+                                if (cloneOwnerp && cloneOwnerp != tdOwnerp) {
+                                    UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                              << "' typedef target is template '" << tdOwnerp->name()
+                                              << "', using clone in '" << cloneOwnerp->name() << "'" << endl);
+                                    targetTdp = cloneTdp;
+                                }
+                            } else {
+                                UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                          << "' typedef target is template '" << tdOwnerp->name()
+                                          << "' with no clone" << endl);
+                            }
+                        }
+                    }
+                    const bool needsUpdate = (rdp->typedefp() != targetTdp) || rdp->refDTypep();
+                    if (needsUpdate) {
+                        rdp->refDTypep(nullptr);
+                        rdp->typedefp(targetTdp);
                         rdp->didWidth(false);
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
-                                  << "' typedefp to '" << tdp->name() << "' in "
+                                  << "' typedefp to '" << targetTdp->name() << "' in "
                                   << nodeOwnerName(nodep) << endl);
                     }
                 }
                 break;
             } else if (depNodep->nodeType == NodeType::PARAMTYPEDTYPE) {
                 if (AstParamTypeDType* const ptdp = VN_CAST(depNodep->nodep, ParamTypeDType)) {
-                    if (rdp->refDTypep() != ptdp) {
+                    const bool needsUpdate = (rdp->refDTypep() != ptdp) || rdp->typedefp();
+                    if (needsUpdate) {
+                        rdp->typedefp(nullptr);
                         rdp->refDTypep(ptdp);
                         rdp->didWidth(false);
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
@@ -1285,6 +1315,10 @@ int V3LinkDotDepGraph::resolve() {
             UINFO(1, "DEPGRAPH: RESOLVED REFDTYPE " << nodeName(nodep)
                       << "@" << nodeOwnerName(nodep) << " -> "
                       << (target.empty() ? "<unlinked>" : target) << endl);
+            if (rdp->typedefp() && rdp->refDTypep()) {
+                UINFO(1, "DEPGRAPH: WARNING refdtype has both typedefp and refDTypep set: "
+                          << nodeName(nodep) << "@" << nodeOwnerName(nodep) << endl);
+            }
         }
         UINFO(1, "DEPGRAPH: ========== END REFDTYPE SUMMARY ==========" << endl);
     }
@@ -1334,7 +1368,24 @@ void V3LinkDotDepGraph::apply() {
         }
     }
 
+    int nullSubCount = 0;
+    if (debug() >= 5) {
+        for (DepNode* const nodep : s_allNodes) {
+            if (!nodep || nodep->nodeType != NodeType::REFDTYPE) continue;
+            AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType);
+            if (!rdp) continue;
+            if (!rdp->subDTypep()) {
+                ++nullSubCount;
+                UINFO(5, "DEPGRAPH: refdtype has null subDTypep: " << nodeName(nodep)
+                          << "@" << nodeOwnerName(nodep) << endl);
+            }
+        }
+    }
     UINFO(5, "DEPGRAPH: apply complete - updated " << updatedCount << " RefDType pointers" << endl);
+    if (debug() >= 5) {
+        UINFO(5, "DEPGRAPH: apply complete - " << nullSubCount
+                  << " refdtype nodes with null subDTypep" << endl);
+    }
 }
 
 //======================================================================
