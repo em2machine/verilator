@@ -3286,6 +3286,19 @@ class WidthVisitor final : public VNVisitor {
         const bool isHardPackedUnion
             = nodep->packed() && VN_IS(nodep, UnionDType) && !VN_CAST(nodep, UnionDType)->isSoft();
 
+        // Check if this type is in a template module (hasGParam but no __ suffix).
+        // Template modules have unresolved parameters, so union member sizes may be incorrect.
+        // The specialized clones will be properly checked - suppress errors here.
+        bool inTemplateModule = false;
+        for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+            if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                if (modp->hasGParam() && modp->name().find("__") == string::npos) {
+                    inTemplateModule = true;
+                }
+                break;
+            }
+        }
+
         // Determine bit assignments and width
         if (VN_IS(nodep, UnionDType) || nodep->packed()) {
             int lsb = 0;
@@ -3301,7 +3314,8 @@ class WidthVisitor final : public VNVisitor {
                 itemp->lsb(lsb);
                 if (VN_IS(nodep, UnionDType)) {
                     const int itemWidth = itemp->width();
-                    if (!first && isHardPackedUnion && itemWidth != width) {
+                    // Skip union size check for template modules with unresolved parameters
+                    if (!first && isHardPackedUnion && itemWidth != width && !inTemplateModule) {
                         itemp->v3error("Hard packed union members must have equal size "
                                        "(IEEE 1800-2023 7.3.1)");
                     }

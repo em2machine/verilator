@@ -1034,6 +1034,17 @@ class ParamProcessor final {
             }
         }
 
+        // Build, resolve, and apply the dependency graph for ALL modules.
+        // This must be outside the Iface/Class block above so it runs for modules too.
+        // This ensures interface types are widthed first, then module types that depend
+        // on them, so $bits() expressions get correct values.
+        // IMPORTANT: Must call apply() after resolve() to update RefDType pointers/widths.
+        UINFO(5, "DEPGRAPH: building/resolving/applying for " << newModp->name()
+                  << " (all modules)" << endl);
+        V3LinkDotDepGraph::build(v3Global.rootp());
+        V3LinkDotDepGraph::resolve();
+        V3LinkDotDepGraph::apply();
+
         return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,

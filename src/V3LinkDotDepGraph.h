@@ -38,7 +38,9 @@ public:
         LPARAM,         // Localparam (AstVar with isLParam)
         TYPEDEF,        // Typedef (AstTypedef)
         PARAMTYPEDTYPE, // Type parameter (AstParamTypeDType)
-        REFDTYPE        // Reference to a type (AstRefDType)
+        REFDTYPE,       // Reference to a type (AstRefDType)
+        STRUCTDTYPE,    // Struct type (AstStructDType)
+        UNIONDTYPE      // Union type (AstUnionDType)
     };
 
     // A node in the dependency graph
@@ -119,6 +121,16 @@ public:
 
     // Apply resolved typedefs to RefDType nodes
     static void apply();
+
+    // Sync RefDType widths with their refDTypep targets in a specific module.
+    // Call this BEFORE widthParamsEdit to ensure $bits() expressions get correct values.
+    static void syncRefDTypeWidths(AstNodeModule* modp);
+
+    // Mark template module types as didWidth(true) to prevent V3Width errors
+    // during V3Param. Must be called BEFORE V3Param::param().
+    // Template modules have unresolved parameters, so their types may have
+    // incorrect widths. Marking them prevents spurious errors.
+    static void markTemplateTypes(AstNetlist* netlistp);
 
     // Register cell association for a node (called from linkdot during primary pass)
     // This captures which cell a PARAMTYPEDTYPE references through
