@@ -1034,17 +1034,6 @@ class ParamProcessor final {
             }
         }
 
-        // Build, resolve, and apply the dependency graph for ALL modules.
-        // This must be outside the Iface/Class block above so it runs for modules too.
-        // This ensures interface types are widthed first, then module types that depend
-        // on them, so $bits() expressions get correct values.
-        // IMPORTANT: Must call apply() after resolve() to update RefDType pointers/widths.
-        UINFO(5, "DEPGRAPH: building/resolving/applying for " << newModp->name()
-                  << " (all modules)" << endl);
-        V3LinkDotDepGraph::build(v3Global.rootp());
-        V3LinkDotDepGraph::resolve();
-        V3LinkDotDepGraph::apply();
-
         return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
@@ -2481,6 +2470,107 @@ public:
 
 void V3Param::param(AstNetlist* rootp) {
     UINFO(2, __FUNCTION__ << ":");
-    { ParamTop{rootp}; }  // Destruct before checking
+
+    // DepGraph-driven fixed-point loop (guarded)
+    if (V3LinkDotDepGraph::useInParam()) {
+        const int maxIters = 20;
+        int iter = 0;
+        size_t prevModuleCount = 0;
+        bool changed = true;
+
+        while (changed && iter < maxIters) {
+            ++iter;
+            UINFO(3, "DEPGRAPH: V3Param fixed-point iteration " << iter << endl);
+
+            { ParamTop{rootp}; }  // One pass of V3Param cloning
+
+            // Count modules after this iteration
+            size_t moduleCount = 0;
+            for (AstNodeModule* modp = rootp->modulesp(); modp;
+                 modp = VN_AS(modp->nextp(), NodeModule)) {
+                ++moduleCount;
+            }
+
+            // Build/resolve/apply DepGraph for this iteration
+            V3LinkDotDepGraph::build(rootp);
+
+            // OOO analogy: resolve() "executes" nodes once deps are ready, apply() "commits".
+            // Cached widths can still be stale until apply() updates RefDType links/widths.
+            // So we re-run resolve() after apply() to re-execute any dependent nodes with
+            // committed widths, then apply() again to finalize those updates.
+            const int depItersPre = V3LinkDotDepGraph::resolve();
+            const int applyChangesPre = V3LinkDotDepGraph::apply();
+            V3LinkDotDepGraph::clearResolved();
+            const int depItersPost = V3LinkDotDepGraph::resolve();
+            const int applyChangesPost = V3LinkDotDepGraph::apply();
+            const int applyChanges = applyChangesPre + applyChangesPost;
+            UINFO(3, "DEPGRAPH: iteration " << iter << " depIters=" << depItersPre
+                      << "/" << depItersPost << " applyChanges=" << applyChanges
+                      << " moduleCount=" << moduleCount
+                      << " prevModuleCount=" << prevModuleCount << endl);
+
+            // Targeted debug for cmd_beat_t and cb_cfg
+            if (debug() >= 5) {
+                for (AstNodeModule* modp = rootp->modulesp(); modp;
+                     modp = VN_AS(modp->nextp(), NodeModule)) {
+                    // cb_cfg localparam
+                    modp->foreach([&](AstVar* varp) {
+                        if (varp->name() != "cb_cfg") return;
+                        int val = -1;
+                        if (AstConst* const cp = VN_CAST(varp->valuep(), Const)) {
+                            val = cp->num().toSInt();
+                        }
+                        UINFO(3, "DEPGRAPH: iter=" << iter << " cb_cfg in " << modp->name()
+                                  << " dtypew=" << (varp->dtypep() ? varp->dtypep()->width() : 0)
+                                  << " val=" << val << endl);
+                    });
+
+                    // cmd_beat_t typedef/paramtype/refdtype
+                    modp->foreach([&](AstTypedef* tdp) {
+                        if (tdp->name() != "cmd_beat_t") return;
+                        int subw = tdp->subDTypep() ? tdp->subDTypep()->width() : 0;
+                        UINFO(3, "DEPGRAPH: iter=" << iter << " typedef cmd_beat_t in "
+                                  << modp->name() << " subw=" << subw << endl);
+                    });
+                    modp->foreach([&](AstParamTypeDType* ptdp) {
+                        if (ptdp->name() != "cmd_beat_t") return;
+                        int subw = ptdp->subDTypep() ? ptdp->subDTypep()->width() : 0;
+                        UINFO(3, "DEPGRAPH: iter=" << iter << " paramtype cmd_beat_t in "
+                                  << modp->name() << " w=" << ptdp->width()
+                                  << " subw=" << subw << endl);
+                    });
+                    modp->foreach([&](AstRefDType* rdp) {
+                        if (rdp->name() != "cmd_beat_t") return;
+                        string target = "<none>";
+                        if (AstTypedef* const tdp = rdp->typedefp()) {
+                            target = string{"typedef:"} + tdp->name();
+                        } else if (AstNodeDType* const refp = rdp->refDTypep()) {
+                            target = string{"ref:"} + refp->name();
+                        }
+                        UINFO(3, "DEPGRAPH: iter=" << iter << " refdtype cmd_beat_t in "
+                                  << modp->name() << " w=" << rdp->width()
+                                  << " target=" << target << endl);
+                    });
+                }
+            }
+
+            // Optional debug checkpoint
+            if (debug() >= 6) {
+                V3LinkDotDepGraph::dumpGraphTree(rootp);
+                V3LinkDotDepGraph::dumpGraphDepsTree();
+            }
+
+            changed = (moduleCount != prevModuleCount) || (applyChanges > 0);
+            prevModuleCount = moduleCount;
+        }
+
+        if (iter >= maxIters) {
+            UINFO(1, "DEPGRAPH: WARNING: V3Param fixed-point reached max iterations "
+                      << maxIters << endl);
+        }
+    } else {
+        { ParamTop{rootp}; }  // Destruct before checking
+    }
+
     V3Global::dumpCheckGlobalTree("param", 0, dumpTreeEitherLevel() >= 3);
 }

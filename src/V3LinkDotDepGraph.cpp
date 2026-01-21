@@ -35,6 +35,7 @@ std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes;
 int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
 bool V3LinkDotDepGraph::s_preserveCapturedExprs = false;
+bool V3LinkDotDepGraph::s_useInParam = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 std::unordered_map<V3LinkDotDepGraph::TypedefClassKey, AstClass*,
                    V3LinkDotDepGraph::TypedefClassKeyHash> V3LinkDotDepGraph::s_typedefClassMap;
@@ -163,6 +164,18 @@ void V3LinkDotDepGraph::reset() {
         for (DepNode* nodep : s_allNodes) {
             if (nodep && nodep->origExprp
                 && (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM)) {
+                // Drop preserved nodes whose AST node no longer maps to their owner module
+                AstNodeModule* const currentOwnerp
+                    = nodep->nodep ? findOwnerModule(nodep->nodep) : nullptr;
+                if (!nodep->nodep || (nodep->ownerModp && currentOwnerp != nodep->ownerModp)) {
+                    nodep->origExprp->deleteTree();
+                    nodep->origExprp = nullptr;
+                    delete nodep;
+                    continue;
+                }
+                // Preserve captured exprs but clear stale dependency links
+                nodep->dependsOn.clear();
+                nodep->dependents.clear();
                 preserved.push_back(nodep);
                 preservedMap[nodep->nodep] = nodep;
             } else {
@@ -524,6 +537,7 @@ private:
     }
     void visit(AstRefDType* nodep) override {
         AstNodeModule* const ownerp = V3LinkDotDepGraph::findOwnerModule(nodep);
+        if (!ownerp) return;
         V3LinkDotDepGraph::DepNode* const targetp
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
         // Skip edge if parent is PARAMTYPE with same name in same module (would create cycle)
@@ -1484,11 +1498,19 @@ public:
 };
 
 void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
-    if (!s_enabled) return;
+    if (!s_enabled && !s_useInParam) return;
     UINFO(5, "DEPGRAPH: building dependency graph" << endl);
     reset();
     DepGraphBuildVisitor{netlistp};
     UINFO(5, "DEPGRAPH: built " << s_allNodes.size() << " nodes" << endl);
+}
+
+void V3LinkDotDepGraph::clearResolved() {
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        nodep->resolved = false;
+        nodep->resolvedIteration = 0;
+    }
 }
 
 //======================================================================
@@ -2042,7 +2064,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
 // Resolution
 
 int V3LinkDotDepGraph::resolve() {
-    if (!s_enabled) return 0;
+    if (!s_enabled && !s_useInParam) return 0;
     UINFO(5, "DEPGRAPH: starting iterative resolution" << endl);
 
     s_iterationCount = 0;
@@ -2134,8 +2156,8 @@ int V3LinkDotDepGraph::resolve() {
 //======================================================================
 // Apply - update RefDType pointers after resolution
 
-void V3LinkDotDepGraph::apply() {
-    if (!s_enabled) return;
+int V3LinkDotDepGraph::apply() {
+    if (!s_enabled && !s_useInParam) return 0;
     UINFO(5, "DEPGRAPH: applying - updating RefDType pointers" << endl);
 
     int updatedCount = 0;
@@ -2570,6 +2592,10 @@ void V3LinkDotDepGraph::apply() {
     }
     UINFO(5, "DEPGRAPH: found " << templateModulesFound << " template modules, marked "
               << templateTypesMarked << " types as widthed" << endl);
+
+    return updatedCount + staleRefFixCount + cloneFixCount + templateTypedefpCleared
+           + templateRefDTypepMoved + templateStructRetargeted + templateParamTypeRetargeted
+           + templateArrayRetargeted + refDTypeSynced + templateTypesMarked;
 }
 
 //======================================================================

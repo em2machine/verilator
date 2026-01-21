@@ -69,6 +69,7 @@ private:
     static bool s_enabled;                   // Is the graph active?
     static bool s_preserveCapturedExprs;     // Preserve captured param exprs across reset
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
+    static bool s_useInParam;             // Use DepGraph during V3Param fixed-point loop
 
     // Typedef -> class mapping for parameterized class typedefs
     // Key: (typedef owner module name, typedef name), Value: target class
@@ -115,12 +116,20 @@ public:
     // Build the graph from the AST (call after V3Param)
     static void build(AstNetlist* netlistp);
 
+    // Clear resolved flags so resolve() can re-evaluate nodes after apply()
+    static void clearResolved();
+
     // Resolve all dependencies using fixed-point iteration
     // Returns number of iterations needed
     static int resolve();
 
     // Apply resolved typedefs to RefDType nodes
-    static void apply();
+    // Returns number of changes applied (for fixed-point looping)
+    static int apply();
+
+    // Use DepGraph during V3Param fixed-point loop
+    static void useInParam(bool flag) { s_useInParam = flag; }
+    static bool useInParam() { return s_useInParam; }
 
     // Sync RefDType widths with their refDTypep targets in a specific module.
     // Call this BEFORE widthParamsEdit to ensure $bits() expressions get correct values.

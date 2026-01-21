@@ -184,7 +184,13 @@ static void process() {
         // Remove parameters by cloning modules to de-parameterized versions
         //   This requires some width calculations and constant propagation
         // No more AstGenCase/AstGenFor/AstGenIf after this
+        if (debug() >= 5) {
+            V3LinkDotDepGraph::useInParam(true);
+        }
         V3Param::param(v3Global.rootp());
+        if (debug() >= 5) {
+            V3LinkDotDepGraph::useInParam(false);
+        }
 
         // Build dependency graph for param/localparam/typedef resolution (experimental)
         // This REPLACES V3LinkDotIfaceCapture - enable with --debugi 5
@@ -203,7 +209,8 @@ static void process() {
             const int iters = V3LinkDotDepGraph::resolve();
             UINFO(1, "DEPGRAPH: Resolution completed in " << iters << " iterations" << endl);
             // Apply: update RefDType pointers
-            V3LinkDotDepGraph::apply();
+            const int applyChanges = V3LinkDotDepGraph::apply();
+            UINFO(5, "DEPGRAPH: apply changed " << applyChanges << " nodes" << endl);
             V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());  // Dump again to see updated widths
             V3LinkDotDepGraph::dumpGraphDepsTree();
             V3LinkDotDepGraph::enable(false);
