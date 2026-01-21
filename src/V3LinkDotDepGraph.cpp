@@ -36,6 +36,8 @@ int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
 bool V3LinkDotDepGraph::s_preserveCapturedExprs = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
+std::unordered_map<V3LinkDotDepGraph::TypedefClassKey, AstClass*,
+                   V3LinkDotDepGraph::TypedefClassKeyHash> V3LinkDotDepGraph::s_typedefClassMap;
 
 // Map from (module name, paramtype name) to cell name (captured during linkdot primary)
 // We use names instead of pointers because nodes get cloned during V3Param
@@ -183,6 +185,34 @@ void V3LinkDotDepGraph::resetAll() {
     reset();
     s_cellAssociations.clear();
     s_refDTypeDotPathRegistry.clear();
+    s_typedefClassMap.clear();
+}
+
+void V3LinkDotDepGraph::registerTypedefClass(AstTypedef* tdp, AstClass* classp,
+                                              AstNodeModule* ownerModp) {
+    if (!tdp || !classp || !ownerModp) return;
+    TypedefClassKey key{ownerModp->name(), tdp->name()};
+    auto it = s_typedefClassMap.find(key);
+    if (it != s_typedefClassMap.end()) {
+        // Already registered - update if different class
+        if (it->second != classp) {
+            UINFO(5, "DEPGRAPH: updating typedef-class mapping " << ownerModp->name()
+                      << "::" << tdp->name() << " from " << it->second->name()
+                      << " to " << classp->name() << endl);
+            it->second = classp;
+        }
+        return;
+    }
+    s_typedefClassMap.emplace(key, classp);
+    UINFO(5, "DEPGRAPH: registered typedef-class mapping " << ownerModp->name()
+              << "::" << tdp->name() << " -> " << classp->name() << endl);
+}
+
+AstClass* V3LinkDotDepGraph::findTypedefClass(const string& ownerName, const string& typedefName) {
+    TypedefClassKey key{ownerName, typedefName};
+    auto it = s_typedefClassMap.find(key);
+    if (it != s_typedefClassMap.end()) return it->second;
+    return nullptr;
 }
 
 void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
@@ -747,6 +777,18 @@ private:
                     V3LinkDotDepGraph::addEdge(depNodep, refNodep);
                     UINFO(9, "DEPGRAPH: typedef '" << nodep->name() << "' depends on paramtype '"
                               << refPtdp->name() << "' in " << (refOwnerp ? refOwnerp->name() : "<null>") << endl);
+                }
+            }
+            // For ClassRefDType (typedef to parameterized class like uvm_object_registry#(...))
+            // Track the class dependency so we can resolve it correctly later
+            if (AstClassRefDType* const crdtp = VN_CAST(dtypep, ClassRefDType)) {
+                if (AstClass* const classp = crdtp->classp()) {
+                    // Store the typedef -> class relationship for later resolution
+                    // The class might be a specialized class (e.g., uvm_object_registry__Tz191)
+                    UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' points to class '"
+                              << classp->name() << "' in " << m_modp->name() << endl);
+                    // Register this typedef's target class for method resolution
+                    V3LinkDotDepGraph::registerTypedefClass(nodep, classp, m_modp);
                 }
             }
             // For other types, iterate children
@@ -1397,6 +1439,83 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                       << "' width " << oldWidth << " -> " << newWidth
                       << " in " << nodeOwnerName(nodep) << endl);
         }
+
+        // For ClassRefDType typedefs, ensure any references use the correct specialized class
+        // This is the "update" phase of capture->resolve->update for class typedefs
+        if (AstClassRefDType* const crdtp = VN_CAST(tdp->subDTypep(), ClassRefDType)) {
+            if (AstClass* const classp = crdtp->classp()) {
+                // Check if this matches our registered mapping
+                AstClass* const registeredClassp = findTypedefClass(ownerModp->name(), tdp->name());
+                if (registeredClassp && registeredClassp != classp) {
+                    // Update the ClassRefDType to point to the registered class
+                    UINFO(5, "DEPGRAPH: updating typedef '" << tdp->name()
+                              << "' ClassRefDType from '" << classp->name()
+                              << "' to '" << registeredClassp->name() << "'" << endl);
+                    crdtp->classp(registeredClassp);
+                }
+                // Also update any RefDTypes in ownerModp that reference this typedef
+                // to have the correct classOrPackagep
+                if (ownerModp) {
+                    AstClass* const targetClassp = registeredClassp ? registeredClassp : classp;
+                    ownerModp->foreach([tdp, targetClassp](AstRefDType* refp) {
+                        if (refp->typedefp() == tdp) {
+                            if (refp->classOrPackagep() != targetClassp) {
+                                UINFO(5, "DEPGRAPH: updating RefDType classOrPackagep for '"
+                                          << refp->name() << "' to '" << targetClassp->name()
+                                          << "'" << endl);
+                                refp->classOrPackagep(targetClassp);
+                            }
+                        }
+                    });
+                    // Also update FUNCREFs that call methods through this typedef
+                    // (e.g., type_id::get() where type_id is this typedef)
+                    ownerModp->foreach([targetClassp](AstNodeFTaskRef* ftaskRefp) {
+                        // Check if this FUNCREF's classOrPackagep points to a class
+                        // that should be updated based on typedef
+                        if (AstClass* const funcClassp
+                            = VN_CAST(ftaskRefp->classOrPackagep(), Class)) {
+                            // If the FUNCREF is calling a method in a parameterized class
+                            // that matches our typedef's target, update it
+                            if (funcClassp != targetClassp) {
+                                // Check if funcClassp is the template version of targetClassp
+                                const string funcName = funcClassp->name();
+                                const string targetName = targetClassp->name();
+                                // Strip specialization suffix to compare base names
+                                const size_t funcSuffix = funcName.find("__");
+                                const size_t targetSuffix = targetName.find("__");
+                                const string funcBase
+                                    = (funcSuffix != string::npos) ? funcName.substr(0, funcSuffix)
+                                                                   : funcName;
+                                const string targetBase = (targetSuffix != string::npos)
+                                                              ? targetName.substr(0, targetSuffix)
+                                                              : targetName;
+                                if (funcBase == targetBase && funcSuffix != string::npos
+                                    && targetSuffix != string::npos) {
+                                    UINFO(5, "DEPGRAPH: updating FUNCREF classOrPackagep from '"
+                                              << funcClassp->name() << "' to '"
+                                              << targetClassp->name() << "'" << endl);
+                                    ftaskRefp->classOrPackagep(targetClassp);
+                                    // Also update taskp to point to method in new class
+                                    if (AstNodeFTask* const oldTaskp = ftaskRefp->taskp()) {
+                                        // Find matching function in target class by name
+                                        for (AstNode* stmtp = targetClassp->stmtsp(); stmtp;
+                                             stmtp = stmtp->nextp()) {
+                                            if (AstNodeFTask* const newTaskp
+                                                = VN_CAST(stmtp, NodeFTask)) {
+                                                if (newTaskp->name() == oldTaskp->name()) {
+                                                    ftaskRefp->taskp(newTaskp);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+        }
     } else if (nodep->nodeType == NodeType::PARAMTYPEDTYPE) {
         AstParamTypeDType* const ptdp = VN_CAST(nodep->nodep, ParamTypeDType);
         if (!ptdp) return;
@@ -1543,6 +1662,15 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                         rdp->typedefp(targetTdp);
                         rdp->dtypep(nullptr);  // Clear stale dtypep to avoid broken link
                         rdp->didWidth(false);
+                        // Update classOrPackagep to point to the specialized class
+                        // (like IfaceCapture::replaceTypedef does for CLASS captures)
+                        AstNodeModule* const targetOwnerp = findOwnerModule(targetTdp);
+                        if (AstClass* const targetClassp = VN_CAST(targetOwnerp, Class)) {
+                            rdp->classOrPackagep(targetClassp);
+                            UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
+                                      << "' classOrPackagep to class '" << targetClassp->name()
+                                      << "'" << endl);
+                        }
                         UINFO(5, "DEPGRAPH: retarget refdtype '" << rdp->name()
                                   << "' typedefp to '" << targetTdp->name() << "' in "
                                   << nodeOwnerName(nodep) << endl);
@@ -1895,6 +2023,76 @@ void V3LinkDotDepGraph::apply() {
         }
     }
 
+    // Fix RefDType nodes in cloned classes whose classOrPackagep still points to the template class
+    // This happens when a parameterized class is cloned - the RefDType's classOrPackagep and
+    // typedefp still point to the template class instead of the specialized clone
+    int cloneFixCount = 0;
+    // Classes may be nested inside packages, so iterate all modules/packages and their members
+    for (AstNodeModule* modp = v3Global.rootp()->modulesp(); modp;
+         modp = VN_AS(modp->nextp(), NodeModule)) {
+        // Also check classes inside packages/modules
+        for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            AstClass* const ownerClassp = VN_CAST(stmtp, Class);
+            if (!ownerClassp) continue;
+            // Only process specialized classes (those with __ suffix indicating parameterization)
+            const string& ownerName = ownerClassp->name();
+            if (ownerName.find("__") == string::npos) continue;
+
+            UINFO(9, "DEPGRAPH: checking class " << ownerName << " for cloned RefDTypes" << endl);
+
+        // Walk all RefDType nodes within this class
+        ownerClassp->foreach([&](AstRefDType* rdp) {
+            AstNodeModule* const rdpClassOrPkgp = rdp->classOrPackagep();
+            if (!rdpClassOrPkgp) {
+                UINFO(9, "DEPGRAPH: skip RefDType '" << rdp->name()
+                          << "' in " << ownerName << " - no classOrPackagep" << endl);
+                return;
+            }
+            // Skip if already pointing to owner class
+            if (rdpClassOrPkgp == ownerClassp) {
+                UINFO(9, "DEPGRAPH: skip RefDType '" << rdp->name()
+                          << "' in " << ownerName << " - already correct" << endl);
+                return;
+            }
+            // Skip if not pointing to a class
+            AstClass* const rdpClassp = VN_CAST(rdpClassOrPkgp, Class);
+            if (!rdpClassp) {
+                UINFO(9, "DEPGRAPH: skip RefDType '" << rdp->name()
+                          << "' in " << ownerName << " - classOrPackagep not a class" << endl);
+                return;
+            }
+
+            UINFO(9, "DEPGRAPH: checking RefDType '" << rdp->name()
+                      << "' in " << ownerName << " - classOrPackagep=" << rdpClassOrPkgp->name() << endl);
+
+            // Check if owner class has a typedef with the same name
+            const string& typedefName = rdp->name();
+            AstClass* const targetClassp = findTypedefClass(ownerName, typedefName);
+            if (!targetClassp) return;
+
+            // Find the typedef in the owner class
+            AstTypedef* newTypedefp = nullptr;
+            for (AstNode* stmtp = ownerClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                    if (tdp->name() == typedefName) {
+                        newTypedefp = tdp;
+                        break;
+                    }
+                }
+            }
+
+            if (newTypedefp) {
+                UINFO(5, "DEPGRAPH: fixing cloned RefDType '" << typedefName
+                          << "' classOrPackagep from '" << rdpClassOrPkgp->name()
+                          << "' to '" << ownerClassp->name() << "'" << endl);
+                rdp->classOrPackagep(ownerClassp);
+                rdp->typedefp(newTypedefp);
+                ++cloneFixCount;
+            }
+        });
+        }  // end inner for loop over stmtsp
+    }  // end outer for loop over modulesp
+
     int nullSubCount = 0;
     if (debug() >= 5) {
         for (DepNode* const nodep : s_allNodes) {
@@ -1908,7 +2106,8 @@ void V3LinkDotDepGraph::apply() {
             }
         }
     }
-    UINFO(5, "DEPGRAPH: apply complete - updated " << updatedCount << " RefDType pointers" << endl);
+    UINFO(5, "DEPGRAPH: apply complete - updated " << updatedCount << " RefDType pointers, fixed "
+              << cloneFixCount << " cloned RefDTypes" << endl);
     if (debug() >= 5) {
         UINFO(5, "DEPGRAPH: apply complete - " << nullSubCount
                   << " refdtype nodes with null subDTypep" << endl);

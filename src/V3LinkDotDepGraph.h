@@ -68,6 +68,16 @@ private:
     static bool s_preserveCapturedExprs;     // Preserve captured param exprs across reset
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
 
+    // Typedef -> class mapping for parameterized class typedefs
+    // Key: (typedef owner module name, typedef name), Value: target class
+    using TypedefClassKey = std::pair<std::string, std::string>;
+    struct TypedefClassKeyHash {
+        std::size_t operator()(const TypedefClassKey& k) const {
+            return std::hash<std::string>{}(k.first) ^ (std::hash<std::string>{}(k.second) << 1);
+        }
+    };
+    static std::unordered_map<TypedefClassKey, AstClass*, TypedefClassKeyHash> s_typedefClassMap;
+
     // Forward declare visitor classes as friends
     friend class DepExprVisitor;
     friend class DepGraphBuildVisitor;
@@ -129,6 +139,11 @@ public:
     // Capture type parameter binding for specialized classes
     static void captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
                                       AstNodeModule* ownerModp);
+
+    // Register typedef -> class mapping for parameterized class typedefs
+    static void registerTypedefClass(AstTypedef* tdp, AstClass* classp, AstNodeModule* ownerModp);
+    // Lookup registered typedef class
+    static AstClass* findTypedefClass(const std::string& ownerName, const std::string& typedefName);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
