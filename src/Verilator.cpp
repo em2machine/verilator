@@ -157,9 +157,11 @@ static void process() {
         // Convert parseref's to varrefs, and other directly post parsing fixups
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
-        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary (DepGraph replaces it)
+        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary (DepGraph replaces it).
+        // DepGraph is now the permanent default; IfaceCapture is slated for removal.
         // This must happen before the primary pass to prevent IfaceCapture from running at all
         V3LinkDotIfaceCapture::enable(false);
+        V3LinkDotDepGraph::enable(true);
         V3LinkDotDepGraph::preserveCapturedExprs(true);
 
         // Cross-link dotted hierarchical references
