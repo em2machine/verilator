@@ -73,6 +73,7 @@
 #include "V3Error.h"
 #include "V3Global.h"
 #include "V3LinkLValue.h"
+#include "V3LinkDotDepGraph.h"
 #include "V3MemberMap.h"
 #include "V3Number.h"
 #include "V3Randomize.h"
@@ -1005,7 +1006,26 @@ class WidthVisitor final : public VNVisitor {
             // be fully resolved yet. The check will run again during the full V3Width pass
             // after DepGraph resolution when parameters have their final values.
             const bool inDeadModule = m_modep && m_modep->dead();
-            if (nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
+            bool skipAscrange = false;
+            if (V3LinkDotDepGraph::useInParam()) {
+                bool inTemplateModule = false;
+                bool hasOwnerModule = false;
+                for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                    if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                        hasOwnerModule = true;
+                        if (modp->hasGParam() && modp->name().find("__") == string::npos) {
+                            inTemplateModule = true;
+                        }
+                        break;
+                    }
+                }
+                if (!hasOwnerModule) inTemplateModule = true;
+                // DepGraph resolves specialized clones out-of-order; template/type-table
+                // nodes can still carry default params (e.g., 0) when this check runs.
+                // Suppress ASCRANGE here so only the fully-specialized clone is linted.
+                if (inTemplateModule) skipAscrange = true;
+            }
+            if (!skipAscrange && nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
                 && !VN_IS(nodep->backp(), Cell)  // For cells we warn in V3Inst
                 && !m_paramsOnly  // Skip during parameter evaluation
                 && !inDeadModule) {
@@ -2242,6 +2262,27 @@ class WidthVisitor final : public VNVisitor {
         }
         // Effectively nodep->dtypeFrom(nodep->dtypeSkipRefp());
         // But might be recursive, so instead manually recurse into the referenced type
+        if (!nodep->subDTypep()) {
+            bool inTemplateModule = false;
+            bool hasOwnerModule = false;
+            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                    hasOwnerModule = true;
+                    if (modp->hasGParam() && modp->name().find("__") == string::npos) {
+                        inTemplateModule = true;
+                    }
+                    break;
+                }
+            }
+            if (!hasOwnerModule) inTemplateModule = true;
+            if (inTemplateModule) {
+                // Defer unlinked template-only RefDTypes until specialization resolves them.
+                // This aligns with DepGraph out-of-order resolution which may clear
+                // template typedefs during commit or move them to TYPETABLE.
+                nodep->doingWidth(false);
+                return;
+            }
+        }
         UASSERT_OBJ(nodep->subDTypep(), nodep, "Unlinked");
         nodep->dtypeFrom(nodep->subDTypep());
         nodep->widthFromSub(nodep->subDTypep());
@@ -3290,14 +3331,23 @@ class WidthVisitor final : public VNVisitor {
         // Template modules have unresolved parameters, so union member sizes may be incorrect.
         // The specialized clones will be properly checked - suppress errors here.
         bool inTemplateModule = false;
+        bool hasOwnerModule = false;
         for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
             if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                hasOwnerModule = true;
                 if (modp->hasGParam() && modp->name().find("__") == string::npos) {
                     inTemplateModule = true;
                 }
                 break;
             }
         }
+        // If the union/struct was moved to TYPETABLE (no owning module), defer checks
+        // until specialization provides concrete member widths. This aligns with
+        // DepGraph's out-of-order resolution: types may be detached during commit and
+        // finalized only after specialization.
+        // TODO: Revisit this gate if DepGraph becomes the sole flow and widthing
+        // can assume all types are already specialized.
+        if (VN_IS(nodep, UnionDType) && !hasOwnerModule) inTemplateModule = true;
 
         // Determine bit assignments and width
         if (VN_IS(nodep, UnionDType) || nodep->packed()) {

@@ -28,6 +28,7 @@
 #include <functional>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class V3LinkDotDepGraph final {
@@ -58,6 +59,7 @@ public:
         bool resolved = false;               // Has this been fully resolved?
         int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
         int resolvedWidth = 0;               // Resolved width (for PARAMTYPEDTYPEs)
+        int pendingDeps = 0;                 // Unresolved dependency count (work-queue)
     };
 
     using NodeMap = std::unordered_map<AstNode*, DepNode*>;
@@ -66,10 +68,12 @@ private:
     static NodeMap s_nodes;                  // All nodes in the graph
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
+    static int s_commitChanges;              // Changes applied during per-node commit
     static bool s_enabled;                   // Is the graph active?
     static bool s_preserveCapturedExprs;     // Preserve captured param exprs across reset
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
     static bool s_useInParam;             // Use DepGraph during V3Param fixed-point loop
+    static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
 
     // Typedef -> class mapping for parameterized class typedefs
     // Key: (typedef owner module name, typedef name), Value: target class
@@ -90,7 +94,6 @@ private:
     static void addEdge(DepNode* from, DepNode* to);
     static void collectExpressionDeps(AstNode* exprp, DepNode* depNode, AstNodeModule* scopeModp);
     static NodeType classifyVar(const AstVar* varp);
-    static AstNodeModule* findOwnerModule(AstNode* nodep);
     static const char* nodeTypeName(NodeType type);
 
 public:
@@ -108,6 +111,10 @@ public:
     static void preserveCapturedExprs(bool flag) { s_preserveCapturedExprs = flag; }
     static bool preserveCapturedExprs() { return s_preserveCapturedExprs; }
 
+    // Find specialized typedef clone by name; optionally returns owner module
+    static AstTypedef* findSpecializedTypedef(const std::string& name,
+                                              AstNodeModule** ownerp = nullptr);
+
     // Reset/clear the graph (keeps cell associations)
     static void reset();
     // Reset everything including cell associations
@@ -115,9 +122,14 @@ public:
 
     // Build the graph from the AST (call after V3Param)
     static void build(AstNetlist* netlistp);
+    // Incremental build: add nodes/edges for newly cloned modules
+    static void buildIncremental(AstNetlist* netlistp);
 
-    // Clear resolved flags so resolve() can re-evaluate nodes after apply()
-    static void clearResolved();
+    // Utility: find owning module for an AST node
+    static AstNodeModule* findOwnerModule(AstNode* nodep);
+
+    // Track per-node commit changes
+    static void commitChange() { ++s_commitChanges; }
 
     // Resolve all dependencies using fixed-point iteration
     // Returns number of iterations needed

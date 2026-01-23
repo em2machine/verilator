@@ -157,12 +157,10 @@ static void process() {
         // Convert parseref's to varrefs, and other directly post parsing fixups
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
-        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary if using DepGraph
+        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary (DepGraph replaces it)
         // This must happen before the primary pass to prevent IfaceCapture from running at all
-        if (debug() >= 5) {
-            V3LinkDotIfaceCapture::enable(false);
-            V3LinkDotDepGraph::preserveCapturedExprs(true);
-        }
+        V3LinkDotIfaceCapture::enable(false);
+        V3LinkDotDepGraph::preserveCapturedExprs(true);
 
         // Cross-link dotted hierarchical references
         V3LinkDot::linkDotPrimary(v3Global.rootp());
@@ -184,37 +182,8 @@ static void process() {
         // Remove parameters by cloning modules to de-parameterized versions
         //   This requires some width calculations and constant propagation
         // No more AstGenCase/AstGenFor/AstGenIf after this
-        if (debug() >= 5) {
-            V3LinkDotDepGraph::useInParam(true);
-        }
+        V3LinkDotDepGraph::useInParam(true);
         V3Param::param(v3Global.rootp());
-        if (debug() >= 5) {
-            V3LinkDotDepGraph::useInParam(false);
-        }
-
-        // Build dependency graph for param/localparam/typedef resolution (experimental)
-        // This REPLACES V3LinkDotIfaceCapture - enable with --debugi 5
-        // The graph handles both resolution ORDER and pointer UPDATES
-        if (debug() >= 5) {
-            // Disable V3LinkDotIfaceCapture - the graph replaces it entirely
-            // IfaceCapture has fundamental issues with sibling instances
-            V3LinkDotIfaceCapture::enable(false);
-
-            V3LinkDotDepGraph::enable(true);
-            V3LinkDotDepGraph::build(v3Global.rootp());
-            V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());
-            V3LinkDotDepGraph::dumpGraphDepsTree();
-            V3LinkDotDepGraph::dumpGraph();
-            // Run resolution to determine correct ordering
-            const int iters = V3LinkDotDepGraph::resolve();
-            UINFO(1, "DEPGRAPH: Resolution completed in " << iters << " iterations" << endl);
-            // Apply: update RefDType pointers
-            const int applyChanges = V3LinkDotDepGraph::apply();
-            UINFO(5, "DEPGRAPH: apply changed " << applyChanges << " nodes" << endl);
-            V3LinkDotDepGraph::dumpGraphTree(v3Global.rootp());  // Dump again to see updated widths
-            V3LinkDotDepGraph::dumpGraphDepsTree();
-            V3LinkDotDepGraph::enable(false);
-        }
 
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs

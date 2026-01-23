@@ -2491,21 +2491,18 @@ void V3Param::param(AstNetlist* rootp) {
                 ++moduleCount;
             }
 
-            // Build/resolve/apply DepGraph for this iteration
-            V3LinkDotDepGraph::build(rootp);
+            // Build once, then incrementally add new modules for subsequent iterations.
+            if (iter == 1) {
+                V3LinkDotDepGraph::build(rootp);
+            } else {
+                V3LinkDotDepGraph::buildIncremental(rootp);
+            }
 
             // OOO analogy: resolve() "executes" nodes once deps are ready, apply() "commits".
-            // Cached widths can still be stale until apply() updates RefDType links/widths.
-            // So we re-run resolve() after apply() to re-execute any dependent nodes with
-            // committed widths, then apply() again to finalize those updates.
-            const int depItersPre = V3LinkDotDepGraph::resolve();
-            const int applyChangesPre = V3LinkDotDepGraph::apply();
-            V3LinkDotDepGraph::clearResolved();
-            const int depItersPost = V3LinkDotDepGraph::resolve();
-            const int applyChangesPost = V3LinkDotDepGraph::apply();
-            const int applyChanges = applyChangesPre + applyChangesPost;
-            UINFO(3, "DEPGRAPH: iteration " << iter << " depIters=" << depItersPre
-                      << "/" << depItersPost << " applyChanges=" << applyChanges
+            const int depSteps = V3LinkDotDepGraph::resolve();
+            const int applyChanges = V3LinkDotDepGraph::apply();
+            UINFO(3, "DEPGRAPH: iteration " << iter << " depSteps=" << depSteps
+                      << " applyChanges=" << applyChanges
                       << " moduleCount=" << moduleCount
                       << " prevModuleCount=" << prevModuleCount << endl);
 

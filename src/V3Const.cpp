@@ -106,6 +106,9 @@ class ConstBitOpTreeVisitor final : public VNVisitorConst {
         // CONSTRUCTORS
         LeafInfo() = default;
         LeafInfo(const LeafInfo& other) = default;
+        LeafInfo& operator=(const LeafInfo& other) = default;
+        LeafInfo(LeafInfo&& other) = default;
+        LeafInfo& operator=(LeafInfo&& other) = default;
         explicit LeafInfo(int lsb)
             : m_lsb{lsb} {}
 
