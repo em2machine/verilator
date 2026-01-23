@@ -457,10 +457,12 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
             changed = true;
         } else {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+            AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
             // Clear typedefp if it points to a template module typedef - these will be deleted
             // by V3Dead and must not be referenced from specialized modules.
             // Top modules must keep their typedefp even if parameterized, since there is no clone.
-            if (tdOwnerp && !tdOwnerp->isTop() && tdOwnerp->hasGParam()
+            if (tdOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
+                && !tdOwnerp->isTop() && tdOwnerp->hasGParam()
                 && tdOwnerp->name().find("__") == string::npos) {
                 UINFO(5, "DEPGRAPH: commit clear template typedefp '" << tdp->name()
                           << "' for RefDType '" << rdp->name() << "'" << endl);
@@ -475,7 +477,9 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
     // Top modules must keep their types in place since there is no clone.
     if (AstNodeDType* const subp = rdp->refDTypep()) {
         AstNodeModule* const subOwnerp = V3LinkDotDepGraph::findOwnerModule(subp);
-        if (subOwnerp && !subOwnerp->isTop() && subOwnerp->hasGParam()
+        AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+        if (subOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
+            && !subOwnerp->isTop() && subOwnerp->hasGParam()
             && subOwnerp->name().find("__") == string::npos
             && subp->backp()) {
             UINFO(5, "DEPGRAPH: commit move refDTypep target '" << subp->prettyTypeName()
@@ -550,12 +554,8 @@ static void normalizeRefTree(AstNode* nodep, const char* context = nullptr) {
                           << " childDTypep=" << tdp->childDTypep()
                           << " childDTypepPtr=" << static_cast<const void*>(tdp->childDTypep())
                           << endl);
-                if (tdp->childDTypep()) {
-                    UINFO(5, "DEPGRAPH: template-skip clearing childDTypep for typedef '"
-                              << tdp->name() << "'" << endl);
-                    tdp->childDTypep(nullptr);
-                    tdp->dtypep(nullptr);
-                }
+                // Keep childDTypep intact during template-skip so RefDTypes can still
+                // resolve against typedefs before commit-time retargeting.
             });
         }
     }
@@ -1708,6 +1708,14 @@ private:
         const auto regIt = V3LinkDotDepGraph::s_refDTypeDotPathRegistry.find(nodep);
         if (regIt != V3LinkDotDepGraph::s_refDTypeDotPathRegistry.end()) {
             depNodep->cellName = regIt->second;
+        } else if (AstRefDType* const origRefp = nodep->clonep()) {
+            const auto origIt = V3LinkDotDepGraph::s_refDTypeDotPathRegistry.find(origRefp);
+            if (origIt != V3LinkDotDepGraph::s_refDTypeDotPathRegistry.end()) {
+                depNodep->cellName = origIt->second;
+                UINFO(5, "DEPGRAPH: inherited refdtype dotpath '" << depNodep->cellName
+                          << "' for '" << nodep->name() << "' in "
+                          << (m_modp ? m_modp->name() : "<unknown>") << endl);
+            }
         }
 
         // If the REFDTYPE is a child of a PARAMTYPEDTYPE, try to get the full dotpath from
