@@ -482,6 +482,37 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
             && !subOwnerp->isTop() && subOwnerp->hasGParam()
             && subOwnerp->name().find("__") == string::npos
             && subp->backp()) {
+            if (AstParamTypeDType* const subPtdp = VN_CAST(subp, ParamTypeDType)) {
+                if (AstParamTypeDType* const clonePtdp = subPtdp->clonep()) {
+                    AstNodeModule* const cloneOwnerp = V3LinkDotDepGraph::findOwnerModule(clonePtdp);
+                    if (cloneOwnerp && cloneOwnerp->name().find("__") != string::npos) {
+                        UINFO(5, "DEPGRAPH: commit retarget refDTypep target '" << subp->name()
+                                  << "' to clone '" << cloneOwnerp->name()
+                                  << "' for RefDType '" << rdp->name() << "'" << endl);
+                        rdp->refDTypep(clonePtdp);
+                        rdp->dtypep(nullptr);
+                        rdp->didWidth(false);
+                        changed = true;
+                        goto skip_move_refdtypep;
+                    }
+                }
+                if (rdOwnerp) {
+                    for (AstNode* stmtp = rdOwnerp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstParamTypeDType* const localPtdp = VN_CAST(stmtp, ParamTypeDType)) {
+                            if (localPtdp->name() == subPtdp->name()) {
+                                UINFO(5, "DEPGRAPH: commit retarget refDTypep target '"
+                                          << subPtdp->name() << "' to '" << rdOwnerp->name()
+                                          << "' for RefDType '" << rdp->name() << "'" << endl);
+                                rdp->refDTypep(localPtdp);
+                                rdp->dtypep(nullptr);
+                                rdp->didWidth(false);
+                                changed = true;
+                                goto skip_move_refdtypep;
+                            }
+                        }
+                    }
+                }
+            }
             UINFO(5, "DEPGRAPH: commit move refDTypep target '" << subp->prettyTypeName()
                       << "' from template '" << subOwnerp->name()
                       << "' to TYPETABLE for RefDType '" << rdp->name() << "'" << endl);
@@ -490,6 +521,7 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
             changed = true;
         }
     }
+skip_move_refdtypep:
     // Clear stale refDTypep when typedefp already points to specialized module
     if (rdp->typedefp() && rdp->refDTypep()) {
         AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp->typedefp());
@@ -2328,26 +2360,61 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             // The RefDType inside it was already retargeted above, so safe to delete.
             if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
                 if (ptdp->dtypep() == childp) return;  // Still referenced; keep alive
-                if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
-                    if (reqp->lhsp() == ptdp->dtypep()) {
-                        // Detach the resolved dtype from RequireDType so we can drop childDTypep.
-                        AstNode* const lhsp = reqp->lhsp();
-                        if (lhsp) {
-                            lhsp->unlinkFrBack();
-                            if (AstNodeDType* const dtypelhsp = VN_CAST(lhsp, NodeDType)) {
-                                v3Global.rootp()->typeTablep()->addTypesp(dtypelhsp);
+                if (childp->backp() != ptdp) {
+                    // Child is owned elsewhere; don't delete shared nodes.
+                    UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
+                              << "' (backp mismatch) in " << nodeOwnerName(nodep) << endl);
+                    ptdp->childDTypep(nullptr);
+                } else if (AstParamTypeDType* const origPtdp = ptdp->clonep()) {
+                    if (origPtdp->getChildDTypep() == childp) {
+                        // Shared with template clone; leave original intact.
+                        UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
+                                  << "' (shared with template) in " << nodeOwnerName(nodep) << endl);
+                        ptdp->childDTypep(nullptr);
+                    } else {
+                        if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
+                            if (reqp->lhsp() == ptdp->dtypep()) {
+                                // Detach the resolved dtype from RequireDType so we can drop childDTypep.
+                                AstNode* const lhsp = reqp->lhsp();
+                                if (lhsp) {
+                                    lhsp->unlinkFrBack();
+                                    if (AstNodeDType* const dtypelhsp = VN_CAST(lhsp, NodeDType)) {
+                                        v3Global.rootp()->typeTablep()->addTypesp(dtypelhsp);
+                                    }
+                                }
+                                reqp->lhsp(nullptr);
+                                UINFO(5, "DEPGRAPH: detached RequireDType lhs for paramtype '"
+                                          << ptdp->name() << "' in " << nodeOwnerName(nodep) << endl);
                             }
                         }
-                        reqp->lhsp(nullptr);
-                        UINFO(5, "DEPGRAPH: detached RequireDType lhs for paramtype '"
-                                  << ptdp->name() << "' in " << nodeOwnerName(nodep) << endl);
+                        UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
+                                  << "' in " << nodeOwnerName(nodep) << endl);
+                        childp->unlinkFrBack();
+                        ptdp->childDTypep(nullptr);
+                        VL_DO_DANGLING(childp->deleteTree(), childp);
                     }
+                } else {
+                    if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
+                        if (reqp->lhsp() == ptdp->dtypep()) {
+                            // Detach the resolved dtype from RequireDType so we can drop childDTypep.
+                            AstNode* const lhsp = reqp->lhsp();
+                            if (lhsp) {
+                                lhsp->unlinkFrBack();
+                                if (AstNodeDType* const dtypelhsp = VN_CAST(lhsp, NodeDType)) {
+                                    v3Global.rootp()->typeTablep()->addTypesp(dtypelhsp);
+                                }
+                            }
+                            reqp->lhsp(nullptr);
+                            UINFO(5, "DEPGRAPH: detached RequireDType lhs for paramtype '"
+                                      << ptdp->name() << "' in " << nodeOwnerName(nodep) << endl);
+                        }
+                    }
+                    UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
+                              << "' in " << nodeOwnerName(nodep) << endl);
+                    childp->unlinkFrBack();
+                    ptdp->childDTypep(nullptr);
+                    VL_DO_DANGLING(childp->deleteTree(), childp);
                 }
-                UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
-                          << "' in " << nodeOwnerName(nodep) << endl);
-                childp->unlinkFrBack();
-                ptdp->childDTypep(nullptr);
-                VL_DO_DANGLING(childp->deleteTree(), childp);
             }
 
             // Normalize any RefDTypes updated during paramtype resolution.
