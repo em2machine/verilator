@@ -2303,6 +2303,25 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
             return;
         }
+        if (!nodep->subDTypep() && V3LinkDotDepGraph::useInParam()) {
+            bool inTemplateModule = false;
+            bool hasOwnerModule = false;
+            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                    hasOwnerModule = true;
+                    if (modp->hasGParam() && modp->name().find("__") == string::npos) {
+                        inTemplateModule = true;
+                    }
+                    break;
+                }
+            }
+            if (!hasOwnerModule) inTemplateModule = true;
+            if (inTemplateModule) {
+                // DepGraph clears template typedef subDTypep during commit to avoid
+                // dangling type pointers. Defer widthing until specialized clones exist.
+                return;
+            }
+        }
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
     }

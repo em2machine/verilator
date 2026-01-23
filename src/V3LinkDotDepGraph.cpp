@@ -453,8 +453,9 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         } else {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             // Clear typedefp if it points to a template module typedef - these will be deleted
-            // by V3Dead and must not be referenced from specialized modules
-            if (tdOwnerp && tdOwnerp->hasGParam()
+            // by V3Dead and must not be referenced from specialized modules.
+            // Top modules must keep their typedefp even if parameterized, since there is no clone.
+            if (tdOwnerp && !tdOwnerp->isTop() && tdOwnerp->hasGParam()
                 && tdOwnerp->name().find("__") == string::npos) {
                 UINFO(5, "DEPGRAPH: commit clear template typedefp '" << tdp->name()
                           << "' for RefDType '" << rdp->name() << "'" << endl);
@@ -465,10 +466,11 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
             }
         }
     }
-    // Move template refDTypep targets to TYPETABLE so they survive template deletion
+    // Move template refDTypep targets to TYPETABLE so they survive template deletion.
+    // Top modules must keep their types in place since there is no clone.
     if (AstNodeDType* const subp = rdp->refDTypep()) {
         AstNodeModule* const subOwnerp = V3LinkDotDepGraph::findOwnerModule(subp);
-        if (subOwnerp && subOwnerp->hasGParam()
+        if (subOwnerp && !subOwnerp->isTop() && subOwnerp->hasGParam()
             && subOwnerp->name().find("__") == string::npos
             && subp->backp()) {
             UINFO(5, "DEPGRAPH: commit move refDTypep target '" << subp->prettyTypeName()
@@ -714,6 +716,11 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
     if (resolvedWidth <= 0) return;
     forEachRefDType(ownerModp, [&](AstRefDType* rdp) {
         if (!rdp) return;
+        // Only retarget RefDTypes owned by this specialized module. Skip typetable
+        // or class-owned RefDTypes to avoid cross-module name collisions (e.g.,
+        // class-local T inside p_class.p_type).
+        AstNodeModule* const rdpOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+        if (!rdpOwnerp || rdpOwnerp != ownerModp) return;
         if (AstParamTypeDType* const curp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
             AstNodeDType* const curSubp = curp->subDTypep();
             const int curWidth = curSubp ? curSubp->width() : curp->width();
@@ -1069,9 +1076,10 @@ private:
 
     void visit(AstNodeModule* nodep) override {
         // Skip dead modules and template modules (unspecialized parameterized modules)
-        // Template modules have GParams but no specialization suffix
+        // Template modules have GParams but no specialization suffix. Top modules must
+        // still be visited/resolved, even if parameterized, since there is no clone.
         if (nodep->dead()) return;
-        if (nodep->hasGParam() && nodep->name().find("__") == string::npos) {
+        if (!nodep->isTop() && nodep->hasGParam() && nodep->name().find("__") == string::npos) {
             UINFO(9, "DEPGRAPH: skip template module " << nodep->name() << endl);
             // Cleanup RefDTypes in template modules to avoid dangling typedefp after V3Dead
             normalizeRefTree(nodep, "template-skip");
@@ -1607,6 +1615,9 @@ private:
                                    && pair.second->nodep) {
                             AstParamTypeDType* const ptdp = VN_CAST(pair.second->nodep, ParamTypeDType);
                             if (ptdp && ptdp->name() == typedefName) {
+                                // Only match paramtypes owned by the current module to avoid
+                                // cross-module name collisions (e.g., class-local T vs module T).
+                                if (pair.second->ownerModp != m_modp) continue;
                                 targetPtdp = ptdp;
                                 targetModp = pair.second->ownerModp;
                                 UINFO(9, "DEPGRAPH: found paramtype '" << typedefName
@@ -2037,9 +2048,10 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                       << "' in dead module " << ownerModp->name() << endl);
             return;
         }
-        // Skip template modules (unspecialized) - they have params but no __ suffix
+        // Skip template modules (unspecialized) - they have params but no __ suffix.
+        // Top modules must still be resolved even if parameterized, since there is no clone.
         const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
-        if (!hasSpecSuffix && ownerModp->hasGParam()) {
+        if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) {
             UINFO(9, "DEPGRAPH: skip re-evaluate '" << nodeName(nodep)
                       << "' in template module (GParam) " << ownerModp->name() << endl);
             return;
@@ -2225,25 +2237,53 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             }
         }
 
-        // If no dependency edge found, check for captured type binding from V3Param
-        if (!targetDTypep && nodep->origExprp) {
-            if (AstNodeDType* const boundDTypep = VN_CAST(nodep->origExprp, NodeDType)) {
-                targetDTypep = boundDTypep;
-                targetName = boundDTypep->prettyDTypeName(true);
-                UINFO(5, "DEPGRAPH: found captured type binding '" << targetName
-                          << "' for paramtype '" << ptdp->name()
-                          << "' in " << nodeOwnerName(nodep) << endl);
+        // If no dependency edge found a typedef/paramtype, use the PARAMTYPEDTYPE's
+        // own subDTypep which should have been resolved through graph edges.
+        if (!targetDTypep) {
+            if (AstNodeDType* const subp = ptdp->subDTypep()) {
+                targetDTypep = subp;
+                targetName = subp->prettyTypeName();
+                UINFO(5, "DEPGRAPH: using paramtype subDTypep '" << targetName
+                          << "' for dtypep in " << nodeOwnerName(nodep) << endl);
+            }
+        }
+
+        // If the target is a RequireDType wrapper, unwrap to the actual dtype.
+        if (AstRequireDType* const reqp = VN_CAST(targetDTypep, RequireDType)) {
+            if (AstNodeDType* const lhsp = VN_CAST(reqp->lhsp(), NodeDType)) {
+                targetDTypep = lhsp;
+                targetName = lhsp->prettyTypeName();
+                UINFO(5, "DEPGRAPH: unwrapped RequireDType to '" << targetName
+                          << "' for paramtype '" << ptdp->name() << "' in "
+                          << nodeOwnerName(nodep) << endl);
             }
         }
 
         if (targetDTypep) {
-            // Update the PARAMTYPEDTYPE to reference the resolved dtype
-            ptdp->dtypep(targetDTypep);
-            nodep->resolvedWidth = targetDTypep->width();
+            // Update the PARAMTYPEDTYPE to reference the resolved dtype.
+            // Use skipRefp() to get the underlying type, not an intermediate RefDType
+            // which may have stale internal pointers after widthing/cloning.
+            AstNodeDType* const resolvedDTypep = targetDTypep->skipRefp();
+            AstNodeDType* const finalDTypep = resolvedDTypep ? resolvedDTypep : targetDTypep;
+            ptdp->dtypep(finalDTypep);
+            nodep->resolvedWidth = finalDTypep->width();
             UINFO(5, "DEPGRAPH: updated paramtype '" << ptdp->name()
                       << "' dtypep to '" << targetName
-                      << "' (width=" << targetDTypep->width() << ")"
+                      << "' (width=" << finalDTypep->width() << ")"
                       << " in " << nodeOwnerName(nodep) << endl);
+
+            // Record the resolved width on the paramtype itself without re-walking
+            // the underlying dtype. This avoids mutating shared typedef/struct widths
+            // across modules while still allowing $bits(T) to see the correct width.
+            const int oldWidth = ptdp->width();
+            ptdp->widthForce(finalDTypep->width(), finalDTypep->widthMin());
+            ptdp->didWidth(true);
+            if (oldWidth != ptdp->width()) {
+                nodep->resolvedWidth = ptdp->width();
+                UINFO(5, "DEPGRAPH: paramtype '" << ptdp->name()
+                          << "' width forced from " << oldWidth
+                          << " to " << ptdp->width() << " in " << nodeOwnerName(nodep) << endl);
+            }
 
             // If the paramtype has a required type RefDType, retarget it to the same typedef
             if (targetTypedefp) {
@@ -2265,6 +2305,22 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             // The childDTypep (RequireDType) is normally removed after dtype resolution.
             // The RefDType inside it was already retargeted above, so safe to delete.
             if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
+                if (ptdp->dtypep() == childp) return;  // Still referenced; keep alive
+                if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
+                    if (reqp->lhsp() == ptdp->dtypep()) {
+                        // Detach the resolved dtype from RequireDType so we can drop childDTypep.
+                        AstNode* const lhsp = reqp->lhsp();
+                        if (lhsp) {
+                            lhsp->unlinkFrBack();
+                            if (AstNodeDType* const dtypelhsp = VN_CAST(lhsp, NodeDType)) {
+                                v3Global.rootp()->typeTablep()->addTypesp(dtypelhsp);
+                            }
+                        }
+                        reqp->lhsp(nullptr);
+                        UINFO(5, "DEPGRAPH: detached RequireDType lhs for paramtype '"
+                                  << ptdp->name() << "' in " << nodeOwnerName(nodep) << endl);
+                    }
+                }
                 UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
                           << "' in " << nodeOwnerName(nodep) << endl);
                 childp->unlinkFrBack();
