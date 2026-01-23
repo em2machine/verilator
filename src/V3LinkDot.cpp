@@ -4076,14 +4076,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                             // Find the enclosing PARAMTYPEDTYPE or typedef that will use this
                             for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
                                 if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
-                                    if (defp->name() != ptdp->name()) {
-                                        UINFO(5, indent()
-                                                  << "DEPGRAPH: skip iface-cell assoc paramtype='"
-                                                  << ptdp->name() << "' typedef='" << defp->name()
-                                                  << "' (name mismatch) in "
-                                                  << (m_modp ? m_modp->name() : "<null>") << "\n");
-                                        break;
-                                    }
                                     string assocCellName = cellp->name();
                                     if (!m_ds.m_dotText.empty()
                                         && m_ds.m_dotText.find('.') == string::npos) {
