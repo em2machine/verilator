@@ -315,6 +315,11 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     auto it = s_nodes.find(nodep);
     if (it != s_nodes.end()) return it->second;
 
+    if (type == NodeType::PARAMTYPEDTYPE) {
+        UASSERT_OBJ(ownerModp, nodep,
+                    "DEPGRAPH: PARAMTYPEDTYPE node created with null owner module");
+    }
+
     DepNode* const depNodep = new DepNode;
     depNodep->nodep = nodep;
     depNodep->nodeType = type;
@@ -1017,30 +1022,39 @@ private:
         } else if (AstParamTypeDType* const ptdp = VN_CAST(nodep->refDTypep(), ParamTypeDType)) {
             AstParamTypeDType* targetPtdp = ptdp;
             AstNodeModule* ptOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
-            if (ptOwnerp && m_depNode && m_depNode->ownerModp
-                && ptOwnerp->hasGParam() && ptOwnerp->name().find("__") == string::npos) {
-                for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    if (AstParamTypeDType* const cellPtdp = VN_CAST(stmtp, ParamTypeDType)) {
-                        if (cellPtdp->name() == ptdp->name()) {
-                            targetPtdp = cellPtdp;
-                            ptOwnerp = m_depNode->ownerModp;
-                            break;
+            if (m_depNode && m_depNode->ownerModp) {
+                const bool isTemplateOwner = ptOwnerp && ptOwnerp->hasGParam()
+                                            && ptOwnerp->name().find("__") == string::npos;
+                if (!ptOwnerp || isTemplateOwner) {
+                    for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp;
+                         stmtp = stmtp->nextp()) {
+                        if (AstParamTypeDType* const cellPtdp = VN_CAST(stmtp, ParamTypeDType)) {
+                            if (cellPtdp->name() == ptdp->name()) {
+                                targetPtdp = cellPtdp;
+                                ptOwnerp = m_depNode->ownerModp;
+                                break;
+                            }
                         }
                     }
                 }
             }
-            V3LinkDotDepGraph::DepNode* const ptNodep
-                = V3LinkDotDepGraph::findOrCreateNode(
-                    targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
-            // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
-            const bool isSelfRef = (ptOwnerp == V3LinkDotDepGraph::findOwnerModule(nodep)
-                                    && targetPtdp->name() == nodep->name());
-            if (!isSelfRef) {
-                V3LinkDotDepGraph::addEdge(targetp, ptNodep);
-                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
-                          << targetPtdp->name() << "' in "
-                          << (ptOwnerp ? ptOwnerp->name() : "<null>")
-                          << (targetPtdp != ptdp ? " (retargeted)" : "") << endl);
+            if (!ptOwnerp) {
+                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                          << "' skip paramtype edge (null owner)" << endl);
+            } else {
+                V3LinkDotDepGraph::DepNode* const ptNodep
+                    = V3LinkDotDepGraph::findOrCreateNode(
+                        targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
+                // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
+                const bool isSelfRef = (ptOwnerp == V3LinkDotDepGraph::findOwnerModule(nodep)
+                                        && targetPtdp->name() == nodep->name());
+                if (!isSelfRef) {
+                    V3LinkDotDepGraph::addEdge(targetp, ptNodep);
+                    UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
+                              << targetPtdp->name() << "' in "
+                              << (ptOwnerp ? ptOwnerp->name() : "<null>")
+                              << (targetPtdp != ptdp ? " (retargeted)" : "") << endl);
+                }
             }
         }
         iterateChildrenConst(nodep);
