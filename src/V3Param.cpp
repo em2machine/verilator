@@ -2498,9 +2498,12 @@ void V3Param::param(AstNetlist* rootp) {
                 V3LinkDotDepGraph::buildIncremental(rootp);
             }
 
+            V3LinkDotDepGraph::beginIteration(rootp);
+
             // OOO analogy: resolve() "executes" nodes once deps are ready, apply() "commits".
             const int depSteps = V3LinkDotDepGraph::resolve();
             const int applyChanges = V3LinkDotDepGraph::apply();
+            V3LinkDotDepGraph::postIterationCleanup(rootp);
             UINFO(3, "DEPGRAPH: iteration " << iter << " depSteps=" << depSteps
                       << " applyChanges=" << applyChanges
                       << " moduleCount=" << moduleCount

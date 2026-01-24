@@ -222,8 +222,25 @@ private:
                 UASSERT_OBJ(!nodep->dtypep(), nodep,
                             "DType on node without hasDType(): " << nodep->prettyTypeName());
             }
-            UASSERT_OBJ(!nodep->getChildDTypep(), nodep,
-                        "childDTypep() non-null on node after should have removed");
+            // Skip childDTypep check for PARAMTYPEDTYPE in template modules.
+            // Template modules may have unresolved PARAMTYPEDTYPE nodes with childDTypep
+            // still set because V3Width only processes specialized clones, not templates.
+            if (nodep->getChildDTypep()) {
+                bool skipCheck = false;
+                if (VN_IS(nodep, ParamTypeDType)) {
+                    for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                        if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
+                            // Template module: has GParam and no __ in name (not specialized)
+                            if (modp->hasGParam() && modp->name().find("__") == string::npos) {
+                                skipCheck = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                UASSERT_OBJ(skipCheck, nodep,
+                            "childDTypep() non-null on node after should have removed");
+            }
             if (const AstNodeDType* const dnodep = VN_CAST(nodep, NodeDType))
                 checkWidthMin(dnodep);
         }

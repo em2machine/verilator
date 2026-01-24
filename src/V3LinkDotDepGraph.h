@@ -135,6 +135,15 @@ public:
     // Returns number of iterations needed
     static int resolve();
 
+    // Iteration boundary hook (recompute pending deps / mark-ready)
+    static void beginIteration(AstNetlist* netlistp);
+
+    // Optional post-iteration cleanup hook (no structural changes by default)
+    static void postIterationCleanup(AstNetlist* netlistp);
+
+    // Optional post-width cleanup hook (called from V3Width in param flow)
+    static void postWidthCleanup(AstNode* nodep);
+
     // Apply resolved typedefs to RefDType nodes
     // Returns number of changes applied (for fixed-point looping)
     static int apply();

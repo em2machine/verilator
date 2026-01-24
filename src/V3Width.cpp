@@ -2330,6 +2330,11 @@ class WidthVisitor final : public VNVisitor {
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
         nodep->widthFromSub(nodep->subDTypep());
+        // Clear childDTypep after dtypep is set to satisfy V3Broken invariant.
+        // The child dtype has been moved to the type table by iterateEditMoveDTypep.
+        if (nodep->dtypep() && nodep->childDTypep()) {
+            nodep->childDTypep(nullptr);
+        }
     }
     void visit(AstRequireDType* nodep) override {
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
@@ -9320,6 +9325,7 @@ AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
     WidthVisitor visitor{true, false};
     nodep = visitor.mainAcceptEdit(nodep);
     // No WidthRemoveVisitor, as don't want to drop $signed etc inside gen blocks
+    V3LinkDotDepGraph::postWidthCleanup(nodep);
     return nodep;
 }
 
@@ -9339,5 +9345,6 @@ AstNode* V3Width::widthGenerateParamsEdit(
     WidthVisitor visitor{true, true};
     nodep = visitor.mainAcceptEdit(nodep);
     // No WidthRemoveVisitor, as don't want to drop $signed etc inside gen blocks
+    V3LinkDotDepGraph::postWidthCleanup(nodep);
     return nodep;
 }

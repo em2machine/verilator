@@ -2290,6 +2290,37 @@ void V3LinkDotDepGraph::buildIncremental(AstNetlist* netlistp) {
     }
 }
 
+void V3LinkDotDepGraph::beginIteration(AstNetlist* netlistp) {
+    if (!netlistp) return;
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        if (nodep->resolved) {
+            nodep->pendingDeps = 0;
+            continue;
+        }
+        int pending = 0;
+        for (DepNode* const depp : nodep->dependsOn) {
+            if (depp && !depp->resolved) ++pending;
+        }
+        nodep->pendingDeps = pending;
+        UINFO(9, "DEPGRAPH: pendingDeps '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
+                  << " = " << nodep->pendingDeps << endl);
+    }
+}
+
+void V3LinkDotDepGraph::postIterationCleanup(AstNetlist* netlistp) {
+    (void)netlistp;
+}
+
+void V3LinkDotDepGraph::postWidthCleanup(AstNode* nodep) {
+    if (!nodep) return;
+    if (AstNodeModule* const ownerModp = findOwnerModule(nodep)) {
+        const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
+        if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) return;
+    }
+    normalizeRefTree(nodep, "post-width");
+}
+
 //======================================================================
 // Resolution - helper to re-evaluate a single node
 
@@ -2571,6 +2602,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 } else if (ptdp->clonep()) {
                     // clonep() can be stale if the template clone was deleted; do not dereference it.
                     // Conservatively skip deletion when a clone exists to avoid UAF/dangling access.
+                    // V3Width will clear childDTypep on all PARAMTYPEDTYPE nodes after widthing.
                     UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
                               << "' (clone exists) in " << nodeOwnerName(nodep) << endl);
                     ptdp->childDTypep(nullptr);

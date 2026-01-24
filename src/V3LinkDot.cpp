@@ -5582,7 +5582,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
 
                 } else if (AstParamTypeDType* const defp
                            = foundp ? VN_CAST(foundp->nodep(), ParamTypeDType) : nullptr) {
-                    if (defp == nodep->backp()) {  // Where backp is typically typedef
+                    // A PARAMTYPEDTYPE's child REFDTYPE referencing itself is the normal
+                    // AST structure for type parameters (e.g., "type T = base" has a child
+                    // REFDTYPE for the default type). Only error on true recursion where
+                    // a TYPEDEF contains a reference back to itself.
+                    const bool isParamTypeChild = (defp == nodep->backp());
+                    const bool isTypedefRecursion = isParamTypeChild && VN_IS(defp->backp(), Typedef);
+                    if (isTypedefRecursion) {
                         nodep->v3error("Reference to '"
                                        << m_ds.m_dotText << (m_ds.m_dotText == "" ? "" : ".")
                                        << nodep->prettyName() << "'"
