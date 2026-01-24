@@ -420,26 +420,33 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         changed = true;
     }
 
-    // Enforce invariant: RefDType should not keep both typedefp and refDTypep.
+    // Enforce invariant: RefDType should not keep both typedefp and refDTypep
+    // unless refDTypep matches the typedef's subDTypep.
     if (rdp->refDTypep() && rdp->typedefp()) {
         AstTypedef* const curTdp = rdp->typedefp();
         AstNodeDType* const curRefp = rdp->refDTypep();
-        AstNodeModule* const tOwnerp = curTdp ? V3LinkDotDepGraph::findOwnerModule(curTdp) : nullptr;
-        AstNodeModule* const rOwnerp = curRefp ? V3LinkDotDepGraph::findOwnerModule(curRefp) : nullptr;
-        UINFO(5, "DEPGRAPH: commit clear typedefp for RefDType '" << rdp->name()
-                  << "' (refDTypep is set) typedef='" << (curTdp ? curTdp->name() : "<null>")
-                  << "' typedefp=" << curTdp
-                  << "' typedefBackp=" << (curTdp ? curTdp->backp() : nullptr)
-                  << "' typedefOwner='" << (tOwnerp ? tOwnerp->name() : "<null>")
-                  << "' refDType='" << (curRefp ? curRefp->prettyTypeName() : "<null>")
-                  << "' refDTypep=" << curRefp
-                  << "' refBackp=" << (curRefp ? curRefp->backp() : nullptr)
-                  << "' refOwner='" << (rOwnerp ? rOwnerp->name() : "<null>")
-                  << "'" << endl);
-        rdp->typedefp(nullptr);
-        rdp->dtypep(nullptr);
-        rdp->didWidth(false);
-        changed = true;
+        const bool allowBoth = curTdp && curRefp
+                               && (curTdp->subDTypep() == curRefp
+                                   || (curTdp->subDTypep()
+                                       && curTdp->subDTypep()->skipRefp() == curRefp));
+        if (!allowBoth) {
+            AstNodeModule* const tOwnerp = curTdp ? V3LinkDotDepGraph::findOwnerModule(curTdp) : nullptr;
+            AstNodeModule* const rOwnerp = curRefp ? V3LinkDotDepGraph::findOwnerModule(curRefp) : nullptr;
+            UINFO(5, "DEPGRAPH: commit clear typedefp for RefDType '" << rdp->name()
+                      << "' (refDTypep is set) typedef='" << (curTdp ? curTdp->name() : "<null>")
+                      << "' typedefp=" << curTdp
+                      << "' typedefBackp=" << (curTdp ? curTdp->backp() : nullptr)
+                      << "' typedefOwner='" << (tOwnerp ? tOwnerp->name() : "<null>")
+                      << "' refDType='" << (curRefp ? curRefp->prettyTypeName() : "<null>")
+                      << "' refDTypep=" << curRefp
+                      << "' refBackp=" << (curRefp ? curRefp->backp() : nullptr)
+                      << "' refOwner='" << (rOwnerp ? rOwnerp->name() : "<null>")
+                      << "'" << endl);
+            rdp->typedefp(nullptr);
+            rdp->dtypep(nullptr);
+            rdp->didWidth(false);
+            changed = true;
+        }
     }
 
     // Clear template/removed typedef pointers to avoid dangling links after V3Dead
@@ -458,6 +465,40 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         } else {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam()
+                && tdOwnerp->name().find("__") == string::npos) {
+                UINFO(5, "DEPGRAPH: commit refdtype has null owner but template typedef '"
+                          << tdp->name() << "'" << endl);
+                if (AstTypedef* const specTdp
+                    = V3LinkDotDepGraph::findSpecializedTypedef(tdp->name(), nullptr)) {
+                    UINFO(5, "DEPGRAPH: commit retarget null-owner refdtype '" << rdp->name()
+                              << "' to specialized typedef '" << specTdp->name() << "'" << endl);
+                    rdp->typedefp(specTdp);
+                    rdp->dtypep(nullptr);
+                    rdp->didWidth(false);
+                    changed = true;
+                } else {
+                    UINFO(5, "DEPGRAPH: commit clear template typedefp '" << tdp->name()
+                              << "' for null-owner RefDType '" << rdp->name() << "'" << endl);
+                    rdp->typedefp(nullptr);
+                    rdp->dtypep(nullptr);
+                    rdp->didWidth(false);
+                    changed = true;
+                }
+            }
+            if (tdOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
+                && tdOwnerp->hasGParam() && tdOwnerp->name().find("__") == string::npos) {
+                if (AstTypedef* const specTdp
+                    = V3LinkDotDepGraph::findSpecializedTypedef(tdp->name(), nullptr)) {
+                    UINFO(5, "DEPGRAPH: commit retarget template typedefp '" << tdp->name()
+                              << "' to specialized typedefp for RefDType '" << rdp->name()
+                              << "'" << endl);
+                    rdp->typedefp(specTdp);
+                    rdp->dtypep(nullptr);
+                    rdp->didWidth(false);
+                    changed = true;
+                }
+            }
             // Clear typedefp if it points to a template module typedef - these will be deleted
             // by V3Dead and must not be referenced from specialized modules.
             // Top modules must keep their typedefp even if parameterized, since there is no clone.
@@ -524,8 +565,14 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
 skip_move_refdtypep:
     // Clear stale refDTypep when typedefp already points to specialized module
     if (rdp->typedefp() && rdp->refDTypep()) {
-        AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp->typedefp());
-        if (tdOwnerp && tdOwnerp->name().find("__") != string::npos) {
+        AstTypedef* const curTdp = rdp->typedefp();
+        AstNodeDType* const curRefp = rdp->refDTypep();
+        const bool allowBoth = curTdp && curRefp
+                               && (curTdp->subDTypep() == curRefp
+                                   || (curTdp->subDTypep()
+                                       && curTdp->subDTypep()->skipRefp() == curRefp));
+        AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(curTdp);
+        if (!allowBoth && tdOwnerp && tdOwnerp->name().find("__") != string::npos) {
             UINFO(5, "DEPGRAPH: commit clear stale refDTypep for '" << rdp->name()
                       << "' in specialized module '" << tdOwnerp->name() << "'" << endl);
             rdp->refDTypep(nullptr);
@@ -542,6 +589,23 @@ skip_move_refdtypep:
             rdp->dtypep(refp);
             rdp->widthForce(refp->width(), refp->widthMin());
             changed = true;
+        }
+    }
+
+    if (rdp->name() == "byte_t") {
+        AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+        AstTypedef* const dbgTdp = rdp->typedefp();
+        AstNodeModule* const tdOwnerp = dbgTdp ? V3LinkDotDepGraph::findOwnerModule(dbgTdp) : nullptr;
+        if (rdOwnerp && rdOwnerp->name().find("__") != string::npos) {
+            UINFO(5, "DEPGRAPH: debug byte_t RefDType owner='" << rdOwnerp->name()
+                      << "' typedefp=" << dbgTdp
+                      << " typedefOwner='" << (tdOwnerp ? tdOwnerp->name() : "<null>")
+                      << "' typedefBackp=" << (dbgTdp ? dbgTdp->backp() : nullptr)
+                      << " subDTypep=" << (dbgTdp ? dbgTdp->subDTypep() : nullptr)
+                      << " childDTypep=" << (dbgTdp ? dbgTdp->childDTypep() : nullptr)
+                      << " refDTypep=" << rdp->refDTypep()
+                      << " refBackp=" << (rdp->refDTypep() ? rdp->refDTypep()->backp() : nullptr)
+                      << " dtypep=" << rdp->dtypep() << endl);
         }
     }
 
@@ -588,6 +652,19 @@ static void normalizeRefTree(AstNode* nodep, const char* context = nullptr) {
                           << endl);
                 // Keep childDTypep intact during template-skip so RefDTypes can still
                 // resolve against typedefs before commit-time retargeting.
+            });
+            modp->foreach([&](AstRefDType* rdp) {
+                if (!rdp) return;
+                AstTypedef* const tdp = rdp->typedefp();
+                if (!tdp) return;
+                AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+                if (tdOwnerp != modp) return;
+                UINFO(5, "DEPGRAPH: template-skip refdtype name='" << rdp->name()
+                          << "' refdtypep=" << rdp
+                          << " typedefp=" << tdp
+                          << " refDTypep=" << rdp->refDTypep()
+                          << " dtypep=" << rdp->dtypep()
+                          << endl);
             });
         }
     }
@@ -636,6 +713,23 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
                   << " dtypep=" << rdp->dtypep()
                   << endl);
         normalizeRef(rdp);
+        if (AstTypedef* const postTdp = rdp->typedefp()) {
+            AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(postTdp);
+            AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam()
+                && tdOwnerp->name().find("__") == string::npos) {
+                UINFO(5, "DEPGRAPH: normalizeRef refdtype has null owner but template typedef name='"
+                          << postTdp->name() << "' refdtype='" << rdp->name() << "'" << endl);
+            }
+            if (tdOwnerp && rdOwnerp && rdOwnerp != tdOwnerp && tdOwnerp->hasGParam()
+                && tdOwnerp->name().find("__") == string::npos) {
+                UINFO(5, "DEPGRAPH: commit REFDTYPE still points at template typedef name='"
+                          << postTdp->name() << "' refdtype='" << rdp->name()
+                          << "' refOwner='" << rdOwnerp->name()
+                          << "' typedefOwner='" << tdOwnerp->name()
+                          << "'" << endl);
+            }
+        }
         logRefDTypeState("commit REFDTYPE post", rdp);
     }
 }
