@@ -41,6 +41,8 @@ std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPa
 std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
 std::unordered_map<V3LinkDotDepGraph::TypedefClassKey, AstClass*,
                    V3LinkDotDepGraph::TypedefClassKeyHash> V3LinkDotDepGraph::s_typedefClassMap;
+static std::unordered_map<AstRefDType*, AstTypedef*> s_refDTypeScopedTypedefs;
+static std::unordered_map<AstTypedef*, AstTypedef*> s_typedefScopedTypedefs;
 
 // Map from (module name, paramtype name) to cell name (captured during linkdot primary)
 // We use names instead of pointers because nodes get cloned during V3Param
@@ -197,6 +199,8 @@ void V3LinkDotDepGraph::reset() {
     // and need to persist until graph building which happens later
     // Note: Do NOT clear s_refDTypeDotPathRegistry here - populated during linkdot primary
     // and needed during graph build which occurs later.
+    // Note: Do NOT clear s_refDTypeScopedTypedefs here - populated during linkdot primary
+    // and needed during graph build which occurs later.
     s_iterationCount = 0;
     s_builtModules.clear();
 }
@@ -205,6 +209,8 @@ void V3LinkDotDepGraph::resetAll() {
     reset();
     s_cellAssociations.clear();
     s_refDTypeDotPathRegistry.clear();
+    s_refDTypeScopedTypedefs.clear();
+    s_typedefScopedTypedefs.clear();
     s_typedefClassMap.clear();
 }
 
@@ -253,6 +259,20 @@ void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string&
     s_refDTypeDotPathRegistry.emplace(refp, cellName);
     UINFO(5, "DEPGRAPH: registered refdtype dotpath '" << cellName << "' for '" << refp->name()
                   << "' in " << (contextModp ? contextModp->name() : "<unknown>") << endl);
+}
+
+void V3LinkDotDepGraph::registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp) {
+    if (!refp || !tdp) return;
+    s_refDTypeScopedTypedefs[refp] = tdp;
+    UINFO(5, "DEPGRAPH: registered refdtype scoped typedef '" << refp->name()
+              << "' -> '" << tdp->name() << "'" << endl);
+}
+
+void V3LinkDotDepGraph::registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp) {
+    if (!typedefp || !scopedp) return;
+    s_typedefScopedTypedefs[typedefp] = scopedp;
+    UINFO(5, "DEPGRAPH: registered typedef scoped typedef '" << typedefp->name()
+              << "' -> '" << scopedp->name() << "'" << endl);
 }
 
 void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
@@ -589,23 +609,6 @@ skip_move_refdtypep:
             rdp->dtypep(refp);
             rdp->widthForce(refp->width(), refp->widthMin());
             changed = true;
-        }
-    }
-
-    if (rdp->name() == "byte_t") {
-        AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
-        AstTypedef* const dbgTdp = rdp->typedefp();
-        AstNodeModule* const tdOwnerp = dbgTdp ? V3LinkDotDepGraph::findOwnerModule(dbgTdp) : nullptr;
-        if (rdOwnerp && rdOwnerp->name().find("__") != string::npos) {
-            UINFO(5, "DEPGRAPH: debug byte_t RefDType owner='" << rdOwnerp->name()
-                      << "' typedefp=" << dbgTdp
-                      << " typedefOwner='" << (tdOwnerp ? tdOwnerp->name() : "<null>")
-                      << "' typedefBackp=" << (dbgTdp ? dbgTdp->backp() : nullptr)
-                      << " subDTypep=" << (dbgTdp ? dbgTdp->subDTypep() : nullptr)
-                      << " childDTypep=" << (dbgTdp ? dbgTdp->childDTypep() : nullptr)
-                      << " refDTypep=" << rdp->refDTypep()
-                      << " refBackp=" << (rdp->refDTypep() ? rdp->refDTypep()->backp() : nullptr)
-                      << " dtypep=" << rdp->dtypep() << endl);
         }
     }
 
@@ -1384,6 +1387,28 @@ private:
         V3LinkDotDepGraph::DepNode* const depNodep
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::TYPEDEF, m_modp);
 
+        if (nodep->name() == "type_id") {
+            AstRefDType* const childRefp = VN_CAST(nodep->subDTypep(), RefDType);
+            const bool scopedHit = childRefp
+                                  && s_refDTypeScopedTypedefs.find(childRefp)
+                                         != s_refDTypeScopedTypedefs.end();
+            UINFO(5, "DEPGRAPH: typedef type_id in "
+                      << (m_modp ? m_modp->name() : "<null>")
+                      << " child_ref=" << (childRefp ? childRefp->name() : "<none>")
+                      << " scoped_hit=" << (scopedHit ? "yes" : "no") << endl);
+            const auto tdIt = s_typedefScopedTypedefs.find(nodep);
+            if (tdIt != s_typedefScopedTypedefs.end()) {
+                AstTypedef* const scopeTdp = tdIt->second;
+                AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(scopeTdp);
+                V3LinkDotDepGraph::DepNode* const tdNodep
+                    = V3LinkDotDepGraph::findOrCreateNode(
+                        scopeTdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
+                UINFO(5, "DEPGRAPH: typedef type_id edge to scoped typedef '" << scopeTdp->name()
+                          << "' in " << (tdOwnerp ? tdOwnerp->name() : "<null>") << endl);
+            }
+        }
+
         // Collect dependencies from the subtype (e.g., width expressions)
         if (AstNodeDType* const dtypep = nodep->subDTypep()) {
             // For BasicDType, check the range expressions
@@ -2007,15 +2032,13 @@ private:
                                 const size_t suffixPos = ifaceBase.find("__");
                                 if (suffixPos != string::npos) ifaceBase = ifaceBase.substr(0, suffixPos);
                                 if (ifaceBase == ptdOwnerp->name()) {
-                                    for (AstNode* ifaceStmtp = ifaceModp->stmtsp(); ifaceStmtp;
-                                         ifaceStmtp = ifaceStmtp->nextp()) {
-                                        if (AstParamTypeDType* const ifacePtdp = VN_CAST(ifaceStmtp, ParamTypeDType)) {
-                                            if (ifacePtdp->name() == ptdp->name()) {
-                                                targetPtdp = ifacePtdp;
+                                    for (AstNode* cellStmtp = ifaceModp->stmtsp(); cellStmtp;
+                                         cellStmtp = cellStmtp->nextp()) {
+                                        if (AstParamTypeDType* const cellPtdp
+                                            = VN_CAST(cellStmtp, ParamTypeDType)) {
+                                            if (cellPtdp->name() == ptdp->name()) {
+                                                targetPtdp = cellPtdp;
                                                 ptdOwnerp = ifaceModp;
-                                                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
-                                                          << "' retargeted via iface port to "
-                                                          << ifaceModp->name() << endl);
                                                 break;
                                             }
                                         }
@@ -2034,6 +2057,91 @@ private:
         }
 
         // If this RefDType has an explicit class/package scope, add edge to that typedef/paramtype
+        if (AstClassOrPackageRef* const scopeRefp
+            = VN_CAST(nodep->classOrPackageOpp(), ClassOrPackageRef)) {
+            if (AstTypedef* const scopeTdp
+                = VN_CAST(scopeRefp->classOrPackageNodep(), Typedef)) {
+                AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(scopeTdp);
+                V3LinkDotDepGraph::DepNode* const tdNodep
+                    = V3LinkDotDepGraph::findOrCreateNode(
+                        scopeTdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
+                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                          << "' scoped by typedef '" << scopeTdp->name()
+                          << "' in " << (tdOwnerp ? tdOwnerp->name() : "<null>") << endl);
+            } else if (AstClass* const scopeClassp
+                       = VN_CAST(scopeRefp->classOrPackageSkipp(), Class)) {
+                for (AstNode* stmtp = scopeClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstTypedef* const candTdp = VN_CAST(stmtp, Typedef)) {
+                        if (candTdp->name() == nodep->name()) {
+                            AstNodeModule* const tdOwnerp
+                                = V3LinkDotDepGraph::findOwnerModule(candTdp);
+                            V3LinkDotDepGraph::DepNode* const tdNodep
+                                = V3LinkDotDepGraph::findOrCreateNode(
+                                    candTdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                            V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
+                            UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                                      << "' scoped by class '" << scopeClassp->name()
+                                      << "' typedef '" << candTdp->name() << "'" << endl);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        {
+            auto it = s_refDTypeScopedTypedefs.find(nodep);
+            AstTypedef* parentTdp = nullptr;
+            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                if (AstTypedef* const tdp = VN_CAST(backp, Typedef)) {
+                    parentTdp = tdp;
+                    break;
+                }
+                if (VN_IS(backp, NodeModule)) break;
+            }
+            if (nodep->name() == "uvm_object_registry") {
+                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                          << "' parent typedef=" << (parentTdp ? parentTdp->name() : "<none>")
+                          << " in " << (m_modp ? m_modp->name() : "<null>") << endl);
+            }
+            if (parentTdp && parentTdp->name() == "type_id") {
+                const bool directHit = it != s_refDTypeScopedTypedefs.end();
+                bool cloneHit = false;
+                AstRefDType* origRefp = nullptr;
+                if (!directHit) {
+                    origRefp = nodep->clonep();
+                    if (origRefp) {
+                        cloneHit = s_refDTypeScopedTypedefs.find(origRefp)
+                                   != s_refDTypeScopedTypedefs.end();
+                    }
+                }
+                UINFO(5, "DEPGRAPH: scoped typedef lookup for type_id in "
+                          << (m_modp ? m_modp->name() : "<null>")
+                          << " refdtype='" << nodep->name() << "'"
+                          << " parent='" << parentTdp->name() << "'"
+                          << " direct=" << (directHit ? "yes" : "no")
+                          << " clone=" << (cloneHit ? "yes" : "no")
+                          << " has_clone=" << (origRefp ? "yes" : "no") << endl);
+            }
+            if (it == s_refDTypeScopedTypedefs.end()) {
+                if (AstRefDType* const origRefp = nodep->clonep()) {
+                    it = s_refDTypeScopedTypedefs.find(origRefp);
+                }
+            }
+            if (it != s_refDTypeScopedTypedefs.end()) {
+                AstTypedef* const scopeTdp = it->second;
+                AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(scopeTdp);
+                V3LinkDotDepGraph::DepNode* const tdNodep
+                    = V3LinkDotDepGraph::findOrCreateNode(
+                        scopeTdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                V3LinkDotDepGraph::addEdge(depNodep, tdNodep);
+                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
+                          << "' scoped by registered typedef '" << scopeTdp->name()
+                          << "' in " << (tdOwnerp ? tdOwnerp->name() : "<null>") << endl);
+            }
+        }
+
         if (AstNodeModule* const scopeModp = nodep->classOrPackagep()) {
             AstNodeModule* searchModp = scopeModp;
             if (AstClassPackage* const pkgp = VN_CAST(scopeModp, ClassPackage)) {
@@ -2359,6 +2467,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         AstNodeDType* targetDTypep = nullptr;
         AstTypedef* targetTypedefp = nullptr;
         string targetName;
+
         for (DepNode* const depNodep : nodep->dependsOn) {
             if (depNodep->nodeType == NodeType::TYPEDEF) {
                 AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef);
@@ -2459,34 +2568,12 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                     UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
                               << "' (backp mismatch) in " << nodeOwnerName(nodep) << endl);
                     ptdp->childDTypep(nullptr);
-                } else if (AstParamTypeDType* const origPtdp = ptdp->clonep()) {
-                    if (origPtdp->getChildDTypep() == childp) {
-                        // Shared with template clone; leave original intact.
-                        UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
-                                  << "' (shared with template) in " << nodeOwnerName(nodep) << endl);
-                        ptdp->childDTypep(nullptr);
-                    } else {
-                        if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
-                            if (reqp->lhsp() == ptdp->dtypep()) {
-                                // Detach the resolved dtype from RequireDType so we can drop childDTypep.
-                                AstNode* const lhsp = reqp->lhsp();
-                                if (lhsp) {
-                                    lhsp->unlinkFrBack();
-                                    if (AstNodeDType* const dtypelhsp = VN_CAST(lhsp, NodeDType)) {
-                                        v3Global.rootp()->typeTablep()->addTypesp(dtypelhsp);
-                                    }
-                                }
-                                reqp->lhsp(nullptr);
-                                UINFO(5, "DEPGRAPH: detached RequireDType lhs for paramtype '"
-                                          << ptdp->name() << "' in " << nodeOwnerName(nodep) << endl);
-                            }
-                        }
-                        UINFO(5, "DEPGRAPH: removing paramtype childDTypep for '" << ptdp->name()
-                                  << "' in " << nodeOwnerName(nodep) << endl);
-                        childp->unlinkFrBack();
-                        ptdp->childDTypep(nullptr);
-                        VL_DO_DANGLING(childp->deleteTree(), childp);
-                    }
+                } else if (ptdp->clonep()) {
+                    // clonep() can be stale if the template clone was deleted; do not dereference it.
+                    // Conservatively skip deletion when a clone exists to avoid UAF/dangling access.
+                    UINFO(5, "DEPGRAPH: skip deleting paramtype childDTypep for '" << ptdp->name()
+                              << "' (clone exists) in " << nodeOwnerName(nodep) << endl);
+                    ptdp->childDTypep(nullptr);
                 } else {
                     if (AstRequireDType* const reqp = VN_CAST(childp, RequireDType)) {
                         if (reqp->lhsp() == ptdp->dtypep()) {
@@ -2528,6 +2615,39 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             UINFO(5, "DEPGRAPH: skip retarget refdtype '" << rdp->name()
                       << "' - null owner module" << endl);
             return;
+        }
+
+        // If we have a scoped typedef dependency (e.g. uvm_event_pool::type_id),
+        // resolve the scope typedef to its class and bind the matching typedef inside.
+        for (DepNode* const depNodep : nodep->dependsOn) {
+            if (depNodep->nodeType != NodeType::TYPEDEF) continue;
+            AstTypedef* const scopeTdp = VN_CAST(depNodep->nodep, Typedef);
+            if (!scopeTdp || scopeTdp->name() == rdp->name()) continue;
+            AstClass* scopeClassp = nullptr;
+            if (AstClassRefDType* const scopeRefp
+                = VN_CAST(scopeTdp->subDTypep(), ClassRefDType)) {
+                scopeClassp = scopeRefp->classp();
+            }
+            if (!scopeClassp) {
+                AstNodeModule* const scopeOwnerp = findOwnerModule(scopeTdp);
+                if (scopeOwnerp) scopeClassp = findTypedefClass(scopeOwnerp->name(), scopeTdp->name());
+            }
+            if (!scopeClassp) continue;
+            for (AstNode* stmtp = scopeClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstTypedef* const candTdp = VN_CAST(stmtp, Typedef)) {
+                    if (candTdp->name() == rdp->name()) {
+                        if (rdp->typedefp() != candTdp) {
+                            UINFO(5, "DEPGRAPH: refdtype '" << rdp->name()
+                                      << "' scoped by '" << scopeTdp->name()
+                                      << "' retarget typedefp to class '"
+                                      << scopeClassp->name() << "'" << endl);
+                            normalizeRef(rdp, nullptr, candTdp, scopeClassp);
+                        }
+                        break;
+                    }
+                }
+            }
+            break;
         }
 
         for (DepNode* const depNodep : nodep->dependsOn) {

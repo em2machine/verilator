@@ -162,8 +162,10 @@ public:
                                         AstNodeModule* contextModp = nullptr,
                                         const string& assocCellName = "");
     // Register transient cell context for RefDType created from dotted datatype references
-    static void registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
+    static void registerRefDTypeDotPath(AstRefDType* refp, const std::string& cellName,
                                         AstNodeModule* contextModp = nullptr);
+    static void registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp);
+    static void registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp);
 
     // Capture original param/localparam expression before constification
     static void captureParamExpr(AstVar* varp, AstNodeModule* ownerModp);

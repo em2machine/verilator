@@ -5398,6 +5398,25 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (!foundp) return;
                 }
                 nodep->classOrPackagep(cpackagerefp->classOrPackageSkipp());
+                if (AstTypedef* const scopeTdp
+                    = VN_CAST(cpackagerefp->classOrPackageNodep(), Typedef)) {
+                    V3LinkDotDepGraph::registerRefDTypeScopedTypedef(nodep, scopeTdp);
+                    AstTypedef* parentTdp = nullptr;
+                    for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
+                        if (AstTypedef* const candTdp = VN_CAST(backp, Typedef)) {
+                            parentTdp = candTdp;
+                            break;
+                        }
+                        if (VN_IS(backp, NodeModule)) break;
+                    }
+                    if (parentTdp) {
+                        if (parentTdp->name() == "type_id") {
+                            UINFO(5, "DEPGRAPH: linkdot found type_id typedef '" << parentTdp->name()
+                                      << "' scoped by '" << scopeTdp->name() << "'" << endl);
+                        }
+                        V3LinkDotDepGraph::registerTypedefScopedTypedef(parentTdp, scopeTdp);
+                    }
+                }
                 if (!VN_IS(nodep->classOrPackagep(), Class)
                     && !VN_IS(nodep->classOrPackagep(), Package)) {
                     if (m_statep->forPrimary()) {
