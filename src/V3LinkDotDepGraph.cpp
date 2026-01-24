@@ -465,7 +465,7 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         } else {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
-            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam()
+            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam() && !tdOwnerp->isTop()
                 && tdOwnerp->name().find("__") == string::npos) {
                 UINFO(5, "DEPGRAPH: commit refdtype has null owner but template typedef '"
                           << tdp->name() << "'" << endl);
