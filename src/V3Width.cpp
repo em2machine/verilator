@@ -1007,23 +1007,11 @@ class WidthVisitor final : public VNVisitor {
             // after DepGraph resolution when parameters have their final values.
             const bool inDeadModule = m_modep && m_modep->dead();
             bool skipAscrange = false;
-            if (V3LinkDotDepGraph::useInParam()) {
-                bool inTemplateModule = false;
-                bool hasOwnerModule = false;
-                for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                    if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
-                        hasOwnerModule = true;
-                        if (modp->hasGParam() && modp->name().find("__") == string::npos) {
-                            inTemplateModule = true;
-                        }
-                        break;
-                    }
-                }
-                if (!hasOwnerModule) inTemplateModule = true;
+            if (V3LinkDotDepGraph::shouldDeferTemplateType(nodep)) {
                 // DepGraph resolves specialized clones out-of-order; template/type-table
                 // nodes can still carry default params (e.g., 0) when this check runs.
                 // Suppress ASCRANGE here so only the fully-specialized clone is linted.
-                if (inTemplateModule) skipAscrange = true;
+                skipAscrange = true;
             }
             if (!skipAscrange && nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
                 && !VN_IS(nodep->backp(), Cell)  // For cells we warn in V3Inst
@@ -1862,6 +1850,10 @@ class WidthVisitor final : public VNVisitor {
         switch (nodep->attrType()) {
         case VAttrType::DIM_DIMENSIONS:
         case VAttrType::DIM_UNPK_DIMENSIONS: {
+            if (!V3LinkDotDepGraph::allowParamMutation()
+                && (!nodep->fromp() || !nodep->fromp()->dtypep())) {
+                return;
+            }
             UASSERT_OBJ(nodep->fromp() && nodep->fromp()->dtypep(), nodep, "Unsized expression");
             const std::pair<uint32_t, uint32_t> dim = nodep->fromp()->dtypep()->dimensions(true);
             const int val
@@ -1892,6 +1884,10 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_LOW:
         case VAttrType::DIM_RIGHT:
         case VAttrType::DIM_SIZE: {
+            if (!V3LinkDotDepGraph::allowParamMutation()
+                && (!nodep->fromp() || !nodep->fromp()->dtypep())) {
+                return;
+            }
             UASSERT_OBJ(nodep->fromp() && nodep->fromp()->dtypep(), nodep, "Unsized expression");
             AstNodeDType* const dtypep = nodep->fromp()->dtypep();
             if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
@@ -2303,42 +2299,28 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
             return;
         }
-        if (!nodep->subDTypep() && V3LinkDotDepGraph::useInParam()) {
-            bool inTemplateModule = false;
-            bool hasOwnerModule = false;
-            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
-                    hasOwnerModule = true;
-                    if (modp->hasGParam() && modp->name().find("__") == string::npos) {
-                        inTemplateModule = true;
-                    }
-                    break;
-                }
-            }
-            if (!hasOwnerModule) inTemplateModule = true;
-            if (inTemplateModule) {
-                // DepGraph clears template typedef subDTypep during commit to avoid
-                // dangling type pointers. Defer widthing until specialized clones exist.
-                return;
-            }
+        if (!nodep->subDTypep() && V3LinkDotDepGraph::shouldDeferTemplateType(nodep)) {
+            // DepGraph clears template typedef subDTypep during commit to avoid
+            // dangling type pointers. Defer widthing until specialized clones exist.
+            return;
         }
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
     }
     void visit(AstParamTypeDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
-        if (V3LinkDotDepGraph::useInParam()) return;
+        if (!V3LinkDotDepGraph::allowParamMutation()) return;
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
         nodep->widthFromSub(nodep->subDTypep());
         // Clear childDTypep after dtypep is set to satisfy V3Broken invariant.
         // The child dtype has been moved to the type table by iterateEditMoveDTypep.
-        if (!V3LinkDotDepGraph::useInParam() && nodep->dtypep() && nodep->childDTypep()) {
+        if (V3LinkDotDepGraph::allowParamMutation() && nodep->dtypep() && nodep->childDTypep()) {
             nodep->childDTypep(nullptr);
         }
     }
     void visit(AstRequireDType* nodep) override {
-        if (V3LinkDotDepGraph::useInParam()) {
+        if (!V3LinkDotDepGraph::allowParamMutation()) {
             userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
             return;
         }
@@ -2721,6 +2703,7 @@ class WidthVisitor final : public VNVisitor {
         const bool implicitParam = nodep->isParam() && bdtypep && bdtypep->implicit();
         if (implicitParam) {
             if (nodep->valuep()) {
+                if (!V3LinkDotDepGraph::allowParamMutation() && !nodep->valuep()->dtypep()) return;
                 userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
                 UINFO(9, "implicitParamPRELIMIV " << nodep->valuep());
                 // Although nodep will get a different width for parameters

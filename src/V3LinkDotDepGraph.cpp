@@ -72,6 +72,13 @@ AstNodeModule* V3LinkDotDepGraph::findOwnerModule(AstNode* nodep) {
     return nullptr;
 }
 
+bool V3LinkDotDepGraph::inTemplateModule(const AstNode* nodep) {
+    const AstNodeModule* const modp = findOwnerModule(const_cast<AstNode*>(nodep));
+    if (!modp) return true;
+    if (modp->isTop()) return false;
+    return modp->hasGParam() && modp->name().find("__") == string::npos;
+}
+
 string V3LinkDotDepGraph::nodeName(const DepNode* nodep) {
     if (!nodep || !nodep->nodep) return "<null>";
     if (const AstVar* const varp = VN_CAST(nodep->nodep, Var)) return varp->name();

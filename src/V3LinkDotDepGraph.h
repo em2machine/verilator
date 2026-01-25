@@ -149,6 +149,18 @@ public:
     // Utility: find owning module for an AST node
     static AstNodeModule* findOwnerModule(AstNode* nodep);
 
+    // Utility: check if an AST node is in an unspecialized template module
+    static bool inTemplateModule(const AstNode* nodep);
+
+    // Guard helpers for DepGraph param flow
+    static bool shouldDeferTemplateType(const AstNode* nodep) {
+        return useInParam() && inTemplateModule(nodep);
+    }
+    static bool allowParamMutation() { return !useInParam(); }
+    static bool allowBrokenDTypeCheck(const AstNode* nodep) {
+        return !useInParam() && !inTemplateModule(nodep);
+    }
+
     // Track per-node commit changes
     static void commitChange() { ++s_commitChanges; }
 

@@ -333,7 +333,7 @@ class ParamProcessor final {
 
     static string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
-            if (!V3LinkDotDepGraph::useInParam()) nodep = refp->skipRefToNonRefp();
+            if (V3LinkDotDepGraph::allowParamMutation()) nodep = refp->skipRefToNonRefp();
         }
         string key = nodep->name();
         if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
@@ -426,7 +426,7 @@ class ParamProcessor final {
         // types represented by different AST nodes (e.g., parameterized class specializations).
         // For value parameters, we can still use the AST hash for better collision resistance.
         if (AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
-            if (!V3LinkDotDepGraph::useInParam()) nodep = refp->skipRefToNonRefp();
+            if (V3LinkDotDepGraph::allowParamMutation()) nodep = refp->skipRefToNonRefp();
         }
         const string paramStr = paramValueString(nodep);
         V3Hash hash;
@@ -475,7 +475,7 @@ class ParamProcessor final {
         return nullptr;
     }
     bool isString(AstNodeDType* nodep) {
-        if (V3LinkDotDepGraph::useInParam()) return false;
+        if (!V3LinkDotDepGraph::allowParamMutation()) return false;
         if (AstBasicDType* const basicp = VN_CAST(nodep->skipRefToNonRefp(), BasicDType))
             return basicp->isString();
         return false;
@@ -593,8 +593,9 @@ class ParamProcessor final {
                     }
                 } else if (AstParamTypeDType* const p = VN_CAST(stmtp, ParamTypeDType)) {
                     AstNode* const dtypep
-                        = V3LinkDotDepGraph::useInParam() ? static_cast<AstNode*>(p)
-                                                         : static_cast<AstNode*>(p->skipRefp());
+                        = V3LinkDotDepGraph::allowParamMutation()
+                              ? static_cast<AstNode*>(p->skipRefp())
+                              : static_cast<AstNode*>(p);
                     params.emplace(p->name(), dtypep);
                 }
             }
@@ -1160,7 +1161,7 @@ class ParamProcessor final {
             if (rawTypep) V3Width::widthParamsEdit(rawTypep);
             AstNodeDType* exprp = rawTypep;
             const AstNodeDType* origp = modvarp;
-            if (!V3LinkDotDepGraph::useInParam()) {
+            if (V3LinkDotDepGraph::allowParamMutation()) {
                 exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
                 origp = modvarp->skipRefToNonRefp();
             }
@@ -1176,7 +1177,7 @@ class ParamProcessor final {
                 // Constify may have caused pinp->exprp to change
                 rawTypep = VN_AS(pinp->exprp(), NodeDType);
                 exprp = rawTypep;
-                if (!V3LinkDotDepGraph::useInParam()) {
+                if (V3LinkDotDepGraph::allowParamMutation()) {
                     exprp = rawTypep->skipRefToNonRefp();
                     if (!modvarp->fwdType().isNodeCompatible(exprp)) {
                         pinp->v3error("Parameter type expression type "
@@ -1500,7 +1501,7 @@ class ParamProcessor final {
 
         for (auto* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
-                if (!V3LinkDotDepGraph::useInParam()
+                if (V3LinkDotDepGraph::allowParamMutation()
                     && VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
                     nodep->v3error(
                         "Class parameter type without default value is never given value"
@@ -1960,7 +1961,7 @@ class ParamVisitor final : public VNVisitor {
     }
 
     void visit(AstRefDType* nodep) override {
-        if (V3LinkDotDepGraph::useInParam()) {
+        if (!V3LinkDotDepGraph::allowParamMutation()) {
             iterateChildren(nodep);
             return;
         }
@@ -2026,7 +2027,7 @@ class ParamVisitor final : public VNVisitor {
     }
     void visit(AstParamTypeDType* nodep) override {
         iterateChildren(nodep);
-        if (V3LinkDotDepGraph::useInParam()) return;
+        if (!V3LinkDotDepGraph::allowParamMutation()) return;
         if (VN_IS(nodep->skipRefOrNullp(), VoidDType)) {
             nodep->v3error("Parameter type without default value is never given value"
                            << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());

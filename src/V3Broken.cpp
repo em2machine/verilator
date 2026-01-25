@@ -192,29 +192,10 @@ private:
         if (v3Global.assertDTypesResolved()) {
             if (nodep->hasDType()) {
                 if (!nodep->dtypep()) {
-                    // DepGraph may defer widthing for template/type-table RefDTypes.
+                    // DepGraph may defer widthing for template/type-table dtypes.
                     // Guard on DepGraph's param flow so non-DepGraph paths
                     // still require all dtypes resolved at this stage.
-                    if (AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
-                        if (!V3LinkDotDepGraph::useInParam()) {
-                            UASSERT_OBJ(false, nodep,
-                                        "No dtype on node with hasDType(): "
-                                            << nodep->prettyTypeName());
-                        }
-                        bool inTemplateModule = false;
-                        bool hasOwnerModule = false;
-                        for (AstNode* backp = refp->backp(); backp; backp = backp->backp()) {
-                            if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
-                                hasOwnerModule = true;
-                                if (modp->hasGParam() && modp->name().find("__") == string::npos) {
-                                    inTemplateModule = true;
-                                }
-                                break;
-                            }
-                        }
-                        if (!hasOwnerModule) inTemplateModule = true;
-                        if (inTemplateModule) return;
-                    }
+                    if (!V3LinkDotDepGraph::allowBrokenDTypeCheck(nodep)) return;
                     UASSERT_OBJ(false, nodep,
                                 "No dtype on node with hasDType(): " << nodep->prettyTypeName());
                 }
@@ -228,15 +209,7 @@ private:
             if (nodep->getChildDTypep()) {
                 bool skipCheck = false;
                 if (VN_IS(nodep, ParamTypeDType)) {
-                    for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                        if (AstNodeModule* const modp = VN_CAST(backp, NodeModule)) {
-                            // Template module: has GParam and no __ in name (not specialized)
-                            if (modp->hasGParam() && modp->name().find("__") == string::npos) {
-                                skipCheck = true;
-                            }
-                            break;
-                        }
-                    }
+                    skipCheck = V3LinkDotDepGraph::inTemplateModule(nodep);
                 }
                 UASSERT_OBJ(skipCheck, nodep,
                             "childDTypep() non-null on node after should have removed");
