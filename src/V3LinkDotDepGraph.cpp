@@ -2418,6 +2418,7 @@ void V3LinkDotDepGraph::postIterationCleanup(AstNetlist* netlistp) {
 
 void V3LinkDotDepGraph::postWidthCleanup(AstNode* nodep) {
     if (!nodep) return;
+    if (useInParam()) return;
     if (AstNodeModule* const ownerModp = findOwnerModule(nodep)) {
         const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
         if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) return;

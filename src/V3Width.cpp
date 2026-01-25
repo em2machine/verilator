@@ -2327,16 +2327,21 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstParamTypeDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
+        if (V3LinkDotDepGraph::useInParam()) return;
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
         nodep->widthFromSub(nodep->subDTypep());
         // Clear childDTypep after dtypep is set to satisfy V3Broken invariant.
         // The child dtype has been moved to the type table by iterateEditMoveDTypep.
-        if (nodep->dtypep() && nodep->childDTypep()) {
+        if (!V3LinkDotDepGraph::useInParam() && nodep->dtypep() && nodep->childDTypep()) {
             nodep->childDTypep(nullptr);
         }
     }
     void visit(AstRequireDType* nodep) override {
+        if (V3LinkDotDepGraph::useInParam()) {
+            userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
+            return;
+        }
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
         if (AstNodeDType* const dtp = VN_CAST(nodep->lhsp(), NodeDType)) {
             nodep->replaceWith(dtp->unlinkFrBack());
