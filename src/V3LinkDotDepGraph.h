@@ -60,6 +60,27 @@ public:
         int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
         int resolvedWidth = 0;               // Resolved width (for PARAMTYPEDTYPEs)
         int pendingDeps = 0;                 // Unresolved dependency count (work-queue)
+
+        // Deferred AST mutation state - populated during resolve(), applied in finalizeAST()
+        // For PARAMTYPEDTYPE:
+        AstNodeDType* deferredDTypep = nullptr;       // Resolved dtype to set
+        bool deferredNeedsWidthForce = false;         // Whether to force width
+        int deferredForcedWidth = 0;                  // Width to force
+        int deferredForcedWidthMin = 0;               // WidthMin to force
+        bool deferredNeedsChildDTypeClear = false;    // Whether to clear childDTypep
+        AstTypedef* deferredChildTypedefp = nullptr;  // Typedef to set on child RefDType
+
+        // For REFDTYPE:
+        AstTypedef* deferredTypedefp = nullptr;       // Typedef to set
+        AstNodeDType* deferredRefDTypep = nullptr;    // RefDType to set
+        AstNodeModule* deferredClassOwnerp = nullptr; // ClassOrPackage to set
+
+        // For GPARAM/LPARAM:
+        AstNode* deferredValuep = nullptr;            // Value expression to set
+
+        // General flags for finalize pass
+        bool needsNormalize = false;                  // Needs normalizeRef in finalize
+        bool needsNormalizeTree = false;              // Needs normalizeRefTree in finalize
     };
 
     using NodeMap = std::unordered_map<AstNode*, DepNode*>;
@@ -148,6 +169,11 @@ public:
     // Returns number of changes applied (for fixed-point looping)
     static int apply();
 
+    // Finalize AST: apply all deferred mutations from resolve() in a single pass
+    // This is the ONLY place that mutates the AST based on DepGraph results
+    // Call this after the V3Param fixed-point loop completes
+    static void finalizeAST();
+
     // Use DepGraph during V3Param fixed-point loop
     static void useInParam(bool flag) { s_useInParam = flag; }
     static bool useInParam() { return s_useInParam; }
@@ -195,6 +221,7 @@ public:
 
     // Find a node by AST pointer
     static const DepNode* find(AstNode* nodep);
+    static DepNode* findMutable(AstNode* nodep);
 
     // Iterate over all nodes
     static void forEach(const std::function<void(const DepNode&)>& fn);
@@ -212,6 +239,8 @@ private:
     static void dumpModuleTree(AstNodeModule* modp, const string& prefix, bool isLast);
     // Helper for resolution - re-evaluate a single node
     static void reEvaluateNode(DepNode* nodep);
+    // Helper for buildIncremental - update edges to specialized nodes
+    static void updateEdgesToSpecialized();
 };
 
 #endif  // VERILATOR_V3LINKDOTDEPGRAPH_H_

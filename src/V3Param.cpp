@@ -2568,6 +2568,9 @@ void V3Param::param(AstNetlist* rootp) {
             UINFO(1, "DEPGRAPH: WARNING: V3Param fixed-point reached max iterations "
                       << maxIters << endl);
         }
+
+        // Apply all deferred AST mutations in a single pass after the loop
+        V3LinkDotDepGraph::finalizeAST();
     } else {
         { ParamTop{rootp}; }  // Destruct before checking
     }
