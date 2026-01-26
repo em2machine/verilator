@@ -41,7 +41,8 @@ public:
         PARAMTYPEDTYPE, // Type parameter (AstParamTypeDType)
         REFDTYPE,       // Reference to a type (AstRefDType)
         STRUCTDTYPE,    // Struct type (AstStructDType)
-        UNIONDTYPE      // Union type (AstUnionDType)
+        UNIONDTYPE,     // Union type (AstUnionDType)
+        ATTROF          // Attribute expression like $bits() (AstAttrOf)
     };
 
     // A node in the dependency graph

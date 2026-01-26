@@ -63,6 +63,7 @@ class CleanVisitor final : public VNVisitor {
     void setCppWidth(AstNode* nodep) {
         nodep->user2(true);  // Don't resize it again
         AstNodeDType* const old_dtypep = nodep->dtypep();
+        if (!old_dtypep) nodep->v3fatalSrc("Null dtype in setCppWidth");
         const int width = cppWidth(nodep);  // widthMin is unchanged
         if (old_dtypep->width() != width) {
             // Since any given dtype's cppWidth() is the same, we can just
