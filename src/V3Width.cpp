@@ -2803,22 +2803,9 @@ class WidthVisitor final : public VNVisitor {
         const bool implicitParam = nodep->isParam() && bdtypep && bdtypep->implicit();
         if (implicitParam) {
             if (nodep->valuep()) {
-                if (!V3LinkDotDepGraph::allowParamMutation() && !nodep->valuep()->dtypep()) {
-                    // During DepGraph param flow, defer widthing if value expression dtype
-                    // is not yet resolved. Allow AttrOf with resolved fromp dtype.
-                    if (AstAttrOf* const attrp = VN_CAST(nodep->valuep(), AttrOf)) {
-                        AstNode* const fromp = attrp->fromp();
-                        if (fromp && fromp->dtypep()) {
-                            // proceed
-                        } else {
-                            nodep->doingWidth(false);
-                            return;
-                        }
-                    } else {
-                        nodep->doingWidth(false);
-                        return;
-                    }
-                }
+                // Remove blanket deferral. We must attempt to visit the value to determine type/deps.
+                // If it remains unresolved, specific node visitors (like AttrOf) should handle deferral
+                // by setting a placeholder type to prevent "No dtype" errors later.
                 userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
                 UINFO(9, "implicitParamPRELIMIV " << nodep->valuep());
                 // Although nodep will get a different width for parameters
