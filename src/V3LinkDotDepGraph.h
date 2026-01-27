@@ -161,6 +161,30 @@ public:
     static bool allowBrokenDTypeCheck(const AstNode* nodep) {
         return !useInParam() && !inTemplateModule(nodep);
     }
+    // Guard helper: defer widthing when dtype is unresolved during DepGraph param flow.
+    static bool shouldDeferDType(const AstNodeDType* dtypep) {
+        auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
+        if (!dtypep) {
+            UINFO(5, "DEPGRAPH: shouldDeferDType null dtypep -> true\n");
+            return true;
+        }
+        // Use skipRefOrNullp to catch unresolved ParamType/RequireDType chains.
+        const AstNodeDType* const basep = dtypep->skipRefOrNullp();
+        if (!basep) {
+            UINFO(5, "DEPGRAPH: shouldDeferDType skipRefOrNullp null for " << dtypep << " -> true\n");
+            return true;
+        }
+        if (const AstNodeUOrStructDType* const uorp = VN_CAST(basep, NodeUOrStructDType)) {
+            if (!uorp->dtypep()) {
+                UINFO(5, "DEPGRAPH: shouldDeferDType UOrStruct missing dtypep for " << basep
+                            << " -> true\n");
+                return true;
+            }
+        }
+        UINFO(5, "DEPGRAPH: shouldDeferDType " << dtypep << " basep=" << basep
+                    << " -> false\n");
+        return false;
+    }
 
     // Track per-node commit changes
     static void commitChange() { ++s_commitChanges; }

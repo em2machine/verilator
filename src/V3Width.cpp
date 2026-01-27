@@ -1885,7 +1885,11 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_DIMENSIONS:
         case VAttrType::DIM_UNPK_DIMENSIONS: {
             AstNodeDType* const dtypep = fromDTypep();
-            if (!V3LinkDotDepGraph::allowParamMutation() && !dtypep) {
+            if (!V3LinkDotDepGraph::allowParamMutation()
+                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
+                // Defer widthing until dtype resolves, but keep a placeholder dtype
+                // so later checks don't trip on null dtype.
+                nodep->dtypep(nodep->findSigned32DType());
                 if (nodep->attrType() == VAttrType::DIM_BITS) {
                     if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
                         if (rdp->name() == "pair_t") {
@@ -1929,7 +1933,17 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_RIGHT:
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep();
-            if (!V3LinkDotDepGraph::allowParamMutation() && !dtypep) {
+            if (!V3LinkDotDepGraph::allowParamMutation()
+                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
+                nodep->dtypeSetSigned32();
+                UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
+                              << static_cast<const void*>(nodep)
+                              << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
+                              << " setDtype=" << nodep->dtypep() << endl);
+                UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
+                              << static_cast<const void*>(nodep)
+                              << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
+                              << " setDtype=" << nodep->dtypep() << endl);
                 return;
             }
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
@@ -1999,9 +2013,25 @@ class WidthVisitor final : public VNVisitor {
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     } else {
+                        if (V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
+                            nodep->dtypeSetSigned32();
+                            UINFO(5, "DEPGRAPH: AttrOf DIM_BITS missing dtype nodep="
+                                          << static_cast<const void*>(nodep)
+                                          << " backp=" << nodep->backp() << " fromp="
+                                          << nodep->fromp() << " dtypep=" << dtypep
+                                          << " attrType=" << nodep->attrType() << endl);
+                            return;
+                        }
+                        AstNodeDType* const baseDTypep = dtypep->skipRefp();
+                        UASSERT_OBJ(baseDTypep, nodep, "Unsized expression");
                         const int dim = 1;
+                        UINFO(5, "DEPGRAPH: AttrOf DIM_BITS dimValue nodep="
+                                      << static_cast<const void*>(nodep)
+                                      << " backp=" << nodep->backp() << " fromp="
+                                      << nodep->fromp() << " dtypep=" << dtypep
+                                      << " attrType=" << nodep->attrType() << endl);
                         AstConst* const newp
-                            = dimensionValue(nodep->fileline(), dtypep, nodep->attrType(), dim);
+                            = dimensionValue(nodep->fileline(), baseDTypep, nodep->attrType(), dim);
                         if (!V3LinkDotDepGraph::allowParamMutation()
                             && nodep->attrType() == VAttrType::DIM_BITS) {
                             if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
