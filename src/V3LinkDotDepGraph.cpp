@@ -3476,12 +3476,20 @@ static void finalizeParamType(V3LinkDotDepGraph::DepNode* nodep) {
     // Clear childDTypep if needed
     if (nodep->deferredNeedsChildDTypeClear) {
         if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
+            AstNodeDType* newChildp = nullptr;
+            // If the new type is inside the child we are about to delete (e.g. unwrapping REQUIREDTYPE),
+            // we must rescue it and make it the new child to preserve ownership.
+            if (nodep->deferredDTypep && nodep->deferredDTypep->backp() == childp) {
+                newChildp = nodep->deferredDTypep;
+                newChildp->unlinkFrBack();
+            }
+
             if (childp->backp() == ptdp) {
                 // Child is owned by this node - safe to delete
                 childp->unlinkFrBack();
                 VL_DO_DANGLING(childp->deleteTree(), childp);
             }
-            ptdp->childDTypep(nullptr);
+            ptdp->childDTypep(newChildp);
         }
     }
 
