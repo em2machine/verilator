@@ -1933,13 +1933,19 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_RIGHT:
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep();
-            if (!V3LinkDotDepGraph::allowParamMutation()
-                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
+            // Defer ATTROF replacement when source type is unresolved during DepGraph param flow.
+            // The ATTROF will be replaced with CONST during DepGraph resolution.
+            if (V3LinkDotDepGraph::shouldDeferAttrOf(nodep)) {
                 nodep->dtypeSetSigned32();
-                UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
+                UINFO(5, "DEPGRAPH: AttrOf defer unresolved source type nodep="
                               << static_cast<const void*>(nodep)
                               << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
                               << " setDtype=" << nodep->dtypep() << endl);
+                return;
+            }
+            if (!V3LinkDotDepGraph::allowParamMutation()
+                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
+                nodep->dtypeSetSigned32();
                 UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
                               << static_cast<const void*>(nodep)
                               << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
@@ -3456,6 +3462,8 @@ class WidthVisitor final : public VNVisitor {
         for (AstMemberDType* itemp = nodep->membersp(); itemp;
              itemp = VN_AS(itemp->nextp(), MemberDType)) {
             AstNodeDType* const dtp = itemp->subDTypep()->skipRefp();
+            // Skip error checks if member type is unresolved (e.g. REQUIREDTYPE during early param flow)
+            if (V3LinkDotDepGraph::shouldDeferDType(dtp)) continue;
             if (nodep->packed()
                 && !dtp->isIntegralOrPacked()
                 // Historically lax:

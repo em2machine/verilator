@@ -819,6 +819,24 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
                   << " refDTypep=" << refp
                   << " dtypep=" << rdp->dtypep()
                   << endl);
+
+        // Update REFDTYPE's width from its target. This is critical for ATTROF ($bits)
+        // which depends on REFDTYPE and needs the correct width.
+        AstNodeDType* targetp = nullptr;
+        if (refp) {
+            targetp = refp->skipRefp();
+            if (!targetp) targetp = refp;
+        } else if (tdp && tdp->subDTypep()) {
+            targetp = tdp->subDTypep()->skipRefp();
+            if (!targetp) targetp = tdp->subDTypep();
+        }
+        if (targetp && targetp->width() > 0 && rdp->width() != targetp->width()) {
+            UINFO(5, "DEPGRAPH: commit REFDTYPE '" << rdp->name()
+                      << "' width " << rdp->width() << " -> " << targetp->width() << endl);
+            rdp->widthForce(targetp->width(), targetp->widthMin());
+            rdp->dtypep(targetp);
+        }
+
         normalizeRef(rdp);
         if (AstTypedef* const postTdp = rdp->typedefp()) {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(postTdp);
@@ -1064,6 +1082,39 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         }
     }
 
+    // Apply deferred DType and child clear immediately during commit
+    // This is needed if dependent nodes (like structs) need to see the resolved type immediately
+    if (nodep->deferredDTypep || nodep->deferredNeedsChildDTypeClear) {
+        UINFO(5, "DEPGRAPH: commitParamType applying deferred dtype/clear for " << ptdp->name() << endl);
+
+        if (nodep->deferredDTypep) {
+            ptdp->dtypep(nodep->deferredDTypep);
+        }
+
+        if (nodep->deferredNeedsChildDTypeClear) {
+            if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
+                AstNodeDType* newChildp = nullptr;
+                // If the new type is inside the child we are about to delete (e.g. unwrapping REQUIREDTYPE),
+                // we must rescue it and make it the new child to preserve ownership.
+                if (nodep->deferredDTypep && nodep->deferredDTypep->backp() == childp) {
+                    newChildp = nodep->deferredDTypep;
+                    newChildp->unlinkFrBack();
+                }
+
+                if (childp->backp() == ptdp) {
+                    // Child is owned by this node - safe to delete
+                    childp->unlinkFrBack();
+                    VL_DO_DANGLING(childp->deleteTree(), childp);
+                }
+                ptdp->childDTypep(newChildp);
+            }
+        }
+
+        // Clear flags so finalizeParamType doesn't redo it
+        nodep->deferredDTypep = nullptr;
+        nodep->deferredNeedsChildDTypeClear = false;
+    }
+
     const bool isSpecialized = ownerModp->name().find("__") != string::npos;
     if (!isSpecialized) return;
 
@@ -1077,8 +1128,40 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         ptdp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
     }
 
+    // Get resolved width from subDTypep or from dependency chain
     AstNodeDType* const subp = ptdp->subDTypep();
-    const int resolvedWidth = subp ? subp->width() : ptdp->width();
+    int resolvedWidth = subp ? subp->width() : ptdp->width();
+
+    // If subDTypep has width=0, try to get width from dependency chain
+    // The dependency (TYPEDEF/REFDTYPE) should have the resolved width from the struct
+    if (resolvedWidth <= 0) {
+        for (V3LinkDotDepGraph::DepNode* const depNodep : nodep->dependsOn) {
+            if (!depNodep || !depNodep->nodep) continue;
+            AstNodeDType* depDTypep = nullptr;
+            if (depNodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) {
+                if (AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef)) {
+                    depDTypep = tdp->subDTypep();
+                }
+            } else if (depNodep->nodeType == V3LinkDotDepGraph::NodeType::REFDTYPE) {
+                depDTypep = VN_CAST(depNodep->nodep, RefDType);
+            } else if (depNodep->nodeType == V3LinkDotDepGraph::NodeType::STRUCTDTYPE) {
+                depDTypep = VN_CAST(depNodep->nodep, NodeUOrStructDType);
+            }
+            if (depDTypep) {
+                AstNodeDType* const skipped = depDTypep->skipRefp();
+                const int depWidth = skipped ? skipped->width() : depDTypep->width();
+                if (depWidth > 0) {
+                    resolvedWidth = depWidth;
+                    UINFO(5, "DEPGRAPH: commitParamType '" << ptdp->name()
+                              << "' got width " << resolvedWidth << " from dependency" << endl);
+                    // Update the PARAMTYPEDTYPE's width
+                    ptdp->widthForce(resolvedWidth, resolvedWidth);
+                    break;
+                }
+            }
+        }
+    }
+
     if (resolvedWidth <= 0) return;
 
     // Store deferred retargets for RefDTypes
@@ -1157,12 +1240,13 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
+// Returns true if committed, false if deferred (node should not be marked resolved)
 static void commitAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
     if (!nodep || !nodep->nodep) return;
     AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
     if (!attrp) return;
 
-    // Get the width from the fromp (RefDType -> PARAMTYPEDTYPE/TYPEDEF -> resolved type)
+    // Get the width from the fromp - dependencies should have propagated width by now
     AstNodeDType* fromdtp = nullptr;
     if (AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
         fromdtp = rdp->skipRefp();
@@ -1173,18 +1257,26 @@ static void commitAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
     }
 
     if (!fromdtp || fromdtp->width() == 0) {
+        // Width not yet resolved - V3Width will handle this later
         UINFO(5, "DEPGRAPH: commit ATTROF '" << attrp->attrType().ascii()
-                  << "' fromdtp width=0, deferring" << endl);
+                  << "' fromdtp width=0, skipping replacement" << endl);
         return;
     }
 
-    // For DIM_BITS, store the resolved width in the DepNode
-    // The actual replacement with CONST happens during V3Width, not here
-    // We just ensure the source type is resolved so widthParamsEdit can evaluate it
+    // For DIM_BITS ($bits), replace ATTROF with CONST immediately.
+    // This must happen during commit (not finalizeAST) because V3Const
+    // evaluates comparisons like "$bits(T) !== 8" during V3Param.
     if (attrp->attrType() == VAttrType::DIM_BITS) {
         const int width = fromdtp->width();
         nodep->resolvedWidth = width;
-        UINFO(5, "DEPGRAPH: commit ATTROF DIM_BITS resolved width=" << width << endl);
+        UINFO(5, "DEPGRAPH: commit ATTROF DIM_BITS replacing with CONST " << width << endl);
+
+        // Replace ATTROF with CONST immediately
+        AstConst* const constp = new AstConst{attrp->fileline(), AstConst::Unsized32{},
+                                               static_cast<uint32_t>(width)};
+        attrp->replaceWith(constp);
+        VL_DO_DANGLING(attrp->deleteTree(), attrp);
+        nodep->nodep = nullptr;  // Node is deleted
     }
 }
 
@@ -1455,8 +1547,7 @@ private:
                     = V3LinkDotDepGraph::findOrCreateNode(
                         targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
                 // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
-                const bool isSelfRef = (ptOwnerp == V3LinkDotDepGraph::findOwnerModule(nodep)
-                                        && targetPtdp->name() == nodep->name());
+                const bool isSelfRef = (m_depNode && m_depNode->nodep == targetPtdp);
                 if (!isSelfRef) {
                     V3LinkDotDepGraph::addEdge(targetp, ptNodep);
                     UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
@@ -1554,6 +1645,7 @@ private:
         m_modp = nodep;
         rebuildVarMap();
         UINFO(9, "DEPGRAPH: visiting module " << nodep->name() << endl);
+
         iterateChildrenConst(nodep);
     }
 
@@ -1788,6 +1880,9 @@ private:
             }
             // For struct/union types, create a DepNode and track member dependencies.
             // These may have been moved to TYPETABLE but are still referenced via subDTypep.
+            UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' subDTypep="
+                      << (dtypep ? dtypep->prettyTypeName() : "<null>")
+                      << " type=" << (dtypep ? dtypep->typeName() : "<null>") << endl);
             if (AstNodeUOrStructDType* const usp = VN_CAST(dtypep, NodeUOrStructDType)) {
                 V3LinkDotDepGraph::NodeType nodeType = VN_IS(usp, UnionDType)
                     ? V3LinkDotDepGraph::NodeType::UNIONDTYPE
@@ -1800,12 +1895,30 @@ private:
                 for (AstMemberDType* memp = usp->membersp(); memp;
                      memp = VN_AS(memp->nextp(), MemberDType)) {
                     AstNodeDType* memDTypep = memp->subDTypep();
+                    UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' checking member '"
+                              << memp->name() << "' subDTypep="
+                              << (memDTypep ? memDTypep->prettyTypeName() : "<null>") << endl);
                     if (AstRefDType* const refp = VN_CAST(memDTypep, RefDType)) {
                         V3LinkDotDepGraph::DepNode* const refNodep
                             = V3LinkDotDepGraph::findOrCreateNode(
                                 refp, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp);
                         V3LinkDotDepGraph::addEdge(uspNodep, refNodep);
+
+                        // If the RefDType points to a PARAMTYPEDTYPE, add direct edge to it.
+                        // This ensures the struct waits for the PARAMTYPEDTYPE to be resolved.
                         AstNodeDType* const targetp = refp->refDTypep();
+                        UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' member '" << memp->name()
+                                  << "' targetp=" << (targetp ? targetp->prettyTypeName() : "<null>")
+                                  << " type=" << (targetp ? targetp->typeName() : "<null>") << endl);
+                        if (AstParamTypeDType* const ptdp = VN_CAST(targetp, ParamTypeDType)) {
+                            AstNodeModule* const ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                            V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                                ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp ? ptdOwnerp : m_modp);
+                            V3LinkDotDepGraph::addEdge(uspNodep, ptdNodep);
+                            UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' struct member '"
+                                      << memp->name() << "' -> PARAMTYPEDTYPE '" << ptdp->name() << "'" << endl);
+                        }
+
                         UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' struct/union member '"
                                   << memp->name() << "' -> refdtype '" << refp->name() << "' -> "
                                   << (targetp ? targetp->prettyTypeName() : "<null>")
@@ -1845,6 +1958,18 @@ private:
 
         V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
             nodep, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, m_modp);
+
+        // Traverse the default type to collect dependencies (e.g. ranges using other params)
+        if (nodep->subDTypep()) {
+            if (nodep->name() == "T") {
+                 UINFO(0, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " collecting deps from subDTypep\n");
+            }
+            V3LinkDotDepGraph::collectExpressionDeps(nodep->subDTypep(), depNodep, m_modp);
+        } else {
+            if (nodep->name() == "T") {
+                 UINFO(0, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " has NO subDTypep\n");
+            }
+        }
 
         // Check for cell association registered during linkdot primary pass
         // The key uses the base module name (without specialization suffix) and paramtype name
@@ -2503,7 +2628,10 @@ private:
         V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
             nodep, V3LinkDotDepGraph::NodeType::STRUCTDTYPE, m_modp);
 
-        // Add dependency edges to member RefDTypes
+        // Add dependency edges to member types.
+        // The struct's width depends on its members' widths, so we need edges to:
+        // 1. Member's RefDType
+        // 2. Member's PARAMTYPEDTYPE (if the RefDType points to one)
         for (AstMemberDType* memp = nodep->membersp(); memp;
              memp = VN_AS(memp->nextp(), MemberDType)) {
             if (AstRefDType* const refp = VN_CAST(memp->subDTypep(), RefDType)) {
@@ -2511,8 +2639,19 @@ private:
                 V3LinkDotDepGraph::DepNode* const refNodep = V3LinkDotDepGraph::findOrCreateNode(
                     refp, V3LinkDotDepGraph::NodeType::REFDTYPE, refOwnerp ? refOwnerp : m_modp);
                 V3LinkDotDepGraph::addEdge(depNodep, refNodep);
-                // Debug: show what the RefDType points to
+
+                // If the RefDType points to a PARAMTYPEDTYPE, add direct edge to it.
+                // This ensures the struct waits for the PARAMTYPEDTYPE to be resolved.
                 AstNodeDType* const targetp = refp->refDTypep();
+                if (AstParamTypeDType* const ptdp = VN_CAST(targetp, ParamTypeDType)) {
+                    AstNodeModule* const ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                    V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                        ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp ? ptdOwnerp : m_modp);
+                    V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
+                    UINFO(5, "DEPGRAPH: struct '" << nodep->name() << "' member '" << memp->name()
+                              << "' -> PARAMTYPEDTYPE '" << ptdp->name() << "'" << endl);
+                }
+
                 UINFO(5, "DEPGRAPH: struct '" << nodep->name() << "' member '" << memp->name()
                           << "' -> refdtype '" << refp->name() << "' -> "
                           << (targetp ? targetp->prettyTypeName() : "<null>")
@@ -2529,7 +2668,7 @@ private:
         V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
             nodep, V3LinkDotDepGraph::NodeType::UNIONDTYPE, m_modp);
 
-        // Add dependency edges to member RefDTypes
+        // Add dependency edges to member types (same as struct)
         for (AstMemberDType* memp = nodep->membersp(); memp;
              memp = VN_AS(memp->nextp(), MemberDType)) {
             if (AstRefDType* const refp = VN_CAST(memp->subDTypep(), RefDType)) {
@@ -2537,8 +2676,18 @@ private:
                 V3LinkDotDepGraph::DepNode* const refNodep = V3LinkDotDepGraph::findOrCreateNode(
                     refp, V3LinkDotDepGraph::NodeType::REFDTYPE, refOwnerp ? refOwnerp : m_modp);
                 V3LinkDotDepGraph::addEdge(depNodep, refNodep);
-                // Debug: show what the RefDType points to
+
+                // If the RefDType points to a PARAMTYPEDTYPE, add direct edge to it.
                 AstNodeDType* const targetp = refp->refDTypep();
+                if (AstParamTypeDType* const ptdp = VN_CAST(targetp, ParamTypeDType)) {
+                    AstNodeModule* const ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                    V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                        ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp ? ptdOwnerp : m_modp);
+                    V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
+                    UINFO(5, "DEPGRAPH: union '" << nodep->name() << "' member '" << memp->name()
+                              << "' -> PARAMTYPEDTYPE '" << ptdp->name() << "'" << endl);
+                }
+
                 UINFO(5, "DEPGRAPH: union '" << nodep->name() << "' member '" << memp->name()
                           << "' -> refdtype '" << refp->name() << "' -> "
                           << (targetp ? targetp->prettyTypeName() : "<null>")
@@ -3094,6 +3243,57 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 UINFO(5, "DEPGRAPH: unwrapped RequireDType to '" << targetName
                           << "' for paramtype '" << ptdp->name() << "' in "
                           << nodeOwnerName(nodep) << endl);
+
+                // Apply immediately because dependent nodes (e.g. typedefs) in the same
+                // execution batch need to see the unwrapped type to run V3Width.
+                AstNodeDType* newChildp = lhsp;
+                newChildp->unlinkFrBack();
+                if (reqp->backp() == ptdp) {
+                    reqp->unlinkFrBack();
+                    VL_DO_DANGLING(reqp->deleteTree(), reqp);
+                }
+                ptdp->childDTypep(newChildp);
+                ptdp->dtypep(newChildp);
+
+                // Resolve any PARSEREF nodes in the unwrapped type to VarRef nodes.
+                // The PARSEREF TLEN in range [TLEN-1:0] needs to be linked to the actual
+                // TLEN parameter before V3Width can evaluate the range.
+                if (AstNodeModule* const ownerModp = nodep->ownerModp) {
+                    // Collect ParseRefs first to avoid modifying tree during iteration
+                    std::vector<AstParseRef*> parseRefs;
+                    newChildp->foreach([&](AstParseRef* parseRefp) {
+                        parseRefs.push_back(parseRefp);
+                    });
+                    UINFO(5, "DEPGRAPH: found " << parseRefs.size() << " ParseRefs in unwrapped type for "
+                              << ptdp->name() << " in " << ownerModp->name() << endl);
+                    for (AstParseRef* parseRefp : parseRefs) {
+                        const string& refName = parseRefp->name();
+                        UINFO(5, "DEPGRAPH: resolving PARSEREF '" << refName << "' in " << ownerModp->name() << endl);
+                        // Find the parameter in the owner module
+                        for (AstNode* stmtp = ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                                if (varp->name() == refName) {
+                                    UINFO(5, "DEPGRAPH: replacing PARSEREF '" << refName << "' with VARREF to "
+                                              << varp << endl);
+                                    // Replace PARSEREF with VARREF
+                                    AstVarRef* const varRefp = new AstVarRef{
+                                        parseRefp->fileline(), varp, VAccess::READ};
+                                    parseRefp->replaceWith(varRefp);
+                                    VL_DO_DANGLING(parseRefp->deleteTree(), parseRefp);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Run V3Width on the unwrapped type to evaluate parameterized range expressions
+                // like [TLEN-1:0]. Without this, BASICDTYPE 'logic' has width=1 instead of
+                // the expected width from the resolved parameter (e.g., TLEN=8 -> width=8).
+                V3Width::widthParamsEdit(newChildp);
+                V3Const::constifyParamsEdit(newChildp);
+                targetDTypep = newChildp;  // Update to use widthed type
+                targetName = newChildp->prettyTypeName();
             }
         }
 
@@ -3103,9 +3303,17 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             AstNodeDType* const resolvedDTypep = targetDTypep->skipRefOrNullp();
             AstNodeDType* const finalDTypep = resolvedDTypep ? resolvedDTypep : targetDTypep;
 
-            // Store deferred dtype
-            nodep->deferredDTypep = finalDTypep;
+            // If we already applied immediate update (above), deferredDTypep is redundant for dtypep/childClear
+            // but might be needed for width or other logic.
+            // However, we should be consistent.
+            bool alreadyApplied = (ptdp->dtypep() == targetDTypep || ptdp->childDTypep() == targetDTypep);
+
+            if (!alreadyApplied) {
+                // Store deferred dtype
+                nodep->deferredDTypep = finalDTypep;
+            }
             nodep->resolvedWidth = finalDTypep->width();
+
             UINFO(5, "DEPGRAPH: deferred paramtype '" << ptdp->name()
                       << "' dtypep to '" << targetName
                       << "' (width=" << finalDTypep->width() << ")"
@@ -3126,11 +3334,13 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
             }
 
             // Store deferred childDTypep clear
-            if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
-                if (childp != finalDTypep) {
-                    nodep->deferredNeedsChildDTypeClear = true;
-                    UINFO(5, "DEPGRAPH: deferred paramtype '" << ptdp->name()
-                              << "' childDTypep clear in " << nodeOwnerName(nodep) << endl);
+            if (!alreadyApplied) {
+                if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
+                    if (childp != finalDTypep) {
+                        nodep->deferredNeedsChildDTypeClear = true;
+                        UINFO(5, "DEPGRAPH: deferred paramtype '" << ptdp->name()
+                                  << "' childDTypep clear in " << nodeOwnerName(nodep) << endl);
+                    }
                 }
             }
             // normalizeRefTree moved to finalizeAST()
@@ -3313,6 +3523,49 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                       << "' fromdtp width=" << fromdtp->width()
                       << " in " << nodeOwnerName(nodep) << endl);
         }
+    } else if (nodep->nodeType == NodeType::STRUCTDTYPE
+               || nodep->nodeType == NodeType::UNIONDTYPE) {
+        // Re-width the struct/union after its member types are resolved.
+        // This is needed because member types (like ParamTypeDType T) may have been
+        // resolved to their final widths, and the struct's width needs to be recalculated.
+        AstNodeUOrStructDType* const usp = VN_CAST(nodep->nodep, NodeUOrStructDType);
+        if (!usp) return;
+        const int oldWidth = usp->width();
+
+        // First, update member RefDTypes to have the correct width from their target.
+        // The RefDType may have been resolved before its target ParamTypeDType was widthed.
+        for (AstMemberDType* memp = usp->membersp(); memp;
+             memp = VN_AS(memp->nextp(), MemberDType)) {
+            if (AstRefDType* const rdp = VN_CAST(memp->subDTypep(), RefDType)) {
+                if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
+                    // Get the resolved width from the ParamTypeDType
+                    const int ptdpWidth = ptdp->width();
+                    if (ptdpWidth > 0 && rdp->width() != ptdpWidth) {
+                        UINFO(5, "DEPGRAPH: update member RefDType '" << rdp->name()
+                                  << "' width " << rdp->width() << " -> " << ptdpWidth << endl);
+                        rdp->widthForce(ptdpWidth, ptdpWidth);
+                        rdp->dtypep(ptdp);
+                        memp->widthForce(ptdpWidth, ptdpWidth);
+                    }
+                }
+            }
+        }
+
+        // Debug: log member types before widthing
+        UINFO(5, "DEPGRAPH: re-evaluate STRUCTDTYPE '" << usp->name()
+                  << "' oldWidth=" << oldWidth << " in " << nodeOwnerName(nodep) << endl);
+        for (AstMemberDType* memp = usp->membersp(); memp;
+             memp = VN_AS(memp->nextp(), MemberDType)) {
+            AstNodeDType* const subp = memp->subDTypep();
+            UINFO(5, "DEPGRAPH:   member '" << memp->name() << "' subDTypep="
+                      << (subp ? subp->prettyTypeName() : "<null>")
+                      << " w=" << (subp ? subp->width() : 0) << endl);
+        }
+
+        V3Width::widthParamsEdit(usp);
+        UINFO(5, "DEPGRAPH: re-evaluate STRUCTDTYPE '" << usp->name()
+                  << "' width " << oldWidth << " -> " << usp->width()
+                  << " in " << nodeOwnerName(nodep) << endl);
     }
     // GPARAM and LPARAM values are already computed by V3Param, no need to re-evaluate
 }
@@ -3346,6 +3599,8 @@ int V3LinkDotDepGraph::resolve() {
         reEvaluateNode(nodep);
         commitResolvedNode(nodep);
 
+        // Always mark as resolved - if commit skipped replacement (e.g., width=0),
+        // the guards in V3Width/V3Const will handle it later.
         nodep->resolved = true;
         nodep->resolvedIteration = ++s_iterationCount;
         UINFO(9, "DEPGRAPH: resolved '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
@@ -3559,6 +3814,37 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
+static void finalizeAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
+    AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
+    if (!attrp) return;
+
+    // Only handle DIM_BITS ($bits) for now
+    if (attrp->attrType() != VAttrType::DIM_BITS) return;
+
+    // Get the resolved width from the DepNode or recalculate from fromp
+    int width = nodep->resolvedWidth;
+    if (width == 0) {
+        AstNodeDType* fromdtp = nullptr;
+        if (AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
+            fromdtp = rdp->skipRefp();
+            if (!fromdtp) fromdtp = rdp->refDTypep();
+            if (!fromdtp) fromdtp = rdp->dtypep();
+        } else if (AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
+            fromdtp = dtp->skipRefp();
+        }
+        if (fromdtp) width = fromdtp->width();
+    }
+
+    if (width > 0) {
+        UINFO(5, "DEPGRAPH: finalizeAttrOf replacing $bits with CONST " << width << endl);
+        // Replace ATTROF with CONST
+        AstConst* const constp = new AstConst{attrp->fileline(), AstConst::Unsized32{}, static_cast<uint32_t>(width)};
+        attrp->replaceWith(constp);
+        VL_DO_DANGLING(attrp->deleteTree(), attrp);
+        nodep->nodep = nullptr;  // Node is deleted
+    }
+}
+
 void V3LinkDotDepGraph::finalizeAST() {
     if (!s_enabled) return;
 
@@ -3592,6 +3878,9 @@ void V3LinkDotDepGraph::finalizeAST() {
         case NodeType::LPARAM:
             finalizeParam(nodep);
             ++paramCount;
+            break;
+        case NodeType::ATTROF:
+            finalizeAttrOf(nodep);
             break;
         default:
             break;
@@ -3633,12 +3922,49 @@ void V3LinkDotDepGraph::finalizeAST() {
         normalizeRef(rdp);
     });
 
+    // Re-width all structs in TYPETABLE. Structs may have been cloned during V3Param
+    // with width=0, and need to be re-widthed based on their resolved member types.
+    int structCount = 0;
+    if (AstNetlist* const netlistp = v3Global.rootp()) {
+        if (AstTypeTable* const typetablep = netlistp->typeTablep()) {
+            for (AstNode* nodep = typetablep->typesp(); nodep; nodep = nodep->nextp()) {
+                if (AstNodeUOrStructDType* const usp = VN_CAST(nodep, NodeUOrStructDType)) {
+                    const int oldWidth = usp->width();
+                    UINFO(5, "DEPGRAPH: finalizeAST checking struct '" << usp->name()
+                              << "' width=" << oldWidth << endl);
+                    // Update member types to have correct width from their subDTypep
+                    for (AstMemberDType* memp = usp->membersp(); memp;
+                         memp = VN_AS(memp->nextp(), MemberDType)) {
+                        AstNodeDType* const subp = memp->subDTypep();
+                        UINFO(5, "DEPGRAPH: finalizeAST   member '" << memp->name()
+                                  << "' memp->width=" << memp->width()
+                                  << " subp=" << (subp ? subp->prettyTypeName() : "<null>")
+                                  << " subp->width=" << (subp ? subp->width() : -1) << endl);
+                        if (subp && subp->width() > 0 && memp->width() != subp->width()) {
+                            UINFO(5, "DEPGRAPH: finalizeAST update member '" << memp->name()
+                                      << "' width " << memp->width() << " -> " << subp->width() << endl);
+                            memp->widthForce(subp->width(), subp->widthMin());
+                            memp->dtypep(subp);
+                        }
+                    }
+                    V3Width::widthParamsEdit(usp);
+                    if (usp->width() != oldWidth) {
+                        UINFO(5, "DEPGRAPH: finalizeAST re-width struct '" << usp->name()
+                                  << "' " << oldWidth << " -> " << usp->width() << endl);
+                    }
+                    ++structCount;
+                }
+            }
+        }
+    }
+
     UINFO(5, "DEPGRAPH: finalizeAST complete - PARAMTYPE=" << paramTypeCount
               << " REFDTYPE=" << refDTypeCount
               << " TYPEDEF=" << typedefCount
               << " PARAM=" << paramCount
               << " normalize=" << normalizeCount
               << " normalizeTree=" << normalizeTreeCount
+              << " struct=" << structCount
               << endl);
 }
 

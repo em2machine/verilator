@@ -161,6 +161,20 @@ public:
     static bool allowBrokenDTypeCheck(const AstNode* nodep) {
         return !useInParam() && !inTemplateModule(nodep);
     }
+    // Guard helper: defer const-folding ATTROF when source type is unresolved during DepGraph param flow.
+    static bool shouldDeferAttrOf(const AstAttrOf* attrp) {
+        if (!attrp) return false;
+        if (!useInParam()) return false;  // Only defer during DepGraph param flow
+        // Check if the fromp (source type) has width=0, meaning it's not resolved yet
+        if (const AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
+            const AstNodeDType* const skipped = rdp->skipRefp();
+            if (!skipped || skipped->width() == 0) return true;
+            if (rdp->refDTypep() && rdp->refDTypep()->width() == 0) return true;
+        } else if (const AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
+            if (dtp->width() == 0) return true;
+        }
+        return false;
+    }
     // Guard helper: defer widthing when dtype is unresolved during DepGraph param flow.
     static bool shouldDeferDType(const AstNodeDType* dtypep) {
         auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM

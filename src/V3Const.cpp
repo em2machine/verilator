@@ -29,6 +29,7 @@
 
 #include "V3Ast.h"
 #include "V3Global.h"
+#include "V3LinkDotDepGraph.h"
 #include "V3Simulate.h"
 #include "V3Stats.h"
 #include "V3String.h"
@@ -2906,6 +2907,12 @@ class ConstVisitor final : public VNVisitor {
 
     void visit(AstAttrOf* nodep) override {
         VL_RESTORER(m_attrp);
+        // During DepGraph param flow, defer const-folding if ATTROF source type is unresolved.
+        // The ATTROF will be replaced with CONST during DepGraph resolution.
+        if (V3LinkDotDepGraph::shouldDeferAttrOf(nodep)) {
+            m_attrp = nodep;  // Mark that we're inside an unresolved ATTROF
+            return;  // Skip iterating children - defer until ATTROF is resolved
+        }
         m_attrp = nodep;
         iterateChildren(nodep);
     }
