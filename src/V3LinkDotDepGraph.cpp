@@ -902,6 +902,93 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
               << " childDTypepPtr=" << static_cast<const void*>(tdp->childDTypep())
               << endl);
 
+    // For specialized modules, check if the typedef's CLASSREFDTYPE needs to be updated
+    // to point to the correct specialized class based on the owner's type parameter bindings.
+    // This handles cases like: typedef uvm_object_registry#(uvm_object_string_pool#(T)) type_id;
+    // where T has been substituted with a concrete type.
+    const bool isSpecialized = ownerModp->name().find("__") != string::npos;
+    if (isSpecialized) {
+        // Use dtypep() not childDTypep() - the typedef's type is stored in dtypep
+        if (AstClassRefDType* const crdtp = VN_CAST(tdp->dtypep(), ClassRefDType)) {
+            if (AstClass* const currentClassp = crdtp->classp()) {
+                const string currentClassName = currentClassp->name();
+                const string currentOrigName = currentClassp->origName();
+
+                // Get the owner module's base name
+                string ownerBaseName = ownerModp->origName();
+                if (ownerBaseName.empty()) {
+                    ownerBaseName = ownerModp->name();
+                    const size_t pos = ownerBaseName.find("__");
+                    if (pos != string::npos) ownerBaseName = ownerBaseName.substr(0, pos);
+                }
+
+                AstClass* foundNewClassp = nullptr;
+
+                // Case 1: this_type pattern - typedef points to the same base class as owner
+                // e.g., in uvm_object_registry__Tz3: typedef uvm_object_registry#(T) this_type;
+                // The typedef should point to uvm_object_registry__Tz3 itself
+                if (currentOrigName == ownerBaseName) {
+                    if (AstClass* const ownerClassp = VN_CAST(ownerModp, Class)) {
+                        if (ownerClassp != currentClassp) {
+                            foundNewClassp = ownerClassp;
+                            UINFO(5, "DEPGRAPH: commit TYPEDEF '" << tdp->name()
+                                      << "' this_type pattern: updating from '"
+                                      << currentClassName << "' to '"
+                                      << foundNewClassp->name() << "' in "
+                                      << ownerModp->name() << endl);
+                        }
+                    }
+                }
+
+                // Case 2: type_id pattern - typedef points to a different class parameterized with owner
+                // e.g., in uvm_object_string_pool__Tz2: typedef uvm_object_registry#(uvm_object_string_pool#(T)) type_id;
+                // Need to find uvm_object_registry specialized with T=uvm_object_string_pool__Tz2
+                if (!foundNewClassp) {
+                    V3LinkDotDepGraph::forEach([&](const V3LinkDotDepGraph::DepNode& candNode) {
+                        if (foundNewClassp) return;  // Already found
+                        if (candNode.nodeType != V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE) return;
+                        AstParamTypeDType* const candPtdp = VN_CAST(candNode.nodep, ParamTypeDType);
+                        if (!candPtdp || candPtdp->name() != "T") return;
+                        if (!candNode.ownerModp) return;
+
+                        // Check if this is a specialization of the same base class as current
+                        const string candOwnerName = candNode.ownerModp->name();
+                        if (candOwnerName.find(currentOrigName + "__") == string::npos) return;
+
+                        // Check if the T parameter is bound to our owner module type
+                        if (AstClassRefDType* const boundCrdtp
+                            = VN_CAST(candPtdp->subDTypep(), ClassRefDType)) {
+                            if (AstClass* const boundClassp = boundCrdtp->classp()) {
+                                if (boundClassp->name() == ownerModp->name()) {
+                                    // Found a match
+                                    if (AstClass* const newClassp
+                                        = VN_CAST(candNode.ownerModp, Class)) {
+                                        if (newClassp != currentClassp) {
+                                            foundNewClassp = newClassp;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    if (foundNewClassp) {
+                        UINFO(5, "DEPGRAPH: commit TYPEDEF '" << tdp->name()
+                                  << "' type_id pattern: updating from '"
+                                  << currentClassName << "' to '"
+                                  << foundNewClassp->name() << "' in "
+                                  << ownerModp->name() << endl);
+                    }
+                }
+
+                if (foundNewClassp) {
+                    crdtp->classp(foundNewClassp);
+                    // Also update the typedef-class mapping
+                    V3LinkDotDepGraph::registerTypedefClass(tdp, foundNewClassp, ownerModp);
+                }
+            }
+        }
+    }
+
     // Check if this is a template typedef
     const bool isTemplate = ownerModp->hasGParam()
                             && ownerModp->name().find("__") == string::npos;
