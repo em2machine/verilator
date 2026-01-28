@@ -1033,6 +1033,37 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
     AstParamTypeDType* const ptdp = VN_CAST(nodep->nodep, ParamTypeDType);
     AstNodeModule* const ownerModp = nodep->ownerModp;
     if (!ptdp || !ownerModp) return;
+
+    UINFO(0, "DEPGRAPH: commitParamType " << ptdp->name() << " in " << ownerModp->name()
+              << " subDTypep=" << (ptdp->subDTypep() ? ptdp->subDTypep()->prettyTypeName() : "null")
+              << " dependsOn=" << nodep->dependsOn.size() << endl);
+
+    // Handle REQUIREDTYPE resolution for interface typedefs (applies to ALL modules)
+    // This must happen before V3Width runs on dependent nodes
+    if (AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType)) {
+        UINFO(0, "DEPGRAPH: commitParamType " << ptdp->name() << " has REQUIREDTYPE" << endl);
+        // Find the resolved typedef from our dependency edge
+        for (V3LinkDotDepGraph::DepNode* const depNodep : nodep->dependsOn) {
+            UINFO(0, "DEPGRAPH: checking dependency TYPEDEF=" << (depNodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) << endl);
+            if (!depNodep || depNodep->nodeType != V3LinkDotDepGraph::NodeType::TYPEDEF) continue;
+            AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef);
+            if (!tdp || !tdp->subDTypep()) continue;
+            // Found the target typedef - delete REQUIREDTYPE and set dtypep to resolved type
+            AstNodeDType* const resolvedTypep = tdp->subDTypep();
+            UINFO(0, "DEPGRAPH: commit PARAMTYPE '" << ptdp->name()
+                      << "' resolving REQUIREDTYPE to " << resolvedTypep->prettyTypeName()
+                      << " from typedef '" << tdp->name() << "' in " << ownerModp->name() << endl);
+            // Delete the REQUIREDTYPE child - don't replace, just remove
+            reqp->unlinkFrBack();
+            VL_DO_DANGLING(reqp->deleteTree(), reqp);
+            // Set dtypep to the original resolved type (not a clone)
+            // This makes PARAMTYPEDTYPE reference the interface's type directly
+            ptdp->dtypep(resolvedTypep);
+            ptdp->widthForce(resolvedTypep->width(), resolvedTypep->widthMin());
+            break;
+        }
+    }
+
     const bool isSpecialized = ownerModp->name().find("__") != string::npos;
     if (!isSpecialized) return;
 
