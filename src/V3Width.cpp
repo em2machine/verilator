@@ -2401,7 +2401,35 @@ class WidthVisitor final : public VNVisitor {
     }
     void visit(AstParamTypeDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
+
+        // Check for deferral conditions FIRST
+        if (V3LinkDotDepGraph::shouldDeferDType(nodep)) {
+            UINFO(9, "Deferring ParamTypeDType via shouldDeferDType " << nodep << endl);
+            nodep->doingWidth(false); // Important: Clear doingWidth to avoid "Recursive type definition" on revisit
+            return;
+        }
+
+        // Explicitly check for RequireDType in the subtype chain to avoid recursion
+        // This is a special case of deferral where we know the type isn't ready.
+        if (AstNodeDType* const subp = nodep->subDTypep()) {
+            const AstNodeDType* const basep = subp->skipRefOrNullp();
+            if (VN_IS(basep, RequireDType)) {
+                UINFO(9, "Deferring ParamTypeDType -> RequireDType " << nodep << endl);
+                // We mark as didWidth(true) here because RequireDType is a valid (placeholder) state
+                // and we don't want to re-process it until it's replaced.
+                // Actually, if we want to re-process it later (when resolved), we should probably use doingWidth(false).
+                // But for now, let's treat it as a deferral that waits for resolution.
+                nodep->doingWidth(false);
+                return;
+            }
+        }
+
+        if (!V3LinkDotDepGraph::allowParamMutation()) {
+             // If we can't mutate, we proceed? Or defer?
+             // Existing logic allowed proceeding to iterate children.
+        }
         if (!V3LinkDotDepGraph::allowParamMutation()) return;
+
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
         nodep->widthFromSub(nodep->subDTypep());
@@ -2419,6 +2447,9 @@ class WidthVisitor final : public VNVisitor {
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
         if (AstNodeDType* const dtp = VN_CAST(nodep->lhsp(), NodeDType)) {
             nodep->replaceWith(dtp->unlinkFrBack());
+        } else if (V3LinkDotDepGraph::shouldDeferDType(nodep)) {
+            nodep->doingWidth(false); // Clear recursion guard
+            return;
         } else {
             if (nodep->lhsp())
                 nodep->lhsp()->v3error("Expected data type, not a "

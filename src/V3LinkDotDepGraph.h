@@ -168,11 +168,33 @@ public:
             UINFO(5, "DEPGRAPH: shouldDeferDType null dtypep -> true\n");
             return true;
         }
+        // Check for RequireDType directly to avoid recursion in skipRefOrNullp
+        if (VN_IS(dtypep, RequireDType)) {
+            UINFO(5, "DEPGRAPH: shouldDeferDType is RequireDType for " << dtypep << " -> true\n");
+            return true;
+        }
+        if (const AstParamTypeDType* const ptdp = VN_CAST(dtypep, ParamTypeDType)) {
+            if (ptdp->subDTypep() && VN_IS(ptdp->subDTypep(), RequireDType)) {
+                UINFO(5, "DEPGRAPH: shouldDeferDType ParamTypeDType -> RequireDType for " << dtypep << " -> true\n");
+                return true;
+            }
+        }
+
         // Use skipRefOrNullp to catch unresolved ParamType/RequireDType chains.
         const AstNodeDType* const basep = dtypep->skipRefOrNullp();
         if (!basep) {
             UINFO(5, "DEPGRAPH: shouldDeferDType skipRefOrNullp null for " << dtypep << " -> true\n");
             return true;
+        }
+        if (VN_IS(basep, RequireDType)) {
+            UINFO(5, "DEPGRAPH: shouldDeferDType basep is RequireDType for " << dtypep << " -> true\n");
+            return true;
+        }
+        if (const AstParamTypeDType* const ptdp = VN_CAST(basep, ParamTypeDType)) {
+            if (ptdp->subDTypep() && VN_IS(ptdp->subDTypep(), RequireDType)) {
+                UINFO(5, "DEPGRAPH: shouldDeferDType ParamTypeDType -> RequireDType for " << dtypep << " -> true\n");
+                return true;
+            }
         }
         if (const AstNodeUOrStructDType* const uorp = VN_CAST(basep, NodeUOrStructDType)) {
             if (!uorp->dtypep()) {

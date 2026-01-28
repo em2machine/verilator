@@ -915,7 +915,6 @@ const AstNodeDType* AstNodeDType::skipRefIterp(bool skipConst, bool skipEnum,
     const AstNodeDType* nodep = this;
     for (int depth = 0; depth < MAX_TYPEDEF_DEPTH; ++depth) {
         if (VN_IS(nodep, MemberDType) || VN_IS(nodep, ParamTypeDType) || VN_IS(nodep, RefDType)  //
-            || VN_IS(nodep, RequireDType)  //
             || (VN_IS(nodep, ConstDType) && skipConst)  //
             || (VN_IS(nodep, EnumDType) && skipEnum)) {
             if (const AstNodeDType* subp = nodep->subDTypep()) {
@@ -927,6 +926,17 @@ const AstNodeDType* AstNodeDType::skipRefIterp(bool skipConst, bool skipEnum,
             }
         }
         return nodep;
+    }
+    auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
+    UINFO(0, "skipRefIterp recursion: start=" << this << " type=" << prettyTypeName() << "\n");
+    {
+        const AstNodeDType* chainp = this;
+        for (int i = 0; i < 20 && chainp; ++i) {
+            UINFO(0, "  chain[" << i << "]=" << chainp << " type="
+                                << chainp->prettyTypeName() << " sub=" << chainp->subDTypep()
+                                << "\n");
+            chainp = chainp->subDTypep();
+        }
     }
     nodep->v3error("Recursive type definition, or over " << MAX_TYPEDEF_DEPTH << " types deep");
     return nullptr;

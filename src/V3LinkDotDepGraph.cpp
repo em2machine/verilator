@@ -270,7 +270,8 @@ void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string&
     }
     s_refDTypeDotPathRegistry.emplace(refp, cellName);
     UINFO(5, "DEPGRAPH: registered refdtype dotpath '" << cellName << "' for '" << refp->name()
-                  << "' in " << (contextModp ? contextModp->name() : "<unknown>") << endl);
+                  << "' in " << (contextModp ? contextModp->name() : "<unknown>")
+                  << " ptr=" << cvtToHex(refp) << endl);
 }
 
 void V3LinkDotDepGraph::registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp) {
@@ -367,6 +368,25 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
 
     UINFO(9, "DEPGRAPH: created " << nodeTypeName(type) << " node '" << nodeName(depNodep)
               << "' owner=" << nodeOwnerName(depNodep) << endl);
+
+    // For REFDTYPE nodes, look up cellName from the registry
+    if (type == NodeType::REFDTYPE) {
+        if (AstRefDType* const rdp = VN_CAST(nodep, RefDType)) {
+            const auto regIt = s_refDTypeDotPathRegistry.find(rdp);
+            if (regIt != s_refDTypeDotPathRegistry.end()) {
+                depNodep->cellName = regIt->second;
+                UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name() << "' cellName='" << depNodep->cellName
+                          << "' from registry in " << (ownerModp ? ownerModp->name() : "<unknown>") << endl);
+            } else if (AstRefDType* const origRefp = rdp->clonep()) {
+                const auto origIt = s_refDTypeDotPathRegistry.find(origRefp);
+                if (origIt != s_refDTypeDotPathRegistry.end()) {
+                    depNodep->cellName = origIt->second;
+                    UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name() << "' cellName='" << depNodep->cellName
+                              << "' inherited from clone in " << (ownerModp ? ownerModp->name() : "<unknown>") << endl);
+                }
+            }
+        }
+    }
     return depNodep;
 }
 
@@ -1083,6 +1103,13 @@ void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
               << " type=" << nodeTypeName(from->nodeType) << " nodep=" << from->nodep
               << " --> '" << nodeName(to) << "'@" << nodeOwnerName(to)
               << " type=" << nodeTypeName(to->nodeType) << " nodep=" << to->nodep << endl);
+    if (from->nodeType == NodeType::PARAMTYPEDTYPE
+        && (to->nodeType == NodeType::PARAMTYPEDTYPE || to->nodeType == NodeType::TYPEDEF)) {
+        UINFO(5, "DEPGRAPH: paramtype edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
+                    << " cell='" << from->cellName << "' -> '" << nodeName(to) << "'@"
+                    << nodeOwnerName(to) << " type=" << nodeTypeName(to->nodeType)
+                    << " cell='" << to->cellName << "'" << endl);
+    }
 }
 
 void V3LinkDotDepGraph::forEach(const std::function<void(const DepNode&)>& fn) {
@@ -2044,21 +2071,9 @@ private:
     void visit(AstRefDType* nodep) override {
         if (!m_modp) return;
 
+        // findOrCreateNode handles registry lookup for cellName
         V3LinkDotDepGraph::DepNode* const depNodep
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp);
-
-        const auto regIt = V3LinkDotDepGraph::s_refDTypeDotPathRegistry.find(nodep);
-        if (regIt != V3LinkDotDepGraph::s_refDTypeDotPathRegistry.end()) {
-            depNodep->cellName = regIt->second;
-        } else if (AstRefDType* const origRefp = nodep->clonep()) {
-            const auto origIt = V3LinkDotDepGraph::s_refDTypeDotPathRegistry.find(origRefp);
-            if (origIt != V3LinkDotDepGraph::s_refDTypeDotPathRegistry.end()) {
-                depNodep->cellName = origIt->second;
-                UINFO(5, "DEPGRAPH: inherited refdtype dotpath '" << depNodep->cellName
-                          << "' for '" << nodep->name() << "' in "
-                          << (m_modp ? m_modp->name() : "<unknown>") << endl);
-            }
-        }
 
         // If the REFDTYPE is a child of a PARAMTYPEDTYPE, try to get the full dotpath from
         // the PARAMTYPE's cell association (which has the complete path like "cca_io.tlb_io")
@@ -2562,6 +2577,28 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
             const string templateBaseName = depNodep->ownerModp->name();
             const string nodeNameStr = nodeName(depNodep);
 
+            // If the REFDTYPE has a cellName, use it to find the correct specialization
+            // by looking up which specialized module the cell instantiates
+            string targetSpecSuffix;
+            if (!nodep->cellName.empty() && nodep->ownerModp) {
+                // Find the cell in the owner module and get its specialized module
+                for (AstNode* stmtp = nodep->ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                        if (cellp->name() == nodep->cellName && cellp->modp()) {
+                            const string cellModName = cellp->modp()->name();
+                            const size_t suffixPos = cellModName.find("__");
+                            if (suffixPos != string::npos) {
+                                targetSpecSuffix = cellModName.substr(suffixPos);
+                                UINFO(9, "DEPGRAPH: updateEdges cellName '" << nodep->cellName
+                                          << "' -> module '" << cellModName
+                                          << "' suffix '" << targetSpecSuffix << "'" << endl);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
             for (DepNode* const candp : s_allNodes) {
                 if (!candp || candp == depNodep) continue;
                 if (candp->nodeType != depNodep->nodeType) continue;
@@ -2571,6 +2608,17 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
                 // Check if candidate is a specialization of the template
                 const string candOwnerName = candp->ownerModp->name();
                 if (candOwnerName.find(templateBaseName + "__") != string::npos) {
+                    // If we have a target suffix from cellName lookup, prefer exact match
+                    if (!targetSpecSuffix.empty()) {
+                        if (candOwnerName.find(targetSpecSuffix) != string::npos) {
+                            specializedNodep = candp;
+                            UINFO(9, "DEPGRAPH: updateEdges matched via cellName suffix '"
+                                      << targetSpecSuffix << "' -> " << candOwnerName << endl);
+                            break;
+                        }
+                        // Don't use fallback if we have a specific target
+                        continue;
+                    }
                     // Found a specialized version - prefer one in same module hierarchy
                     const string ownerName = nodep->ownerModp->name();
                     const size_t ownerSuffixPos = ownerName.find("__");
@@ -2583,7 +2631,7 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
                             break;
                         }
                     }
-                    // Fallback: use first specialized version found
+                    // Fallback: use first specialized version found (only if no cellName target)
                     if (!specializedNodep) specializedNodep = candp;
                 }
             }
