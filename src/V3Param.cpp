@@ -660,6 +660,15 @@ class ParamProcessor final {
         } else if (AstClassOrPackageRef* const classRefp = VN_CAST(nodep, ClassOrPackageRef)) {
             if (classRefp->classOrPackageSkipp() == oldClassp)
                 classRefp->classOrPackagep(newClassp);
+        } else if (AstTypedef* const typedefp = VN_CAST(nodep, Typedef)) {
+            // Update typedefs that refer to the old class to point to the new class
+            if (typedefp->subDTypep()) {
+                if (AstClassRefDType* const classRefp = VN_CAST(typedefp->subDTypep(), ClassRefDType)) {
+                    if (classRefp->classp() == oldClassp) {
+                        classRefp->classp(newClassp);
+                    }
+                }
+            }
         } else if (AstNodeFTaskRef* const ftaskRefp = VN_CAST(nodep, NodeFTaskRef)) {
             // Also update FuncRef/TaskRef packagep to point to new class
             // This fixes static method calls through typedefs in parameterized classes

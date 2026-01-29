@@ -146,6 +146,7 @@ const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     case NodeType::STRUCTDTYPE: return "STRUCTDTYPE";
     case NodeType::UNIONDTYPE: return "UNIONDTYPE";
     case NodeType::ATTROF: return "ATTROF";
+    case NodeType::FUNC: return "FUNC";
     }
     return "?";
 }
@@ -854,9 +855,6 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
-static void commitGParam(V3LinkDotDepGraph::DepNode* nodep) {
-    (void)nodep;
-}
 
 static void commitLParam(V3LinkDotDepGraph::DepNode* nodep) {
     (void)nodep;
@@ -940,7 +938,9 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
                 // Case 1: this_type pattern - typedef points to the same base class as owner
                 // e.g., in uvm_object_registry__Tz3: typedef uvm_object_registry#(T) this_type;
                 // The typedef should point to uvm_object_registry__Tz3 itself
-                if (currentOrigName == ownerBaseName) {
+                // BUT only if the typedef has parameters (like Foo#(T)), not if it's just Foo
+                // A typedef like "typedef Foo default_type;" should remain pointing to the base class
+                if (currentOrigName == ownerBaseName && crdtp->paramsp()) {
                     if (AstClass* const ownerClassp = VN_CAST(ownerModp, Class)) {
                         if (ownerClassp != currentClassp) {
                             foundNewClassp = ownerClassp;
@@ -1249,13 +1249,12 @@ static void commitResolvedNode(V3LinkDotDepGraph::DepNode* nodep) {
     if (!nodep || !nodep->nodep) return;
     if (nodep->nodeType == V3LinkDotDepGraph::NodeType::REFDTYPE) {
         commitRefDType(nodep);
-    } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::GPARAM) {
-        commitGParam(nodep);
-    } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::LPARAM) {
-        commitLParam(nodep);
-    } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) {
-        commitTypedef(nodep);
-    } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::STRUCTDTYPE
+    } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::GPARAM ||
+               nodep->nodeType == V3LinkDotDepGraph::NodeType::LPARAM) {
+            commitLParam(nodep);
+        } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) {
+            commitTypedef(nodep);
+        } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::STRUCTDTYPE
                || nodep->nodeType == V3LinkDotDepGraph::NodeType::UNIONDTYPE) {
         commitStructUnion(VN_CAST(nodep->nodep, NodeUOrStructDType), nodep->ownerModp);
     } else if (nodep->nodeType == V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE) {
@@ -2726,6 +2725,24 @@ private:
         // Also collect any expression dependencies from fromp/dimp
         V3LinkDotDepGraph::collectExpressionDeps(nodep->fromp(), depNodep, m_modp);
         V3LinkDotDepGraph::collectExpressionDeps(nodep->dimp(), depNodep, m_modp);
+    }
+
+    void visit(AstNodeFTask* nodep) override {
+        if (!m_modp) return;
+
+        // Add function/task to dependency graph to track return type dependencies
+        V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
+            nodep, V3LinkDotDepGraph::NodeType::FUNC, m_modp);
+
+        // If function has a return type, add dependency edge
+        if (nodep->isFunction() && nodep->fvarp()) {
+            if (AstVar* const fvarp = VN_CAST(nodep->fvarp(), Var)) {
+                V3LinkDotDepGraph::collectExpressionDeps(fvarp->dtypep(), depNodep, m_modp);
+            }
+        }
+
+        // Visit function body for dependencies
+        iterateChildrenConst(nodep);
     }
 
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }

@@ -42,7 +42,8 @@ public:
         REFDTYPE,       // Reference to a type (AstRefDType)
         STRUCTDTYPE,    // Struct type (AstStructDType)
         UNIONDTYPE,     // Union type (AstUnionDType)
-        ATTROF          // Attribute expression like $bits() (AstAttrOf)
+        ATTROF,         // Attribute expression like $bits() (AstAttrOf)
+        FUNC            // Function/Task (AstNodeFTask)
     };
 
     // A node in the dependency graph
