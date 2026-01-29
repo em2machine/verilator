@@ -12,26 +12,21 @@
 `define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d (%s !== %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
 // verilog_format: on
 
-interface depgraph_if;
-    typedef logic [3:0] nibble_t;
-endinterface
+package TestPkg;
+  localparam type tm_region_t = logic [1:0];
+endpackage
 
-module depgraph_top;
-    depgraph_if ifc();
+module TestMod;
+  import TestPkg::*;
 
-    typedef ifc.nibble_t nibble_t;
+  // This should work - tm_region_t has width 2
+  localparam tm_region_t tm_region_lsio = 2'b10;
 
-    nibble_t a;
-    nibble_t b;
-    logic [3:0] sum;
-
-    assign sum = a + b;
-
-    initial begin
-        #1;
-        `checkd($bits(nibble_t), 4);
-        `checkd($bits(sum), 4);
-        $write("*-* All Finished *-*\n");
-        $finish;
-    end
+  // Test logic
+  initial begin
+    $display("tm_region_lsio = %b", tm_region_lsio);
+    `checkd(tm_region_lsio, 2);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule

@@ -857,7 +857,26 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
 
 
 static void commitLParam(V3LinkDotDepGraph::DepNode* nodep) {
-    (void)nodep;
+    if (!nodep || !nodep->nodep) return;
+    AstVar* const varp = VN_CAST(nodep->nodep, Var);
+    if (!varp) return;
+
+    // If the LPARAM's dtype is a REFDTYPE pointing to a PARAMTYPEDTYPE,
+    // update the REFDTYPE's width. This is a backup in case commitParamType
+    // didn't update it (e.g., if the dependency edge wasn't set up correctly).
+    if (AstRefDType* const rdp = VN_CAST(varp->dtypep(), RefDType)) {
+        if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
+            // Note: ptdp->width() may be 0 even if ptdp->dtypep()->width() is correct
+            // because the PARAMTYPEDTYPE's own width hasn't been set yet.
+            const int ptdpWidth = ptdp->dtypep() ? ptdp->dtypep()->width() : ptdp->width();
+            if (ptdpWidth > 0 && rdp->width() != ptdpWidth) {
+                UINFO(5, "DEPGRAPH: commitLParam '" << varp->name()
+                          << "' updating REFDTYPE width from " << rdp->width()
+                          << " to " << ptdpWidth << endl);
+                rdp->widthForce(ptdpWidth, ptdp->dtypep() ? ptdp->dtypep()->widthMin() : ptdp->widthMin());
+            }
+        }
+    }
 }
 
 static void commitStructUnion(AstNodeUOrStructDType* usp, AstNodeModule* ownerModp) {
@@ -1111,6 +1130,33 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         // Clear flags so finalizeParamType doesn't redo it
         nodep->deferredDTypep = nullptr;
         nodep->deferredNeedsChildDTypeClear = false;
+    }
+
+    // Update REFDTYPEs that point to this PARAMTYPEDTYPE with the resolved width.
+    // This must happen during commit so that dependent nodes (like LPARAMs) see the
+    // correct width when V3Width runs on them during reEvaluateNode.
+    {
+        const int ptdpResolvedWidth = ptdp->dtypep() ? ptdp->dtypep()->width() : ptdp->width();
+        if (ptdpResolvedWidth > 0) {
+            for (V3LinkDotDepGraph::DepNode* const depNodep : nodep->dependents) {
+                if (!depNodep) continue;
+                // For LPARAM/GPARAM nodes, update their REFDTYPE if it points to this PARAMTYPEDTYPE
+                if (depNodep->nodeType == V3LinkDotDepGraph::NodeType::LPARAM
+                    || depNodep->nodeType == V3LinkDotDepGraph::NodeType::GPARAM) {
+                    AstVar* const varp = VN_CAST(depNodep->nodep, Var);
+                    if (!varp) continue;
+                    if (AstRefDType* const rdp = VN_CAST(varp->dtypep(), RefDType)) {
+                        if (rdp->refDTypep() == ptdp && rdp->width() != ptdpResolvedWidth) {
+                            UINFO(5, "DEPGRAPH: commitParamType updating dependent REFDTYPE '"
+                                      << rdp->name() << "' width from " << rdp->width()
+                                      << " to " << ptdpResolvedWidth << " for LPARAM '" << varp->name()
+                                      << "'" << endl);
+                            rdp->widthForce(ptdpResolvedWidth, ptdp->dtypep() ? ptdp->dtypep()->widthMin() : ptdp->widthMin());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     const bool isSpecialized = ownerModp->name().find("__") != string::npos;

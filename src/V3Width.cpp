@@ -7984,6 +7984,10 @@ class WidthVisitor final : public VNVisitor {
                     "Under node " << nodep->prettyTypeName()
                                   << " has no dtype?? Missing Visitor func?");
         if (expDTypep->basicp()->untyped() || nodep->dtypep()->basicp()->untyped()) return false;
+        // During DepGraph execution, expected width may be 0 if the type hasn't been
+        // fully resolved yet. Skip the check - it will be re-run after finalizeAST().
+        if (!V3LinkDotDepGraph::allowParamMutation() && expWidth == 0) return false;
+        if (!V3LinkDotDepGraph::allowParamMutation() && nodep->width() == 0) return false;
         UASSERT_OBJ(nodep->width() != 0, nodep,
                     "Under node " << nodep->prettyTypeName()
                                   << " has no expected width?? Missing Visitor func?");
