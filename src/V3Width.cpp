@@ -981,13 +981,19 @@ class WidthVisitor final : public VNVisitor {
         UINFO(6, "RANGE " << nodep);
         V3Const::constifyParamsEdit(nodep->leftp());  // May relink pointed to node
         V3Const::constifyParamsEdit(nodep->rightp());  // May relink pointed to node
-        checkConstantOrReplace(nodep->leftp(), true,
-                               "left side of bit range isn't a two-state constant"
-                               " (IEEE 1800-2023 6.9.1)");
-        checkConstantOrReplace(nodep->rightp(), true,
-                               "right side of bit range isn't a two-state constant"
-                               " (IEEE 1800-2023 6.9.1)");
-        if (m_vup->prelim()) {
+        // Skip constant check and range validation for template modules - their parameters
+        // may not be resolved yet (X values). Only specialized clones have fully resolved
+        // parameter values and should be validated.
+        const bool skipTemplateRange = V3LinkDotDepGraph::shouldDeferTemplateType(nodep);
+        if (!skipTemplateRange) {
+            checkConstantOrReplace(nodep->leftp(), true,
+                                   "left side of bit range isn't a two-state constant"
+                                   " (IEEE 1800-2023 6.9.1)");
+            checkConstantOrReplace(nodep->rightp(), true,
+                                   "right side of bit range isn't a two-state constant"
+                                   " (IEEE 1800-2023 6.9.1)");
+        }
+        if (m_vup->prelim() && !skipTemplateRange) {
             // Don't need to iterate because V3Const already constified
             const int width = nodep->elementsConst();
             if (nodep->fromBracket() && nodep->leftConst() > nodep->rightConst()) {
@@ -1002,18 +1008,8 @@ class WidthVisitor final : public VNVisitor {
                                << std::hex << width << std::dec);
             }
             // Note width() not set on range; use elementsConst()
-            // EOM: Skip ASCRANGE during widthParamsEdit (m_paramsOnly) - parameters may not
-            // be fully resolved yet. The check will run again during the full V3Width pass
-            // after DepGraph resolution when parameters have their final values.
             const bool inDeadModule = m_modep && m_modep->dead();
-            bool skipAscrange = false;
-            if (V3LinkDotDepGraph::shouldDeferTemplateType(nodep)) {
-                // DepGraph resolves specialized clones out-of-order; template/type-table
-                // nodes can still carry default params (e.g., 0) when this check runs.
-                // Suppress ASCRANGE here so only the fully-specialized clone is linted.
-                skipAscrange = true;
-            }
-            if (!skipAscrange && nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
+            if (nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
                 && !VN_IS(nodep->backp(), Cell)  // For cells we warn in V3Inst
                 && !m_paramsOnly  // Skip during parameter evaluation
                 && !inDeadModule) {

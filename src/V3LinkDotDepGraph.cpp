@@ -3218,9 +3218,12 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 // execution batch need to see the unwrapped type to run V3Width.
                 AstNodeDType* newChildp = lhsp;
                 newChildp->unlinkFrBack();
-                if (reqp->backp() == ptdp) {
-                    reqp->unlinkFrBack();
-                    VL_DO_DANGLING(reqp->deleteTree(), reqp);
+                // Remove existing child (the REQUIREDTYPE) before setting new child
+                if (AstNode* const existingChildp = ptdp->childDTypep()) {
+                    if (existingChildp->backp() == ptdp) {
+                        existingChildp->unlinkFrBack();
+                        VL_DO_DANGLING(existingChildp->deleteTree(), existingChildp);
+                    }
                 }
                 ptdp->childDTypep(newChildp);
                 ptdp->dtypep(newChildp);
@@ -3260,8 +3263,24 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 // Run V3Width on the unwrapped type to evaluate parameterized range expressions
                 // like [TLEN-1:0]. Without this, BASICDTYPE 'logic' has width=1 instead of
                 // the expected width from the resolved parameter (e.g., TLEN=8 -> width=8).
-                V3Width::widthParamsEdit(newChildp);
-                V3Const::constifyParamsEdit(newChildp);
+                // Skip if the REFDTYPE points to a template typedef - its parameters have X values.
+                // Only specialized clones have resolved parameter values.
+                bool skipWidth = false;
+                if (AstRefDType* const refp = VN_CAST(newChildp, RefDType)) {
+                    if (AstTypedef* const tdp = refp->typedefp()) {
+                        AstNodeModule* const tdOwnerp = findOwnerModule(tdp);
+                        if (tdOwnerp && tdOwnerp->hasGParam()
+                            && tdOwnerp->name().find("__") == string::npos) {
+                            skipWidth = true;
+                            UINFO(5, "DEPGRAPH: skip widthParamsEdit - REFDTYPE points to template typedef '"
+                                      << tdp->name() << "' in " << tdOwnerp->name() << endl);
+                        }
+                    }
+                }
+                if (!skipWidth) {
+                    V3Width::widthParamsEdit(newChildp);
+                    V3Const::constifyParamsEdit(newChildp);
+                }
                 targetDTypep = newChildp;  // Update to use widthed type
                 targetName = newChildp->prettyTypeName();
             }
