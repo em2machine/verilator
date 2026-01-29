@@ -938,9 +938,12 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
                 // Case 1: this_type pattern - typedef points to the same base class as owner
                 // e.g., in uvm_object_registry__Tz3: typedef uvm_object_registry#(T) this_type;
                 // The typedef should point to uvm_object_registry__Tz3 itself
-                // BUT only if the typedef has parameters (like Foo#(T)), not if it's just Foo
-                // A typedef like "typedef Foo default_type;" should remain pointing to the base class
-                if (currentOrigName == ownerBaseName && crdtp->paramsp()) {
+                // BUT only if the current class is already specialized (has __ in name)
+                // A typedef like "typedef Foo default_type;" pointing to base class Foo_ should remain
+                const bool currentIsSpecialized = currentClassName.find("__") != string::npos;
+                const bool currentIsBaseWithDefault = (currentClassName == ownerBaseName + "_");
+                // Update if: same base class AND current is specialized AND not base with default params
+                if (currentOrigName == ownerBaseName && currentIsSpecialized && !currentIsBaseWithDefault) {
                     if (AstClass* const ownerClassp = VN_CAST(ownerModp, Class)) {
                         if (ownerClassp != currentClassp) {
                             foundNewClassp = ownerClassp;
