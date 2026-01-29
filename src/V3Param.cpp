@@ -1535,6 +1535,51 @@ class ParamProcessor final {
         return newModp;
     }
     AstNodeModule* ifaceRefDeparam(AstIfaceRefDType* const nodep, AstNodeModule* srcModp) {
+        // Check for self-reference pattern: typedef iface#(T) this_type inside interface iface
+        // When processing inside a specialized interface, the IfaceRefDType should point to
+        // the owner interface, not create an intermediate specialization.
+        if (m_modp && VN_IS(m_modp, Iface)) {
+            AstIface* ownerIfacep = const_cast<AstIface*>(VN_AS(m_modp, Iface));
+            const string ownerOrigName = ownerIfacep->origName().empty()
+                                             ? ownerIfacep->name()
+                                             : ownerIfacep->origName();
+            const string srcOrigName = srcModp->origName().empty()
+                                           ? srcModp->name()
+                                           : srcModp->origName();
+            string ownerBaseName = ownerOrigName;
+            const size_t ownerPos = ownerBaseName.find("__");
+            if (ownerPos != string::npos) ownerBaseName = ownerBaseName.substr(0, ownerPos);
+            string srcBaseName = srcOrigName;
+            const size_t srcPos = srcBaseName.find("__");
+            if (srcPos != string::npos) srcBaseName = srcBaseName.substr(0, srcPos);
+
+            if (ownerBaseName == srcBaseName) {
+                bool allOwnParams = true;
+                for (AstPin* pinp = nodep->paramsp(); pinp && allOwnParams;
+                     pinp = VN_AS(pinp->nextp(), Pin)) {
+                    if (AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType)) {
+                        if (AstParamTypeDType* const ptdp
+                            = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
+                            AstNodeModule* const ptdOwnerp
+                                = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                            if (ptdOwnerp != m_modp) allOwnParams = false;
+                        } else {
+                            allOwnParams = false;
+                        }
+                    } else {
+                        allOwnParams = false;
+                    }
+                }
+                if (allOwnParams) {
+                    UINFO(5, "ifaceRefDeparam: self-reference pattern detected in "
+                              << ownerIfacep->name() << ", using owner interface" << endl);
+                    nodep->ifacep(ownerIfacep);
+                    if (nodep->paramsp()) nodep->paramsp()->unlinkFrBackWithNext()->deleteTree();
+                    return ownerIfacep;
+                }
+            }
+        }
+
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
         if (!newModp) return nullptr;
@@ -1586,6 +1631,59 @@ class ParamProcessor final {
     }
     AstNodeModule* classRefDeparam(AstClassRefDType* nodep, AstNodeModule* srcModp) {
         resolveDefaultParams(nodep);
+
+        // Check for self-reference pattern: typedef c1#(REQ, RSP) this_type inside class c1
+        // When processing inside a specialized c1 class, the ClassRefDType should point to
+        // the owner class, not create an intermediate specialization.
+        if (m_modp && VN_IS(m_modp, Class)) {
+            AstClass* ownerClassp = const_cast<AstClass*>(VN_AS(m_modp, Class));
+            // Check if srcModp is the same base class as the owner
+            const string ownerOrigName = ownerClassp->origName().empty()
+                                             ? ownerClassp->name()
+                                             : ownerClassp->origName();
+            const string srcOrigName = srcModp->origName().empty()
+                                           ? srcModp->name()
+                                           : srcModp->origName();
+            // Extract base name (before __) for specialized classes
+            string ownerBaseName = ownerOrigName;
+            const size_t ownerPos = ownerBaseName.find("__");
+            if (ownerPos != string::npos) ownerBaseName = ownerBaseName.substr(0, ownerPos);
+            string srcBaseName = srcOrigName;
+            const size_t srcPos = srcBaseName.find("__");
+            if (srcPos != string::npos) srcBaseName = srcBaseName.substr(0, srcPos);
+
+            if (ownerBaseName == srcBaseName) {
+                // Check if all parameters are the owner's own type parameters
+                bool allOwnParams = true;
+                for (AstPin* pinp = nodep->paramsp(); pinp && allOwnParams;
+                     pinp = VN_AS(pinp->nextp(), Pin)) {
+                    if (AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType)) {
+                        if (AstParamTypeDType* const ptdp
+                            = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
+                            // Check if this PARAMTYPEDTYPE belongs to the owner class
+                            AstNodeModule* const ptdOwnerp
+                                = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                            if (ptdOwnerp != m_modp) allOwnParams = false;
+                        } else {
+                            allOwnParams = false;
+                        }
+                    } else {
+                        allOwnParams = false;
+                    }
+                }
+                if (allOwnParams) {
+                    // This is a self-reference - use the owner class directly
+                    UINFO(5, "classRefDeparam: self-reference pattern detected in "
+                              << ownerClassp->name() << ", using owner class" << endl);
+                    nodep->classp(ownerClassp);
+                    nodep->classOrPackagep(ownerClassp);
+                    // Delete the parameters - they're not needed for self-reference
+                    if (nodep->paramsp()) nodep->paramsp()->unlinkFrBackWithNext()->deleteTree();
+                    return ownerClassp;
+                }
+            }
+        }
+
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
         if (!newModp) return nullptr;
