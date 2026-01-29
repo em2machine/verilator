@@ -2559,6 +2559,12 @@ class WidthVisitor final : public VNVisitor {
             UINFOTREE(9, nodep, "", "CastDit");
             AstNodeDType* const toDtp = nodep->dtypep()->skipRefToEnump();
             AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefToEnump();
+            // During DepGraph execution, the target type may still be a REQUIREDTYPE wrapper
+            // that hasn't been resolved yet. Skip the check - it will be re-run after finalizeAST().
+            if (!V3LinkDotDepGraph::allowParamMutation() && VN_IS(toDtp, RequireDType)) {
+                UINFO(5, "DEPGRAPH: deferring cast check for REQUIREDTYPE target" << endl);
+                return;
+            }
             const auto castable = AstNode::computeCastable(toDtp, fromDtp, nodep->fromp());
             bool bad = false;
             if (castable == VCastable::UNSUPPORTED) {
