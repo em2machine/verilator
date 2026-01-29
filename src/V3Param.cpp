@@ -1198,8 +1198,16 @@ class ParamProcessor final {
                         any_overridesr = true;
                     }
                 } else if (exprp) {
-                    longnamer += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(exprp);
-                    any_overridesr = true;
+                    // When DepGraph is enabled, also check if the explicit param matches the default.
+                    // This ensures ClsTypedefParam#(int) matches ClsTypedefParam#() when default is typedef int.
+                    const AstNodeDType* exprSkipRefp = exprp->skipRefToNonRefp();
+                    const AstNodeDType* origSkipRefp = origp->skipRefToNonRefp();
+                    if (exprSkipRefp->similarDType(origSkipRefp)) {
+                        // Setting parameter to its default value.  Just ignore it.
+                    } else {
+                        longnamer += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(exprp);
+                        any_overridesr = true;
+                    }
                 }
             }
         } else {
@@ -1444,13 +1452,20 @@ class ParamProcessor final {
                              ifaceRefRefs /*ref*/);
 
         // Default params are resolved as overrides
+        // But first check if the default value is equivalent to a basic type (e.g., typedef int)
         bool defaultsResolved = false;
         if (!any_overrides) {
             for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
-                if (pinp->modPTypep()) {
-                    any_overrides = true;
-                    defaultsResolved = true;
-                    break;
+                if (AstParamTypeDType* const modvarp = pinp->modPTypep()) {
+                    // Check if the default type parameter resolves to a basic type.
+                    // If so, don't treat it as an override - let the explicit basic type param match.
+                    // This ensures ClsTypedefParam#() with default typedef int matches ClsTypedefParam#(int).
+                    const AstNodeDType* defaultTypep = modvarp->skipRefToNonRefp();
+                    if (!VN_IS(defaultTypep, BasicDType)) {
+                        any_overrides = true;
+                        defaultsResolved = true;
+                        break;
+                    }
                 }
             }
         }

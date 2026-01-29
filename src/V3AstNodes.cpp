@@ -915,6 +915,7 @@ const AstNodeDType* AstNodeDType::skipRefIterp(bool skipConst, bool skipEnum,
     const AstNodeDType* nodep = this;
     for (int depth = 0; depth < MAX_TYPEDEF_DEPTH; ++depth) {
         if (VN_IS(nodep, MemberDType) || VN_IS(nodep, ParamTypeDType) || VN_IS(nodep, RefDType)  //
+            || VN_IS(nodep, RequireDType)  // Skip through REQUIREDTYPE wrapper
             || (VN_IS(nodep, ConstDType) && skipConst)  //
             || (VN_IS(nodep, EnumDType) && skipEnum)) {
             if (const AstNodeDType* subp = nodep->subDTypep()) {
