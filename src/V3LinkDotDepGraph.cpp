@@ -1240,44 +1240,14 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
-// Returns true if committed, false if deferred (node should not be marked resolved)
+// ATTROF nodes don't need special commit handling - V3Width handles the replacement
 static void commitAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
     if (!nodep || !nodep->nodep) return;
     AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
     if (!attrp) return;
 
-    // Get the width from the fromp - dependencies should have propagated width by now
-    AstNodeDType* fromdtp = nullptr;
-    if (AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
-        fromdtp = rdp->skipRefp();
-        if (!fromdtp) fromdtp = rdp->refDTypep();
-        if (!fromdtp) fromdtp = rdp->dtypep();
-    } else if (AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
-        fromdtp = dtp->skipRefp();
-    }
-
-    if (!fromdtp || fromdtp->width() == 0) {
-        // Width not yet resolved - V3Width will handle this later
-        UINFO(5, "DEPGRAPH: commit ATTROF '" << attrp->attrType().ascii()
-                  << "' fromdtp width=0, skipping replacement" << endl);
-        return;
-    }
-
-    // For DIM_BITS ($bits), replace ATTROF with CONST immediately.
-    // This must happen during commit (not finalizeAST) because V3Const
-    // evaluates comparisons like "$bits(T) !== 8" during V3Param.
-    if (attrp->attrType() == VAttrType::DIM_BITS) {
-        const int width = fromdtp->width();
-        nodep->resolvedWidth = width;
-        UINFO(5, "DEPGRAPH: commit ATTROF DIM_BITS replacing with CONST " << width << endl);
-
-        // Replace ATTROF with CONST immediately
-        AstConst* const constp = new AstConst{attrp->fileline(), AstConst::Unsized32{},
-                                               static_cast<uint32_t>(width)};
-        attrp->replaceWith(constp);
-        VL_DO_DANGLING(attrp->deleteTree(), attrp);
-        nodep->nodep = nullptr;  // Node is deleted
-    }
+    // Just log for debugging - V3Width will handle the actual replacement
+    UINFO(9, "DEPGRAPH: commit ATTROF '" << attrp->attrType().ascii() << "'" << endl);
 }
 
 static void commitResolvedNode(V3LinkDotDepGraph::DepNode* nodep) {
@@ -3814,36 +3784,7 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
-static void finalizeAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
-    AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
-    if (!attrp) return;
-
-    // Only handle DIM_BITS ($bits) for now
-    if (attrp->attrType() != VAttrType::DIM_BITS) return;
-
-    // Get the resolved width from the DepNode or recalculate from fromp
-    int width = nodep->resolvedWidth;
-    if (width == 0) {
-        AstNodeDType* fromdtp = nullptr;
-        if (AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
-            fromdtp = rdp->skipRefp();
-            if (!fromdtp) fromdtp = rdp->refDTypep();
-            if (!fromdtp) fromdtp = rdp->dtypep();
-        } else if (AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
-            fromdtp = dtp->skipRefp();
-        }
-        if (fromdtp) width = fromdtp->width();
-    }
-
-    if (width > 0) {
-        UINFO(5, "DEPGRAPH: finalizeAttrOf replacing $bits with CONST " << width << endl);
-        // Replace ATTROF with CONST
-        AstConst* const constp = new AstConst{attrp->fileline(), AstConst::Unsized32{}, static_cast<uint32_t>(width)};
-        attrp->replaceWith(constp);
-        VL_DO_DANGLING(attrp->deleteTree(), attrp);
-        nodep->nodep = nullptr;  // Node is deleted
-    }
-}
+// ATTROF replacement is handled by V3Width, not here
 
 void V3LinkDotDepGraph::finalizeAST() {
     if (!s_enabled) return;
@@ -3880,7 +3821,7 @@ void V3LinkDotDepGraph::finalizeAST() {
             ++paramCount;
             break;
         case NodeType::ATTROF:
-            finalizeAttrOf(nodep);
+            // ATTROF replacement is handled by V3Width, not here
             break;
         default:
             break;
