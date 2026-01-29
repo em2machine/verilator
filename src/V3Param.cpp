@@ -1202,7 +1202,14 @@ class ParamProcessor final {
                     // This ensures ClsTypedefParam#(int) matches ClsTypedefParam#() when default is typedef int.
                     const AstNodeDType* exprSkipRefp = exprp->skipRefToNonRefp();
                     const AstNodeDType* origSkipRefp = origp->skipRefToNonRefp();
-                    if (exprSkipRefp->similarDType(origSkipRefp)) {
+                    // Also skip through REQUIREDTYPE wrapper if present
+                    if (VN_IS(exprSkipRefp, RequireDType) && exprSkipRefp->subDTypep()) {
+                        exprSkipRefp = exprSkipRefp->subDTypep()->skipRefToNonRefp();
+                    }
+                    if (VN_IS(origSkipRefp, RequireDType) && origSkipRefp->subDTypep()) {
+                        origSkipRefp = origSkipRefp->subDTypep()->skipRefToNonRefp();
+                    }
+                    if (exprSkipRefp && origSkipRefp && exprSkipRefp->similarDType(origSkipRefp)) {
                         // Setting parameter to its default value.  Just ignore it.
                     } else {
                         longnamer += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(exprp);
