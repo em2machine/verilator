@@ -491,33 +491,28 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         changed = true;
     }
 
-    // Enforce invariant: RefDType should not keep both typedefp and refDTypep
-    // unless refDTypep matches the typedef's subDTypep.
+    // Enforce invariant: RefDType should not keep both typedefp and refDTypep.
+    // V3Dead expects typedefp to be nullptr when elimCells is true.
+    // Always clear typedefp when refDTypep is set.
     if (rdp->refDTypep() && rdp->typedefp()) {
         AstTypedef* const curTdp = rdp->typedefp();
         AstNodeDType* const curRefp = rdp->refDTypep();
-        const bool allowBoth = curTdp && curRefp
-                               && (curTdp->subDTypep() == curRefp
-                                   || (curTdp->subDTypep()
-                                       && curTdp->subDTypep()->skipRefp() == curRefp));
-        if (!allowBoth) {
-            AstNodeModule* const tOwnerp = curTdp ? V3LinkDotDepGraph::findOwnerModule(curTdp) : nullptr;
-            AstNodeModule* const rOwnerp = curRefp ? V3LinkDotDepGraph::findOwnerModule(curRefp) : nullptr;
-            UINFO(5, "DEPGRAPH: commit clear typedefp for RefDType '" << rdp->name()
-                      << "' (refDTypep is set) typedef='" << (curTdp ? curTdp->name() : "<null>")
-                      << "' typedefp=" << curTdp
-                      << "' typedefBackp=" << (curTdp ? curTdp->backp() : nullptr)
-                      << "' typedefOwner='" << (tOwnerp ? tOwnerp->name() : "<null>")
-                      << "' refDType='" << (curRefp ? curRefp->prettyTypeName() : "<null>")
-                      << "' refDTypep=" << curRefp
-                      << "' refBackp=" << (curRefp ? curRefp->backp() : nullptr)
-                      << "' refOwner='" << (rOwnerp ? rOwnerp->name() : "<null>")
-                      << "'" << endl);
-            rdp->typedefp(nullptr);
-            rdp->dtypep(nullptr);
-            rdp->didWidth(false);
-            changed = true;
-        }
+        AstNodeModule* const tOwnerp = curTdp ? V3LinkDotDepGraph::findOwnerModule(curTdp) : nullptr;
+        AstNodeModule* const rOwnerp = curRefp ? V3LinkDotDepGraph::findOwnerModule(curRefp) : nullptr;
+        UINFO(5, "DEPGRAPH: commit clear typedefp for RefDType '" << rdp->name()
+                  << "' (refDTypep is set) typedef='" << (curTdp ? curTdp->name() : "<null>")
+                  << "' typedefp=" << curTdp
+                  << "' typedefBackp=" << (curTdp ? curTdp->backp() : nullptr)
+                  << "' typedefOwner='" << (tOwnerp ? tOwnerp->name() : "<null>")
+                  << "' refDType='" << (curRefp ? curRefp->prettyTypeName() : "<null>")
+                  << "' refDTypep=" << curRefp
+                  << "' refBackp=" << (curRefp ? curRefp->backp() : nullptr)
+                  << "' refOwner='" << (rOwnerp ? rOwnerp->name() : "<null>")
+                  << "'" << endl);
+        rdp->typedefp(nullptr);
+        rdp->dtypep(nullptr);
+        rdp->didWidth(false);
+        changed = true;
     }
 
     // Clear template/removed typedef pointers to avoid dangling links after V3Dead
@@ -1763,19 +1758,36 @@ private:
         AstNode* exprp = depNodep->origExprp ? depNodep->origExprp : nodep->valuep();
         if (exprp) {
             V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp);
-            if (debug() >= 5) {
-                std::ostringstream deps;
-                bool first = true;
-                for (V3LinkDotDepGraph::DepNode* const dep : depNodep->dependsOn) {
-                    if (!dep) continue;
-                    if (!first) deps << ", ";
-                    first = false;
-                    deps << V3LinkDotDepGraph::nodeName(dep)
-                         << "@" << V3LinkDotDepGraph::nodeOwnerName(dep);
+        }
+
+        // Also collect dependencies from the dtype (e.g., localparam tm_region_t foo = ...)
+        // The localparam depends on the PARAMTYPEDTYPE for its type.
+        if (AstNodeDType* const dtypep = nodep->dtypep()) {
+            if (AstRefDType* const rdtp = VN_CAST(dtypep, RefDType)) {
+                if (AstParamTypeDType* const ptdp = VN_CAST(rdtp->refDTypep(), ParamTypeDType)) {
+                    AstNodeModule* const ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                    V3LinkDotDepGraph::DepNode* const ptdNodep
+                        = V3LinkDotDepGraph::findOrCreateNode(
+                            ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                    V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
+                    UINFO(5, "DEPGRAPH: param '" << nodep->name() << "' depends on paramtype '"
+                              << ptdp->name() << "' in " << (ptdOwnerp ? ptdOwnerp->name() : "<null>") << endl);
                 }
-                UINFO(5, "DEPGRAPH: deps for '" << nodep->name() << "'@" << m_modp->name()
-                          << " = [" << deps.str() << "]" << endl);
             }
+        }
+
+        if (debug() >= 5) {
+            std::ostringstream deps;
+            bool first = true;
+            for (V3LinkDotDepGraph::DepNode* const dep : depNodep->dependsOn) {
+                if (!dep) continue;
+                if (!first) deps << ", ";
+                first = false;
+                deps << V3LinkDotDepGraph::nodeName(dep)
+                     << "@" << V3LinkDotDepGraph::nodeOwnerName(dep);
+            }
+            UINFO(5, "DEPGRAPH: deps for '" << nodep->name() << "'@" << m_modp->name()
+                      << " = [" << deps.str() << "]" << endl);
         }
     }
 
