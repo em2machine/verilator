@@ -2373,13 +2373,13 @@ AstNodeDType* AstRefDType::subDTypep() const VL_MT_STABLE {
     auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
     if (typedefp()) {
         if (VN_DELETED(typedefp()) || VN_DELETED(typedefp()->backp())) {
-            UINFO(1, "DEPGRAPH: RefDType has deleted typedefp=" << typedefp()
+            UINFO(5, "DEPGRAPH: RefDType has deleted typedefp=" << typedefp()
                       << " name=" << name() << " refDTypep=" << refDTypep()
                       << " this=" << this << endl);
             return nullptr;
         }
         if (!typedefp()->backp()) {  // EOM
-            UINFO(1, "DEPGRAPH: RefDType has dangling typedefp=" << typedefp()
+            UINFO(5, "DEPGRAPH: RefDType has dangling typedefp=" << typedefp()
                       << " name=" << name() << " refDTypep=" << refDTypep()
                       << " this=" << this << endl);  // EOM
         }

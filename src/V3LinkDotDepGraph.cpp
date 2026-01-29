@@ -1050,23 +1050,23 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
     AstNodeModule* const ownerModp = nodep->ownerModp;
     if (!ptdp || !ownerModp) return;
 
-    UINFO(0, "DEPGRAPH: commitParamType " << ptdp->name() << " in " << ownerModp->name()
+    UINFO(5, "DEPGRAPH: commitParamType " << ptdp->name() << " in " << ownerModp->name()
               << " subDTypep=" << (ptdp->subDTypep() ? ptdp->subDTypep()->prettyTypeName() : "null")
               << " dependsOn=" << nodep->dependsOn.size() << endl);
 
     // Handle REQUIREDTYPE resolution for interface typedefs (applies to ALL modules)
     // This must happen before V3Width runs on dependent nodes
     if (AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType)) {
-        UINFO(0, "DEPGRAPH: commitParamType " << ptdp->name() << " has REQUIREDTYPE" << endl);
+        UINFO(5, "DEPGRAPH: commitParamType " << ptdp->name() << " has REQUIREDTYPE" << endl);
         // Find the resolved typedef from our dependency edge
         for (V3LinkDotDepGraph::DepNode* const depNodep : nodep->dependsOn) {
-            UINFO(0, "DEPGRAPH: checking dependency TYPEDEF=" << (depNodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) << endl);
+            UINFO(5, "DEPGRAPH: checking dependency TYPEDEF=" << (depNodep->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF) << endl);
             if (!depNodep || depNodep->nodeType != V3LinkDotDepGraph::NodeType::TYPEDEF) continue;
             AstTypedef* const tdp = VN_CAST(depNodep->nodep, Typedef);
             if (!tdp || !tdp->subDTypep()) continue;
             // Found the target typedef - delete REQUIREDTYPE and set dtypep to resolved type
             AstNodeDType* const resolvedTypep = tdp->subDTypep();
-            UINFO(0, "DEPGRAPH: commit PARAMTYPE '" << ptdp->name()
+            UINFO(5, "DEPGRAPH: commit PARAMTYPE '" << ptdp->name()
                       << "' resolving REQUIREDTYPE to " << resolvedTypep->prettyTypeName()
                       << " from typedef '" << tdp->name() << "' in " << ownerModp->name() << endl);
             // Delete the REQUIREDTYPE child - don't replace, just remove
@@ -1946,12 +1946,12 @@ private:
         // Traverse the default type to collect dependencies (e.g. ranges using other params)
         if (nodep->subDTypep()) {
             if (nodep->name() == "T") {
-                 UINFO(0, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " collecting deps from subDTypep\n");
+                 UINFO(5, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " collecting deps from subDTypep\n");
             }
             V3LinkDotDepGraph::collectExpressionDeps(nodep->subDTypep(), depNodep, m_modp);
         } else {
             if (nodep->name() == "T") {
-                 UINFO(0, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " has NO subDTypep\n");
+                 UINFO(5, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name() << " has NO subDTypep\n");
             }
         }
 
@@ -3661,7 +3661,7 @@ int V3LinkDotDepGraph::resolve() {
     }
 
     if (debug() >= 5) {
-        UINFO(1, "DEPGRAPH: ========== REFDTYPE RESOLUTION SUMMARY ==========" << endl);
+        UINFO(5, "DEPGRAPH: ========== REFDTYPE RESOLUTION SUMMARY ==========" << endl);
         for (DepNode* const nodep : s_allNodes) {
             if (!nodep || nodep->nodeType != NodeType::REFDTYPE) continue;
             if (!nodep->resolved) continue;
@@ -3677,7 +3677,7 @@ int V3LinkDotDepGraph::resolve() {
                 target = string{"paramtype "} + ptdp->name() + "@"
                          + (ptOwnerp ? ptOwnerp->name() : "<null>");
             }
-            UINFO(1, "DEPGRAPH: RESOLVED REFDTYPE " << nodeName(nodep)
+            UINFO(5, "DEPGRAPH: RESOLVED REFDTYPE " << nodeName(nodep)
                       << "@" << nodeOwnerName(nodep) << " -> "
                       << (target.empty() ? "<unlinked>" : target) << endl);
             if (rdp->typedefp() && rdp->refDTypep()) {
@@ -3685,7 +3685,7 @@ int V3LinkDotDepGraph::resolve() {
                 AstNodeDType* const curRefp = rdp->refDTypep();
                 AstNodeModule* const tOwnerp = curTdp ? findOwnerModule(curTdp) : nullptr;
                 AstNodeModule* const rOwnerp = curRefp ? findOwnerModule(curRefp) : nullptr;
-                UINFO(1, "DEPGRAPH: WARNING refdtype has both typedefp and refDTypep set: "
+                UINFO(5, "DEPGRAPH: WARNING refdtype has both typedefp and refDTypep set: "
                           << nodeName(nodep) << "@" << nodeOwnerName(nodep)
                           << " typedef='" << (curTdp ? curTdp->name() : "<null>")
                           << "' typedefp=" << curTdp
@@ -3699,7 +3699,7 @@ int V3LinkDotDepGraph::resolve() {
                           << endl);
             }
         }
-        UINFO(1, "DEPGRAPH: ========== END REFDTYPE SUMMARY ==========" << endl);
+        UINFO(5, "DEPGRAPH: ========== END REFDTYPE SUMMARY ==========" << endl);
     }
 
     return s_iterationCount;
@@ -4047,8 +4047,8 @@ void V3LinkDotDepGraph::syncRefDTypeWidths(AstNodeModule* modp) {
 // Debugging
 
 void V3LinkDotDepGraph::dumpGraph() {
-    UINFO(1, "DEPGRAPH: ========== DEPENDENCY GRAPH DUMP ==========" << endl);
-    UINFO(1, "DEPGRAPH: Total nodes: " << s_allNodes.size()
+    UINFO(5, "DEPGRAPH: ========== DEPENDENCY GRAPH DUMP ==========" << endl);
+    UINFO(5, "DEPGRAPH: Total nodes: " << s_allNodes.size()
               << "  Iterations: " << s_iterationCount << endl);
 
     // Group nodes by owner module for clearer output
@@ -4058,13 +4058,13 @@ void V3LinkDotDepGraph::dumpGraph() {
     }
 
     for (const auto& kv : byOwner) {
-        UINFO(1, "DEPGRAPH: --- Module: " << kv.first << " ---" << endl);
+        UINFO(5, "DEPGRAPH: --- Module: " << kv.first << " ---" << endl);
         for (const DepNode* nodep : kv.second) {
             dumpNode(nodep);
         }
     }
 
-    UINFO(1, "DEPGRAPH: ========== END GRAPH DUMP ==========" << endl);
+    UINFO(5, "DEPGRAPH: ========== END GRAPH DUMP ==========" << endl);
 }
 
 void V3LinkDotDepGraph::dumpNode(const DepNode* nodep) {
@@ -4081,12 +4081,12 @@ void V3LinkDotDepGraph::dumpNode(const DepNode* nodep) {
         extra = " cell=" + nodep->cellName;
     }
 
-    UINFO(1, "DEPGRAPH:   " << nodeTypeName(nodep->nodeType) << " '" << nodeName(nodep) << "'"
+    UINFO(5, "DEPGRAPH:   " << nodeTypeName(nodep->nodeType) << " '" << nodeName(nodep) << "'"
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " iter=" << nodep->resolvedIteration
               << extra
-              << " deps=[" << deps.str() << "]"
-              << endl);
+              << (nodep->resolved ? " [R]" : "")
+              << " pendingDeps=" << nodep->dependsOn.size() << endl);
 }
 
 //======================================================================
@@ -4160,7 +4160,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
     else if (VN_IS(modp, Class)) modType = "CLASS";
     else if (VN_IS(modp, Package)) modType = "PACKAGE";
 
-    UINFO(1, "DEPGRAPH: " << prefix << connector << modp->name() << " : " << modType << endl);
+    UINFO(5, "DEPGRAPH: " << prefix << connector << modp->name() << " : " << modType << endl);
 
     const string childPrefix = prefix + extension;
 
@@ -4230,7 +4230,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
         if (hasChildCells) itemIsLast = false;
 
         const string itemConnector = itemIsLast ? "└── " : "├── ";
-        UINFO(1, "DEPGRAPH: " << childPrefix << itemConnector << items[i].second << endl);
+        UINFO(5, "DEPGRAPH: " << childPrefix << itemConnector << items[i].second << endl);
     }
 
     // Collect and print child cells
@@ -4250,7 +4250,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
         AstNodeModule* const childModp = cellp->modp();
         string childModName = childModp ? childModp->name() : "<unlinked>";
 
-        UINFO(1, "DEPGRAPH: " << childPrefix << cellConnector
+        UINFO(5, "DEPGRAPH: " << childPrefix << cellConnector
                   << cellp->name() << " : " << childModName << endl);
 
         // Recursively dump child module contents (but not the full tree to avoid duplication)
@@ -4307,7 +4307,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
                 }
                 if (hasNestedCells) jIsLast = false;
                 const string jConnector = jIsLast ? "└── " : "├── ";
-                UINFO(1, "DEPGRAPH: " << grandchildPrefix << jConnector << childItems[j] << endl);
+                UINFO(5, "DEPGRAPH: " << grandchildPrefix << jConnector << childItems[j] << endl);
             }
             // Recurse for nested cells
             std::vector<AstCell*> nestedCells;
@@ -4326,8 +4326,8 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
 }
 
 void V3LinkDotDepGraph::dumpGraphDepsTree() {
-    UINFO(1, "DEPGRAPH: ========== DEPENDENCY EDGE TREE ==========" << endl);
-    UINFO(1, "DEPGRAPH: Total nodes: " << s_allNodes.size()
+    UINFO(5, "DEPGRAPH: ========== DEPENDENCY EDGE TREE ==========" << endl);
+    UINFO(5, "DEPGRAPH: Total nodes: " << s_allNodes.size()
               << "  Iterations: " << s_iterationCount << endl);
 
     auto nodeLabel = [](const DepNode* nodep) {
@@ -4345,7 +4345,7 @@ void V3LinkDotDepGraph::dumpGraphDepsTree() {
     }
 
     for (const auto& kv : byOwner) {
-        UINFO(1, "DEPGRAPH: " << kv.first << endl);
+        UINFO(5, "DEPGRAPH: " << kv.first << endl);
         const auto& nodes = kv.second;
         for (size_t i = 0; i < nodes.size(); ++i) {
             const DepNode* const nodep = nodes[i];
@@ -4353,9 +4353,9 @@ void V3LinkDotDepGraph::dumpGraphDepsTree() {
             const bool isLastNode = (i + 1 == nodes.size());
             const string nodeConnector = isLastNode ? "└── " : "├── ";
             const string nodePrefix = isLastNode ? "    " : "│   ";
-            UINFO(1, "DEPGRAPH: " << nodeConnector << nodeLabel(nodep) << endl);
+            UINFO(5, "DEPGRAPH: " << nodeConnector << nodeLabel(nodep) << endl);
             if (nodep->dependsOn.empty()) {
-                UINFO(1, "DEPGRAPH: " << nodePrefix << "(no deps)" << endl);
+                UINFO(5, "DEPGRAPH: " << nodePrefix << "(no deps)" << endl);
                 continue;
             }
             size_t depIdx = 0;
@@ -4363,18 +4363,18 @@ void V3LinkDotDepGraph::dumpGraphDepsTree() {
                 if (!dep) continue;
                 const bool isLastDep = (++depIdx == nodep->dependsOn.size());
                 const string depConnector = isLastDep ? "└── " : "├── ";
-                UINFO(1, "DEPGRAPH: " << nodePrefix << depConnector
+                UINFO(5, "DEPGRAPH: " << nodePrefix << depConnector
                           << nodeLabel(dep) << endl);
             }
         }
     }
 
-    UINFO(1, "DEPGRAPH: ========== END EDGE TREE ==========" << endl);
+    UINFO(5, "DEPGRAPH: ========== END EDGE TREE ==========" << endl);
 }
 
 void V3LinkDotDepGraph::dumpGraphTree(AstNetlist* netlistp) {
-    UINFO(1, "DEPGRAPH: ========== HIERARCHY TREE ==========" << endl);
-    UINFO(1, "DEPGRAPH: Total nodes: " << s_allNodes.size()
+    UINFO(5, "DEPGRAPH: ========== HIERARCHY TREE ==========" << endl);
+    UINFO(5, "DEPGRAPH: Total nodes: " << s_allNodes.size()
               << "  Iterations: " << s_iterationCount << endl);
 
     // Find top module
@@ -4388,7 +4388,7 @@ void V3LinkDotDepGraph::dumpGraphTree(AstNetlist* netlistp) {
     }
 
     if (topp) {
-        UINFO(1, "DEPGRAPH: " << topp->name() << " (top)" << endl);
+        UINFO(5, "DEPGRAPH: " << topp->name() << " (top)" << endl);
         // Print top module contents
         std::vector<AstCell*> topCells;
         for (AstNode* stmtp = topp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
@@ -4401,8 +4401,8 @@ void V3LinkDotDepGraph::dumpGraphTree(AstNetlist* netlistp) {
             dumpModuleTree(topCells[i]->modp(), "", isLast);
         }
     } else {
-        UINFO(1, "DEPGRAPH: <no top module found>" << endl);
+        UINFO(5, "DEPGRAPH: <no top module found>" << endl);
     }
 
-    UINFO(1, "DEPGRAPH: ========== END TREE ==========" << endl);
+    UINFO(5, "DEPGRAPH: ========== END TREE ==========" << endl);
 }

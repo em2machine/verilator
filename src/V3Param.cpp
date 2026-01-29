@@ -2633,7 +2633,7 @@ void V3Param::param(AstNetlist* rootp) {
 
         while (changed && iter < maxIters) {
             ++iter;
-            UINFO(3, "DEPGRAPH: V3Param fixed-point iteration " << iter << endl);
+            UINFO(5, "DEPGRAPH: V3Param fixed-point iteration " << iter << endl);
 
             { ParamTop{rootp}; }  // One pass of V3Param cloning
 
@@ -2657,7 +2657,7 @@ void V3Param::param(AstNetlist* rootp) {
             const int depSteps = V3LinkDotDepGraph::resolve();
             const int applyChanges = V3LinkDotDepGraph::apply();
             V3LinkDotDepGraph::postIterationCleanup(rootp);
-            UINFO(3, "DEPGRAPH: iteration " << iter << " depSteps=" << depSteps
+            UINFO(5, "DEPGRAPH: iteration " << iter << " depSteps=" << depSteps
                       << " applyChanges=" << applyChanges
                       << " moduleCount=" << moduleCount
                       << " prevModuleCount=" << prevModuleCount << endl);
@@ -2673,7 +2673,7 @@ void V3Param::param(AstNetlist* rootp) {
                         if (AstConst* const cp = VN_CAST(varp->valuep(), Const)) {
                             val = cp->num().toSInt();
                         }
-                        UINFO(3, "DEPGRAPH: iter=" << iter << " cb_cfg in " << modp->name()
+                        UINFO(5, "DEPGRAPH: iter=" << iter << " cb_cfg in " << modp->name()
                                   << " dtypew=" << (varp->dtypep() ? varp->dtypep()->width() : 0)
                                   << " val=" << val << endl);
                     });
@@ -2682,13 +2682,13 @@ void V3Param::param(AstNetlist* rootp) {
                     modp->foreach([&](AstTypedef* tdp) {
                         if (tdp->name() != "cmd_beat_t") return;
                         int subw = tdp->subDTypep() ? tdp->subDTypep()->width() : 0;
-                        UINFO(3, "DEPGRAPH: iter=" << iter << " typedef cmd_beat_t in "
+                        UINFO(5, "DEPGRAPH: iter=" << iter << " typedef cmd_beat_t in "
                                   << modp->name() << " subw=" << subw << endl);
                     });
                     modp->foreach([&](AstParamTypeDType* ptdp) {
                         if (ptdp->name() != "cmd_beat_t") return;
                         int subw = ptdp->subDTypep() ? ptdp->subDTypep()->width() : 0;
-                        UINFO(3, "DEPGRAPH: iter=" << iter << " paramtype cmd_beat_t in "
+                        UINFO(5, "DEPGRAPH: iter=" << iter << " paramtype cmd_beat_t in "
                                   << modp->name() << " w=" << ptdp->width()
                                   << " subw=" << subw << endl);
                     });
@@ -2700,7 +2700,7 @@ void V3Param::param(AstNetlist* rootp) {
                         } else if (AstNodeDType* const refp = rdp->refDTypep()) {
                             target = string{"ref:"} + refp->name();
                         }
-                        UINFO(3, "DEPGRAPH: iter=" << iter << " refdtype cmd_beat_t in "
+                        UINFO(5, "DEPGRAPH: iter=" << iter << " refdtype cmd_beat_t in "
                                   << modp->name() << " w=" << rdp->width()
                                   << " target=" << target << endl);
                     });
@@ -2718,7 +2718,7 @@ void V3Param::param(AstNetlist* rootp) {
         }
 
         if (iter >= maxIters) {
-            UINFO(1, "DEPGRAPH: WARNING: V3Param fixed-point reached max iterations "
+            UINFO(5, "DEPGRAPH: WARNING: V3Param fixed-point reached max iterations "
                       << maxIters << endl);
         }
 
