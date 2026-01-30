@@ -1172,6 +1172,19 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         ptdp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
     }
 
+    // If dtypep is not set but subDTypep is a resolved type (e.g., BASICDTYPE),
+    // set dtypep to the subDTypep. This is needed for VAR declarations that use
+    // the PARAMTYPEDTYPE as their element type (e.g., DataType [N:0] data_nodes).
+    if (!ptdp->dtypep() && ptdp->subDTypep()) {
+        AstNodeDType* const subp = ptdp->subDTypep();
+        if (subp->width() > 0) {
+            UINFO(5, "DEPGRAPH: commit set PARAMTYPEDTYPE '" << ptdp->name()
+                      << "' dtypep to subDTypep " << subp->prettyTypeName()
+                      << " in " << ownerModp->name() << endl);
+            ptdp->dtypep(subp);
+        }
+    }
+
     // Get resolved width from subDTypep or from dependency chain
     AstNodeDType* const subp = ptdp->subDTypep();
     int resolvedWidth = subp ? subp->width() : ptdp->width();
@@ -2794,7 +2807,37 @@ private:
         iterateChildrenConst(nodep);
     }
 
-    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+    // Helper to create edges for REFDTYPEs inside a dtype that reference PARAMTYPEDTYPEs
+    void createEdgesForDtypeRefDTypes(AstNodeDType* dtypep) {
+        if (!dtypep || !m_modp) return;
+        dtypep->foreach([&](AstRefDType* rdp) {
+            if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
+                AstNodeModule* rdpOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
+                if (!rdpOwnerp) rdpOwnerp = m_modp;
+                AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                if (!ptdOwnerp) ptdOwnerp = rdpOwnerp;
+                V3LinkDotDepGraph::DepNode* const rdpNodep = V3LinkDotDepGraph::findOrCreateNode(
+                    rdp, V3LinkDotDepGraph::NodeType::REFDTYPE, rdpOwnerp);
+                V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                    ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                V3LinkDotDepGraph::addEdge(rdpNodep, ptdNodep);
+                UINFO(5, "DEPGRAPH: VAR dtype REFDTYPE '" << rdp->name()
+                          << "' depends on PARAMTYPEDTYPE '" << ptdp->name()
+                          << "' in " << m_modp->name() << endl);
+            }
+        });
+    }
+
+    void visit(AstNode* nodep) override {
+        // For non-parameter VAR nodes, traverse their dtypes to find REFDTYPEs
+        // that reference PARAMTYPEDTYPEs and create dependency edges
+        if (AstVar* const varp = VN_CAST(nodep, Var)) {
+            if (!varp->isGParam() && !varp->isParam()) {
+                createEdgesForDtypeRefDTypes(varp->dtypep());
+            }
+        }
+        iterateChildrenConst(nodep);
+    }
 
 public:
     explicit DepGraphBuildVisitor(AstNetlist* netlistp) {
