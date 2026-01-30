@@ -1539,11 +1539,12 @@ private:
         if (!ownerp) return;
         V3LinkDotDepGraph::DepNode* const targetp
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
-        // Skip edge if parent is PARAMTYPE with same name in same module (would create cycle)
+        // Skip edge if parent is PARAMTYPE and this REFDTYPE points back to the same PARAMTYPE
+        // (would create a cycle). But if the REFDTYPE points to a DIFFERENT PARAMTYPE (e.g., in
+        // a parent module), we DO need the edge to ensure proper resolution order.
         const bool isSelfRef = (m_depNode
                                 && m_depNode->nodeType == V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE
-                                && m_depNode->ownerModp == ownerp
-                                && V3LinkDotDepGraph::nodeName(m_depNode) == nodep->name());
+                                && m_depNode->nodep == nodep->refDTypep());
         if (!isSelfRef) V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
