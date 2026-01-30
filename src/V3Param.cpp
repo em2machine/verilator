@@ -2662,52 +2662,7 @@ void V3Param::param(AstNetlist* rootp) {
                       << " moduleCount=" << moduleCount
                       << " prevModuleCount=" << prevModuleCount << endl);
 
-            // Targeted debug for cmd_beat_t and cb_cfg
-            if (debug() >= 5) {
-                for (AstNodeModule* modp = rootp->modulesp(); modp;
-                     modp = VN_AS(modp->nextp(), NodeModule)) {
-                    // cb_cfg localparam
-                    modp->foreach([&](AstVar* varp) {
-                        if (varp->name() != "cb_cfg") return;
-                        int val = -1;
-                        if (AstConst* const cp = VN_CAST(varp->valuep(), Const)) {
-                            val = cp->num().toSInt();
-                        }
-                        UINFO(5, "DEPGRAPH: iter=" << iter << " cb_cfg in " << modp->name()
-                                  << " dtypew=" << (varp->dtypep() ? varp->dtypep()->width() : 0)
-                                  << " val=" << val << endl);
-                    });
-
-                    // cmd_beat_t typedef/paramtype/refdtype
-                    modp->foreach([&](AstTypedef* tdp) {
-                        if (tdp->name() != "cmd_beat_t") return;
-                        int subw = tdp->subDTypep() ? tdp->subDTypep()->width() : 0;
-                        UINFO(5, "DEPGRAPH: iter=" << iter << " typedef cmd_beat_t in "
-                                  << modp->name() << " subw=" << subw << endl);
-                    });
-                    modp->foreach([&](AstParamTypeDType* ptdp) {
-                        if (ptdp->name() != "cmd_beat_t") return;
-                        int subw = ptdp->subDTypep() ? ptdp->subDTypep()->width() : 0;
-                        UINFO(5, "DEPGRAPH: iter=" << iter << " paramtype cmd_beat_t in "
-                                  << modp->name() << " w=" << ptdp->width()
-                                  << " subw=" << subw << endl);
-                    });
-                    modp->foreach([&](AstRefDType* rdp) {
-                        if (rdp->name() != "cmd_beat_t") return;
-                        string target = "<none>";
-                        if (AstTypedef* const tdp = rdp->typedefp()) {
-                            target = string{"typedef:"} + tdp->name();
-                        } else if (AstNodeDType* const refp = rdp->refDTypep()) {
-                            target = string{"ref:"} + refp->name();
-                        }
-                        UINFO(5, "DEPGRAPH: iter=" << iter << " refdtype cmd_beat_t in "
-                                  << modp->name() << " w=" << rdp->width()
-                                  << " target=" << target << endl);
-                    });
-                }
-            }
-
-            // Optional debug checkpoint
+// Optional debug checkpoint
             if (debug() >= 6) {
                 V3LinkDotDepGraph::dumpGraphTree(rootp);
                 V3LinkDotDepGraph::dumpGraphDepsTree();
