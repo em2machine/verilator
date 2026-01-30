@@ -1317,15 +1317,15 @@ void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
     if (!from || !to) return;
     if (from == to) {
         UINFO(5, "DEPGRAPH: skip self-edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
-                  << " type=" << nodeTypeName(from->nodeType) << " nodep=" << from->nodep << endl);
+                  << " type=" << nodeTypeName(from->nodeType) << " nodep=" << (from->nodep ? cvtToHex(from->nodep) : "<nullptr>") << endl);
         return;
     }
     from->dependsOn.insert(to);
     to->dependents.insert(from);
     UINFO(9, "DEPGRAPH: edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
-              << " type=" << nodeTypeName(from->nodeType) << " nodep=" << from->nodep
+              << " type=" << nodeTypeName(from->nodeType) << " nodep=" << (from->nodep ? cvtToHex(from->nodep) : "<nullptr>")
               << " --> '" << nodeName(to) << "'@" << nodeOwnerName(to)
-              << " type=" << nodeTypeName(to->nodeType) << " nodep=" << to->nodep << endl);
+              << " type=" << nodeTypeName(to->nodeType) << " nodep=" << (to->nodep ? cvtToHex(to->nodep) : "<nullptr>") << endl);
     if (from->nodeType == NodeType::PARAMTYPEDTYPE
         && (to->nodeType == NodeType::PARAMTYPEDTYPE || to->nodeType == NodeType::TYPEDEF)) {
         UINFO(5, "DEPGRAPH: paramtype edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
@@ -3660,7 +3660,7 @@ int V3LinkDotDepGraph::resolve() {
 
         UINFO(9, "DEPGRAPH: execute '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
                   << " type=" << nodeTypeName(nodep->nodeType)
-                  << " nodep=" << nodep->nodep
+                  << " nodep=" << (nodep->nodep ? cvtToHex(nodep->nodep) : "<nullptr>")
                   << " pendingDeps=" << nodep->pendingDeps << endl);
 
         reEvaluateNode(nodep);
@@ -3692,13 +3692,13 @@ int V3LinkDotDepGraph::resolve() {
             UINFO(9, "DEPGRAPH: unresolved node '" << nodeName(nodep) << "'@"
                       << nodeOwnerName(nodep)
                       << " type=" << nodeTypeName(nodep->nodeType)
-                      << " nodep=" << nodep->nodep << endl);
+                      << " nodep=" << (nodep->nodep ? cvtToHex(nodep->nodep) : "<nullptr>") << endl);
             for (DepNode* const depp : nodep->dependsOn) {
                 if (!depp || depp->resolved) continue;
                 UINFO(9, "DEPGRAPH:   pending dep -> '" << nodeName(depp) << "'@"
                           << nodeOwnerName(depp)
                           << " type=" << nodeTypeName(depp->nodeType)
-                          << " nodep=" << depp->nodep << endl);
+                          << " nodep=" << (depp->nodep ? cvtToHex(depp->nodep) : "<nullptr>") << endl);
             }
         }
     }
