@@ -3960,6 +3960,49 @@ void V3LinkDotDepGraph::finalizeAST() {
         normalizeRef(rdp);
     });
 
+    // Global cleanup pass for PARAMTYPEDTYPE nodes with unresolved REQUIREDTYPE.
+    // This handles template modules that were skipped during DepGraph building
+    // but are reused when instantiated with default type parameters (e.g., T = logic).
+    // Only resolve for template modules (hasGParam && no "__" suffix) that are not dead.
+    // IMPORTANT: Don't delete REQUIREDTYPE - just set dtypep to the resolved type.
+    // Deleting nodes can corrupt the AST if they're referenced elsewhere.
+    std::vector<AstParamTypeDType*> reqTypeToResolve;
+    if (AstNetlist* const netlistp = v3Global.rootp()) {
+        netlistp->foreach([&](AstParamTypeDType* ptdp) {
+            if (!ptdp) return;
+            AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType);
+            if (!reqp) return;
+            AstNodeDType* defaultTypep = VN_CAST(reqp->lhsp(), NodeDType);
+            if (!defaultTypep) return;
+            // Only resolve for template modules (hasGParam && no "__" suffix)
+            AstNodeModule* const ownerModp = findOwnerModule(ptdp);
+            if (!ownerModp) return;
+            if (!ownerModp->hasGParam()) return;  // Not a template module
+            if (ownerModp->name().find("__") != string::npos) return;  // Already specialized
+            if (ownerModp->dead()) return;  // Dead module - will be removed
+            reqTypeToResolve.push_back(ptdp);
+        });
+    }
+    for (AstParamTypeDType* ptdp : reqTypeToResolve) {
+        AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType);
+        if (!reqp) continue;
+        AstNodeDType* defaultTypep = VN_CAST(reqp->lhsp(), NodeDType);
+        if (!defaultTypep) continue;
+        UINFO(5, "DEPGRAPH: finalizeAST resolving REQUIREDTYPE for '"
+                  << ptdp->name() << "' to default type "
+                  << defaultTypep->prettyTypeName() << endl);
+        // Just set dtypep to the default type - don't delete REQUIREDTYPE
+        // The REQUIREDTYPE will be cleaned up later by V3Dead
+        ptdp->dtypep(defaultTypep);
+        if (defaultTypep->width() > 0) {
+            ptdp->widthForce(defaultTypep->width(), defaultTypep->widthMin());
+        }
+    }
+    if (!reqTypeToResolve.empty()) {
+        UINFO(5, "DEPGRAPH: finalizeAST resolved " << reqTypeToResolve.size()
+                  << " REQUIREDTYPE nodes in PARAMTYPEDTYPE" << endl);
+    }
+
     // Re-width all structs in TYPETABLE. Structs may have been cloned during V3Param
     // with width=0, and need to be re-widthed based on their resolved member types.
     int structCount = 0;
