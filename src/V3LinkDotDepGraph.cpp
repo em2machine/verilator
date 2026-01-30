@@ -1159,7 +1159,28 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         }
     }
 
-    const bool isSpecialized = ownerModp->name().find("__") != string::npos;
+    // If dtypep is not set but subDTypep is a resolved type (e.g., BASICDTYPE),
+    // set dtypep to the subDTypep. This is needed for VAR declarations that use
+    // the PARAMTYPEDTYPE as their element type (e.g., DataType [N:0] data_nodes).
+    // This must happen for ALL modules (not just specialized ones with "__" suffix)
+    // because modules with default type parameters get a "_" suffix, not "__".
+    if (!ptdp->dtypep() && ptdp->subDTypep()) {
+        AstNodeDType* subp = ptdp->subDTypep();
+        // Skip through REFDTYPE to get to the actual type
+        if (AstRefDType* const rdp = VN_CAST(subp, RefDType)) {
+            if (rdp->dtypep()) subp = rdp->dtypep();
+            else if (rdp->refDTypep()) subp = rdp->refDTypep()->skipRefp();
+        }
+        if (subp && subp->width() > 0) {
+            UINFO(5, "DEPGRAPH: commit set PARAMTYPEDTYPE '" << ptdp->name()
+                      << "' dtypep to " << subp->prettyTypeName()
+                      << " in " << ownerModp->name() << endl);
+            ptdp->dtypep(subp);
+        }
+    }
+
+    // A module is specialized if its name differs from origName (renamed by V3Param)
+    const bool isSpecialized = ownerModp->name() != ownerModp->origName();
     if (!isSpecialized) return;
 
     // Apply deferred width immediately during commit so dependent nodes see it.
@@ -1170,19 +1191,6 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
                   << "' width " << ptdp->width() << " -> " << nodep->resolvedWidth
                   << " in " << ownerModp->name() << endl);
         ptdp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
-    }
-
-    // If dtypep is not set but subDTypep is a resolved type (e.g., BASICDTYPE),
-    // set dtypep to the subDTypep. This is needed for VAR declarations that use
-    // the PARAMTYPEDTYPE as their element type (e.g., DataType [N:0] data_nodes).
-    if (!ptdp->dtypep() && ptdp->subDTypep()) {
-        AstNodeDType* const subp = ptdp->subDTypep();
-        if (subp->width() > 0) {
-            UINFO(5, "DEPGRAPH: commit set PARAMTYPEDTYPE '" << ptdp->name()
-                      << "' dtypep to subDTypep " << subp->prettyTypeName()
-                      << " in " << ownerModp->name() << endl);
-            ptdp->dtypep(subp);
-        }
     }
 
     // Get resolved width from subDTypep or from dependency chain
