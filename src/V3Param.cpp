@@ -74,6 +74,30 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
+// Helper to check if an expression references an LPARAM that hasn't been constified yet
+// Used during DepGraph flow to defer constification errors
+
+static bool exprReferencesUnresolvedLParam(AstNode* exprp) {
+    if (!exprp) return false;
+    bool hasUnresolved = false;
+    exprp->foreach([&](AstVarRef* refp) {
+        if (hasUnresolved) return;  // Already found one
+        AstVar* const varp = refp->varp();
+        if (!varp) return;
+        // Check if this is an LPARAM that hasn't been constified
+        if (varp->isParam() && !varp->isGParam()) {
+            // It's an LPARAM - check if its value is a constant
+            if (!varp->valuep() || !VN_IS(varp->valuep(), Const)) {
+                UINFO(5, "DEPGRAPH: PIN expr references unresolved LPARAM '"
+                          << varp->name() << "'" << endl);
+                hasUnresolved = true;
+            }
+        }
+    });
+    return hasUnresolved;
+}
+
+//######################################################################
 // Hierarchical block and parameter db (modules without parameters are also handled)
 
 class ParameterizedHierBlocks final {
@@ -1136,6 +1160,14 @@ class ParamProcessor final {
                 AstConst* const exprp = VN_CAST(pinp->exprp(), Const);
                 AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
                 if (!exprp) {
+                    // During DepGraph flow, if the PIN expression references an LPARAM that
+                    // hasn't been constified yet, defer the error - DepGraph will resolve it
+                    if (V3LinkDotDepGraph::useInParam()
+                        && exprReferencesUnresolvedLParam(pinp->exprp())) {
+                        UINFO(5, "DEPGRAPH: deferring PIN constification for "
+                                  << pinp->prettyNameQ() << " - references unresolved LPARAM" << endl);
+                        return;  // Defer - will be processed again after DepGraph resolves
+                    }
                     UINFOTREE(1, pinp, "", "errnode");
                     pinp->v3error("Can't convert defparam value to constant: Param "
                                   << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());

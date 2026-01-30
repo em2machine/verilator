@@ -3044,6 +3044,15 @@ class ConstVisitor final : public VNVisitor {
             }
         }
         if (!did && m_required) {
+            // During DepGraph flow, if this VARREF references an LPARAM that hasn't been
+            // constified yet, defer the error - DepGraph will resolve it later
+            AstVar* const varp = nodep->varp();
+            if (V3LinkDotDepGraph::useInParam() && varp && varp->isParam() && !varp->isGParam()
+                && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) {
+                UINFO(5, "DEPGRAPH: deferring constify error for LPARAM '"
+                          << varp->name() << "' - will be resolved later" << endl);
+                return;  // Defer - DepGraph will resolve this LPARAM
+            }
             nodep->v3error("Expecting expression to be constant, but variable isn't const: "
                            << nodep->varp()->prettyNameQ());
         }
