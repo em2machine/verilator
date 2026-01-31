@@ -3211,26 +3211,35 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         }
         // Skip template modules (unspecialized) - they have params but no __ suffix.
         // Top modules must still be resolved even if parameterized, since there is no clone.
-        // Exception: GPARAMs that depend on ATTROF nodes need their value set even in templates.
+        // Exception: GPARAMs that depend on resolved nodes (ATTROF or LPARAM) need their
+        // value set even in templates so the specialized clone gets the correct value.
         const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
         if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) {
-            // Check if this GPARAM depends on an ATTROF with a resolved width
-            bool hasAttrOfDep = false;
+            // Check if this GPARAM depends on a resolved node that provides a value
+            bool hasResolvedDep = false;
             if (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM) {
                 for (DepNode* const depp : nodep->dependsOn) {
-                    if (depp && depp->resolved && depp->nodeType == NodeType::ATTROF
-                        && depp->resolvedWidth > 0) {
-                        hasAttrOfDep = true;
-                        break;
+                    if (depp && depp->resolved) {
+                        // Allow if depends on ATTROF with resolved width
+                        if (depp->nodeType == NodeType::ATTROF && depp->resolvedWidth > 0) {
+                            hasResolvedDep = true;
+                            break;
+                        }
+                        // Allow if depends on resolved LPARAM or GPARAM
+                        if (depp->nodeType == NodeType::LPARAM
+                            || depp->nodeType == NodeType::GPARAM) {
+                            hasResolvedDep = true;
+                            break;
+                        }
                     }
                 }
             }
-            if (!hasAttrOfDep) {
+            if (!hasResolvedDep) {
                 UINFO(9, "DEPGRAPH: skip re-evaluate '" << nodeName(nodep)
                           << "' in template module (GParam) " << ownerModp->name() << endl);
                 return;
             }
-                    }
+        }
     }
 
     if (nodep->nodeType == NodeType::TYPEDEF) {
