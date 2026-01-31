@@ -72,11 +72,27 @@ AstNodeModule* V3LinkDotDepGraph::findOwnerModule(AstNode* nodep) {
     return nullptr;
 }
 
+// Check if a module is a specialized clone (has been renamed by V3Param)
+static bool isSpecializedModule(const AstNodeModule* modp) {
+    if (!modp) return false;
+    // Specialized modules have name() != origName() because V3Param renames them
+    return modp->name() != modp->origName();
+}
+
+// Check if a module is a template (has parameters but not yet specialized)
+static bool isTemplateModule(const AstNodeModule* modp) {
+    if (!modp) return false;
+    if (modp->isTop()) return false;
+    // A module is a template if it has parameters AND has not been specialized (renamed)
+    return modp->hasGParam() && !isSpecializedModule(modp);
+}
+
 bool V3LinkDotDepGraph::inTemplateModule(const AstNode* nodep) {
     const AstNodeModule* const modp = findOwnerModule(const_cast<AstNode*>(nodep));
+    // Null owner means compilation unit - treat as template to prevent certain operations
+    // (this preserves the original behavior that other code depends on)
     if (!modp) return true;
-    if (modp->isTop()) return false;
-    return modp->hasGParam() && modp->name().find("__") == string::npos;
+    return isTemplateModule(modp);
 }
 
 string V3LinkDotDepGraph::nodeName(const DepNode* nodep) {
@@ -341,7 +357,7 @@ AstTypedef* V3LinkDotDepGraph::findSpecializedTypedef(const std::string& name,
         if (!candNodep || candNodep->nodeType != NodeType::TYPEDEF) continue;
         AstTypedef* const candTdp = VN_CAST(candNodep->nodep, Typedef);
         if (!candTdp || candTdp->name() != name) continue;
-        if (candNodep->ownerModp && candNodep->ownerModp->name().find("__") != string::npos) {
+        if (isSpecializedModule(candNodep->ownerModp)) {
             if (ownerp) *ownerp = candNodep->ownerModp;
             return candTdp;
         }
@@ -561,8 +577,21 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
         } else {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
-            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam() && !tdOwnerp->isTop()
-                && tdOwnerp->name().find("__") == string::npos) {
+            // Check if the typedef is actually inside the template class, not just
+            // a file-scope typedef whose backp() chain happens to lead to a class.
+            // File-scope typedefs have their backp() pointing to sibling typedefs,
+            // not to class internals.
+            bool tdActuallyInTemplate = false;
+            if (tdOwnerp && isTemplateModule(tdOwnerp)) {
+                // Check if typedef is a direct child of the class's stmtsp
+                for (AstNode* stmtp = tdOwnerp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    if (stmtp == tdp) {
+                        tdActuallyInTemplate = true;
+                        break;
+                    }
+                }
+            }
+            if (tdActuallyInTemplate && !rdOwnerp) {
                 UINFO(5, "DEPGRAPH: commit refdtype has null owner but template typedef '"
                           << tdp->name() << "'" << endl);
                 if (AstTypedef* const specTdp
@@ -582,8 +611,8 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
                     changed = true;
                 }
             }
-            if (tdOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
-                && tdOwnerp->hasGParam() && tdOwnerp->name().find("__") == string::npos) {
+            if (tdOwnerp && rdOwnerp && isSpecializedModule(rdOwnerp)
+                && isTemplateModule(tdOwnerp)) {
                 if (AstTypedef* const specTdp
                     = V3LinkDotDepGraph::findSpecializedTypedef(tdp->name(), nullptr)) {
                     UINFO(5, "DEPGRAPH: commit retarget template typedefp '" << tdp->name()
@@ -598,9 +627,8 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
             // Clear typedefp if it points to a template module typedef - these will be deleted
             // by V3Dead and must not be referenced from specialized modules.
             // Top modules must keep their typedefp even if parameterized, since there is no clone.
-            if (tdOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
-                && !tdOwnerp->isTop() && tdOwnerp->hasGParam()
-                && tdOwnerp->name().find("__") == string::npos) {
+            if (tdOwnerp && rdOwnerp && isSpecializedModule(rdOwnerp)
+                && isTemplateModule(tdOwnerp)) {
                 UINFO(5, "DEPGRAPH: commit clear template typedefp '" << tdp->name()
                           << "' for RefDType '" << rdp->name() << "'" << endl);
                 rdp->typedefp(nullptr);
@@ -615,14 +643,12 @@ static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
     if (AstNodeDType* const subp = rdp->refDTypep()) {
         AstNodeModule* const subOwnerp = V3LinkDotDepGraph::findOwnerModule(subp);
         AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
-        if (subOwnerp && rdOwnerp && rdOwnerp->name().find("__") != string::npos
-            && !subOwnerp->isTop() && subOwnerp->hasGParam()
-            && subOwnerp->name().find("__") == string::npos
-            && subp->backp()) {
+        if (subOwnerp && rdOwnerp && isSpecializedModule(rdOwnerp)
+            && isTemplateModule(subOwnerp) && subp->backp()) {
             if (AstParamTypeDType* const subPtdp = VN_CAST(subp, ParamTypeDType)) {
                 if (AstParamTypeDType* const clonePtdp = subPtdp->clonep()) {
                     AstNodeModule* const cloneOwnerp = V3LinkDotDepGraph::findOwnerModule(clonePtdp);
-                    if (cloneOwnerp && cloneOwnerp->name().find("__") != string::npos) {
+                    if (isSpecializedModule(cloneOwnerp)) {
                         UINFO(5, "DEPGRAPH: commit retarget refDTypep target '" << subp->name()
                                   << "' to clone '" << cloneOwnerp->name()
                                   << "' for RefDType '" << rdp->name() << "'" << endl);
@@ -699,7 +725,7 @@ skip_move_refdtypep:
                                    || (curTdp->subDTypep()
                                        && curTdp->subDTypep()->skipRefp() == curRefp));
         AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(curTdp);
-        if (!allowBoth && tdOwnerp && tdOwnerp->name().find("__") != string::npos) {
+        if (!allowBoth && isSpecializedModule(tdOwnerp)) {
             UINFO(5, "DEPGRAPH: commit clear stale refDTypep for '" << rdp->name()
                       << "' in specialized module '" << tdOwnerp->name() << "'" << endl);
             rdp->refDTypep(nullptr);
@@ -884,13 +910,11 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
         if (AstTypedef* const postTdp = rdp->typedefp()) {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(postTdp);
             AstNodeModule* const rdOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
-            if (tdOwnerp && !rdOwnerp && tdOwnerp->hasGParam()
-                && tdOwnerp->name().find("__") == string::npos) {
+            if (tdOwnerp && !rdOwnerp && isTemplateModule(tdOwnerp)) {
                 UINFO(5, "DEPGRAPH: normalizeRef refdtype has null owner but template typedef name='"
                           << postTdp->name() << "' refdtype='" << rdp->name() << "'" << endl);
             }
-            if (tdOwnerp && rdOwnerp && rdOwnerp != tdOwnerp && tdOwnerp->hasGParam()
-                && tdOwnerp->name().find("__") == string::npos) {
+            if (tdOwnerp && rdOwnerp && rdOwnerp != tdOwnerp && isTemplateModule(tdOwnerp)) {
                 UINFO(5, "DEPGRAPH: commit REFDTYPE still points at template typedef name='"
                           << postTdp->name() << "' refdtype='" << rdp->name()
                           << "' refOwner='" << rdOwnerp->name()
@@ -928,8 +952,7 @@ static void commitLParam(V3LinkDotDepGraph::DepNode* nodep) {
 
 static void commitStructUnion(AstNodeUOrStructDType* usp, AstNodeModule* ownerModp) {
     if (!usp || !ownerModp) return;
-    const bool isSpecialized = ownerModp->name().find("__") != string::npos;
-    if (isSpecialized && usp->width() > 0) {
+    if (isSpecializedModule(ownerModp) && usp->width() > 0) {
         // Store deferred retargets for RefDTypes pointing at template versions
         forEachRefDType(ownerModp, [&](AstRefDType* rdp) {
             if (!rdp) return;
@@ -983,8 +1006,7 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
     // to point to the correct specialized class based on the owner's type parameter bindings.
     // This handles cases like: typedef uvm_object_registry#(uvm_object_string_pool#(T)) type_id;
     // where T has been substituted with a concrete type.
-    const bool isSpecialized = ownerModp->name().find("__") != string::npos;
-    if (isSpecialized) {
+    if (isSpecializedModule(ownerModp)) {
         // Use dtypep() not childDTypep() - the typedef's type is stored in dtypep
         if (AstClassRefDType* const crdtp = VN_CAST(tdp->dtypep(), ClassRefDType)) {
             if (AstClass* const currentClassp = crdtp->classp()) {
@@ -1006,7 +1028,7 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
                 // The typedef should point to uvm_object_registry__Tz3 itself
                 // BUT only if the current class is already specialized (has __ in name)
                 // A typedef like "typedef Foo default_type;" pointing to base class Foo_ should remain
-                const bool currentIsSpecialized = currentClassName.find("__") != string::npos;
+                const bool currentIsSpecialized = currentClassp->name() != currentClassp->origName();
                 const bool currentIsBaseWithDefault = (currentClassName == ownerBaseName + "_");
                 // Update if: same base class AND current is specialized AND not base with default params
                 if (currentOrigName == ownerBaseName && currentIsSpecialized && !currentIsBaseWithDefault) {
@@ -1072,8 +1094,7 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
     }
 
     // Check if this is a template typedef
-    const bool isTemplate = ownerModp->hasGParam()
-                            && ownerModp->name().find("__") == string::npos;
+    const bool isTemplate = isTemplateModule(ownerModp);
 
     // For template typedefs, find the specialized clone to retarget RefDTypes
     AstTypedef* specializedTdp = nullptr;
@@ -1091,8 +1112,7 @@ static void commitTypedef(V3LinkDotDepGraph::DepNode* nodep) {
         if (!depNodep || depNodep->nodeType != V3LinkDotDepGraph::NodeType::REFDTYPE) continue;
         if (AstRefDType* const rdp = VN_CAST(depNodep->nodep, RefDType)) {
             // For template typedefs, store deferred retarget to specialized
-            if (isTemplate && specializedTdp && depNodep->ownerModp
-                && depNodep->ownerModp->name().find("__") != string::npos) {
+            if (isTemplate && specializedTdp && isSpecializedModule(depNodep->ownerModp)) {
                 UINFO(5, "DEPGRAPH: deferred retarget TYPEDEF dep RefDType '" << rdp->name()
                           << "' from template '" << ownerModp->name()
                           << "' to specialized '" << specializedOwnerp->name() << "'" << endl);
@@ -1305,7 +1325,7 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         if (!depNodep || depNodep->nodeType != V3LinkDotDepGraph::NodeType::TYPEDEF) continue;
         AstTypedef* const candTdp = VN_CAST(depNodep->nodep, Typedef);
         if (!candTdp || candTdp->name() != ptdp->name()) continue;
-        if (depNodep->ownerModp && depNodep->ownerModp->name().find("__") != string::npos) {
+        if (isSpecializedModule(depNodep->ownerModp)) {
             targetTdp = candTdp;
             targetOwnerp = depNodep->ownerModp;
             break;
@@ -1319,7 +1339,7 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
             AstTypedef* const currentTdp = rdp->typedefp();
             if (!currentTdp) return;
             AstNodeModule* const currentOwnerp = V3LinkDotDepGraph::findOwnerModule(currentTdp);
-            if (!currentOwnerp || currentOwnerp->name().find("__") != string::npos) return;
+            if (!currentOwnerp || isSpecializedModule(currentOwnerp)) return;
             V3LinkDotDepGraph::DepNode* const rdpNode = V3LinkDotDepGraph::findMutable(rdp);
             if (!rdpNode) return;
             UINFO(5, "DEPGRAPH: deferred retarget RefDType '" << rdp->name()
@@ -1336,8 +1356,7 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
         AstTypedef* const childTdp = childRdp->typedefp();
         if (childTdp) {
             AstNodeModule* const childTdOwnerp = V3LinkDotDepGraph::findOwnerModule(childTdp);
-            if (childTdOwnerp && childTdOwnerp->hasGParam()
-                && childTdOwnerp->name().find("__") == string::npos) {
+            if (isTemplateModule(childTdOwnerp)) {
                 V3LinkDotDepGraph::DepNode* const childRdpNode = V3LinkDotDepGraph::findMutable(childRdp);
                 if (childRdpNode) {
                     if (targetTdp) {
@@ -1617,8 +1636,7 @@ private:
             AstParamTypeDType* targetPtdp = ptdp;
             AstNodeModule* ptOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
             if (m_depNode && m_depNode->ownerModp) {
-                const bool isTemplateOwner = ptOwnerp && ptOwnerp->hasGParam()
-                                            && ptOwnerp->name().find("__") == string::npos;
+                const bool isTemplateOwner = isTemplateModule(ptOwnerp);
                 if (!ptOwnerp || isTemplateOwner) {
                     for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp;
                          stmtp = stmtp->nextp()) {
@@ -1739,7 +1757,7 @@ private:
         // Template modules have GParams but no specialization suffix. Top modules must
         // still be visited/resolved, even if parameterized, since there is no clone.
         if (nodep->dead()) return;
-        if (!nodep->isTop() && nodep->hasGParam() && nodep->name().find("__") == string::npos) {
+        if (isTemplateModule(nodep)) {
             UINFO(9, "DEPGRAPH: skip template module " << nodep->name() << endl);
             // Cleanup RefDTypes in template modules to avoid dangling typedefp after V3Dead
             normalizeRefTree(nodep, "template-skip");
@@ -2473,8 +2491,7 @@ private:
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstTypedef* targetTdp = tdp;
             AstNodeModule* tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
-            if (m_modp && tdOwnerp && tdOwnerp->hasGParam()
-                && tdOwnerp->name().find("__") == string::npos) {
+            if (m_modp && isTemplateModule(tdOwnerp)) {
                 for (AstNode* stmtp = m_modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                     AstCell* const cellp = VN_CAST(stmtp, Cell);
                     if (!cellp || !cellp->modp()) continue;
@@ -2509,8 +2526,7 @@ private:
 
             // If the paramtype is defined in a template interface, retarget to a specialized instance
             // based on the dot-lhs cell name (when available).
-            if (m_modp && ptdOwnerp && ptdOwnerp->hasGParam()
-                && ptdOwnerp->name().find("__") == string::npos) {
+            if (m_modp && isTemplateModule(ptdOwnerp)) {
                 string dotCellName;
                 if (!depNodep->cellName.empty()) {
                     dotCellName = depNodep->cellName;
@@ -3012,8 +3028,7 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
             }
 
             // Check if dependency is to a template module
-            const bool isTemplate = depNodep->ownerModp->hasGParam()
-                                    && depNodep->ownerModp->name().find("__") == string::npos;
+            const bool isTemplate = isTemplateModule(depNodep->ownerModp);
             if (!isTemplate) {
                 newDeps.insert(depNodep);
                 continue;
@@ -3189,8 +3204,7 @@ void V3LinkDotDepGraph::postWidthCleanup(AstNode* nodep) {
     if (!nodep) return;
     if (useInParam()) return;
     if (AstNodeModule* const ownerModp = findOwnerModule(nodep)) {
-        const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
-        if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) return;
+        if (isTemplateModule(ownerModp)) return;
     }
     normalizeRefTree(nodep, "post-width");
 }
@@ -3213,8 +3227,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         // Top modules must still be resolved even if parameterized, since there is no clone.
         // Exception: GPARAMs that depend on resolved nodes (ATTROF or LPARAM) need their
         // value set even in templates so the specialized clone gets the correct value.
-        const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
-        if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) {
+        if (isTemplateModule(ownerModp)) {
             // Check if this GPARAM depends on a resolved node that provides a value
             bool hasResolvedDep = false;
             if (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM) {
@@ -3507,8 +3520,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 if (AstRefDType* const refp = VN_CAST(newChildp, RefDType)) {
                     if (AstTypedef* const tdp = refp->typedefp()) {
                         AstNodeModule* const tdOwnerp = findOwnerModule(tdp);
-                        if (tdOwnerp && tdOwnerp->hasGParam()
-                            && tdOwnerp->name().find("__") == string::npos) {
+                        if (isTemplateModule(tdOwnerp)) {
                             skipWidth = true;
                             UINFO(5, "DEPGRAPH: skip widthParamsEdit - REFDTYPE points to template typedef '"
                                       << tdp->name() << "' in " << tdOwnerp->name() << endl);
@@ -4153,7 +4165,7 @@ void V3LinkDotDepGraph::finalizeAST() {
             AstNodeModule* const ownerModp = findOwnerModule(ptdp);
             if (!ownerModp) return;
             if (!ownerModp->hasGParam()) return;  // Not a template module
-            if (ownerModp->name().find("__") != string::npos) return;  // Already specialized
+            if (isSpecializedModule(ownerModp)) return;  // Already specialized
             if (ownerModp->dead()) return;  // Dead module - will be removed
             reqTypeToResolve.push_back(ptdp);
         });
