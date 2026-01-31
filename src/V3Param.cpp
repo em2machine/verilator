@@ -1171,23 +1171,6 @@ class ParamProcessor final {
                     += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(pinp->exprp());
                 any_overridesr = true;
             } else {
-                // Check if the PIN expression is an ATTROF with a resolved width from DepGraph
-                if (V3LinkDotDepGraph::useInParam()) {
-                    if (AstAttrOf* const attrp = VN_CAST(pinp->exprp(), AttrOf)) {
-                        const int resolvedWidth = V3LinkDotDepGraph::getAttrOfResolvedWidth(attrp);
-                        UINFO(5, "DEPGRAPH: PIN ATTROF check for " << pinp->prettyNameQ()
-                                  << " resolvedWidth=" << resolvedWidth << endl);
-                        if (resolvedWidth > 0) {
-                            UINFO(5, "DEPGRAPH: replacing PIN ATTROF with CONST "
-                                      << resolvedWidth << " for " << pinp->prettyNameQ() << endl);
-                            AstConst* const constp = new AstConst{
-                                attrp->fileline(), AstConst::WidthedValue{}, 32,
-                                static_cast<uint32_t>(resolvedWidth)};
-                            attrp->replaceWith(constp);
-                            VL_DO_DANGLING(attrp->deleteTree(), attrp);
-                        }
-                    }
-                }
                 V3Const::constifyParamsEdit(pinp->exprp());
                 // String constants are parsed as logic arrays and converted to strings in V3Const.
                 // At this moment, some constants may have been already converted.

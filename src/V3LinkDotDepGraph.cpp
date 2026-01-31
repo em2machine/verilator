@@ -415,30 +415,6 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findByNameAndOwner(
     return nullptr;
 }
 
-int V3LinkDotDepGraph::getAttrOfResolvedWidth(AstAttrOf* attrp) {
-    if (!attrp) return 0;
-    // Search for an ATTROF DepNode that matches this AST node
-    for (DepNode* const nodep : s_allNodes) {
-        if (!nodep || nodep->nodeType != NodeType::ATTROF) continue;
-        if (!nodep->resolved) continue;
-        // Match by AST pointer or by name if the pointer doesn't match
-        // (the AST pointer may have changed due to cloning)
-        if (nodep->nodep == attrp) return nodep->resolvedWidth;
-    }
-    // If no exact match, search by attribute type (DIM_BITS for $bits)
-    // and check if any resolved ATTROF has a matching resolvedWidth
-    for (DepNode* const nodep : s_allNodes) {
-        if (!nodep || nodep->nodeType != NodeType::ATTROF) continue;
-        if (!nodep->resolved || nodep->resolvedWidth <= 0) continue;
-        // Return the first resolved ATTROF's width
-        // This is a heuristic - in practice there should only be one
-        UINFO(5, "DEPGRAPH: getAttrOfResolvedWidth returning " << nodep->resolvedWidth
-                  << " from resolved ATTROF" << endl);
-        return nodep->resolvedWidth;
-    }
-    return 0;
-}
-
 void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNodeModule* ownerModp) {
     if (!varp || !ownerModp) return;
     if (!varp->isGParam() && !varp->isParam()) return;
@@ -3254,9 +3230,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                           << "' in template module (GParam) " << ownerModp->name() << endl);
                 return;
             }
-            UINFO(5, "DEPGRAPH: allow re-evaluate '" << nodeName(nodep)
-                      << "' in template module (has ATTROF dep) " << ownerModp->name() << endl);
-        }
+                    }
     }
 
     if (nodep->nodeType == NodeType::TYPEDEF) {
@@ -3710,18 +3684,6 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
 
         varp->didWidth(false);
         if (AstNode* const valuep = varp->valuep()) valuep->didWidth(false);
-        // Check if this GPARAM depends on an ATTROF node with a resolved width
-        // Store the resolved width in the DepNode for later use by V3Param
-        for (DepNode* const depp : nodep->dependsOn) {
-            if (!depp || !depp->resolved) continue;
-            if (depp->nodeType == NodeType::ATTROF && depp->resolvedWidth > 0) {
-                nodep->resolvedWidth = depp->resolvedWidth;
-                UINFO(5, "DEPGRAPH: GPARAM '" << varp->name()
-                          << "' resolvedWidth=" << nodep->resolvedWidth
-                          << " from ATTROF dependency" << endl);
-                break;
-            }
-        }
         if (nodep->nodeType == NodeType::LPARAM && varp->name() == "p_a") {
             AstNode* const valuep = varp->valuep();
             UINFO(5, "DEPGRAPH: pre-width LPARAM p_a valuep=" << valuep
@@ -3759,34 +3721,8 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         normalizeRefTree(varp, "param-width");
         V3Const::constifyParamsEdit(varp);
     } else if (nodep->nodeType == NodeType::ATTROF) {
-        // ATTROF nodes like $bits() - get the resolved width from dependencies
-        // The ATTROF depends on REFDTYPE which depends on PARAMTYPEDTYPE
-        // Find the resolved width from the dependency chain
-        int resolvedWidth = 0;
-        UINFO(5, "DEPGRAPH: ATTROF has " << nodep->dependsOn.size() << " dependencies" << endl);
-        for (DepNode* const depp : nodep->dependsOn) {
-            UINFO(5, "DEPGRAPH:   ATTROF dep '" << nodeName(depp) << "' type="
-                      << nodeTypeName(depp->nodeType) << " resolved=" << depp->resolved
-                      << " resolvedWidth=" << depp->resolvedWidth << endl);
-            if (!depp || !depp->resolved) continue;
-            if (depp->nodeType == NodeType::REFDTYPE || depp->nodeType == NodeType::PARAMTYPEDTYPE) {
-                if (depp->resolvedWidth > 0) {
-                    resolvedWidth = depp->resolvedWidth;
-                    break;
-                }
-                // Try to get width from the AST node if resolvedWidth not set
-                if (AstNodeDType* const dtp = VN_CAST(depp->nodep, NodeDType)) {
-                    UINFO(5, "DEPGRAPH:   ATTROF dep AST width=" << dtp->width() << endl);
-                    if (dtp->width() > 0) {
-                        resolvedWidth = dtp->width();
-                        break;
-                    }
-                }
-            }
-        }
-        nodep->resolvedWidth = resolvedWidth;
-        UINFO(5, "DEPGRAPH: re-evaluate ATTROF resolvedWidth=" << resolvedWidth
-                  << " in " << nodeOwnerName(nodep) << endl);
+        // ATTROF nodes like $bits() - the resolvedWidth is propagated from dependencies
+        // No need to check dependencies here since resolvedWidth is propagated when nodes resolve
     } else if (nodep->nodeType == NodeType::STRUCTDTYPE
                || nodep->nodeType == NodeType::UNIONDTYPE) {
         // Re-width the struct/union after its member types are resolved.
