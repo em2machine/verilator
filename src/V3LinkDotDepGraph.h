@@ -296,6 +296,10 @@ public:
     // Find a node by AST pointer
     static const DepNode* find(AstNode* nodep);
     static DepNode* findMutable(AstNode* nodep);
+    // Find a node by name, owner module, and type
+    static DepNode* findByNameAndOwner(const string& name, AstNodeModule* ownerModp, NodeType type);
+    // Get the resolved width for an ATTROF node (returns 0 if not found or not resolved)
+    static int getAttrOfResolvedWidth(AstAttrOf* attrp);
 
     // Iterate over all nodes
     static void forEach(const std::function<void(const DepNode&)>& fn);

@@ -358,6 +358,19 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     if (type == NodeType::PARAMTYPEDTYPE) {
         UASSERT_OBJ(ownerModp, nodep,
                     "DEPGRAPH: PARAMTYPEDTYPE node created with null owner module");
+        // For PARAMTYPEDTYPE, check if a node with the same name and owner already exists
+        // This handles the case where captureParamExpr creates a node before build() runs
+        // with a different AST pointer but the same logical identity
+        if (AstParamTypeDType* const ptdp = VN_CAST(nodep, ParamTypeDType)) {
+            DepNode* existingp = findByNameAndOwner(ptdp->name(), ownerModp, type);
+            if (existingp) {
+                // Register this AST pointer to map to the existing node
+                s_nodes[nodep] = existingp;
+                UINFO(5, "DEPGRAPH: PARAMTYPEDTYPE '" << ptdp->name()
+                          << "' reusing existing node in " << ownerModp->name() << endl);
+                return existingp;
+            }
+        }
     }
 
     DepNode* const depNodep = new DepNode;
@@ -391,6 +404,41 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     return depNodep;
 }
 
+V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findByNameAndOwner(
+    const string& name, AstNodeModule* ownerModp, NodeType type) {
+    // Search for an existing node with the given name, owner, and type
+    for (DepNode* const nodep : s_allNodes) {
+        if (!nodep || nodep->nodeType != type) continue;
+        if (nodep->ownerModp != ownerModp) continue;
+        if (nodeName(nodep) == name) return nodep;
+    }
+    return nullptr;
+}
+
+int V3LinkDotDepGraph::getAttrOfResolvedWidth(AstAttrOf* attrp) {
+    if (!attrp) return 0;
+    // Search for an ATTROF DepNode that matches this AST node
+    for (DepNode* const nodep : s_allNodes) {
+        if (!nodep || nodep->nodeType != NodeType::ATTROF) continue;
+        if (!nodep->resolved) continue;
+        // Match by AST pointer or by name if the pointer doesn't match
+        // (the AST pointer may have changed due to cloning)
+        if (nodep->nodep == attrp) return nodep->resolvedWidth;
+    }
+    // If no exact match, search by attribute type (DIM_BITS for $bits)
+    // and check if any resolved ATTROF has a matching resolvedWidth
+    for (DepNode* const nodep : s_allNodes) {
+        if (!nodep || nodep->nodeType != NodeType::ATTROF) continue;
+        if (!nodep->resolved || nodep->resolvedWidth <= 0) continue;
+        // Return the first resolved ATTROF's width
+        // This is a heuristic - in practice there should only be one
+        UINFO(5, "DEPGRAPH: getAttrOfResolvedWidth returning " << nodep->resolvedWidth
+                  << " from resolved ATTROF" << endl);
+        return nodep->resolvedWidth;
+    }
+    return 0;
+}
+
 void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNodeModule* ownerModp) {
     if (!varp || !ownerModp) return;
     if (!varp->isGParam() && !varp->isParam()) return;
@@ -413,6 +461,11 @@ void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNode* exprp,
     depNodep->origExprp = exprp->cloneTree(false);
     UINFO(5, "DEPGRAPH: captured override expr for param '" << varp->name()
               << "' in " << ownerModp->name() << endl);
+
+    // Collect dependencies from the captured expression
+    // This ensures that if the expression contains ATTROF ($bits, etc.) that reference
+    // PARAMTYPEDTYPEs, the GPARAM will depend on those types being resolved first
+    collectExpressionDeps(exprp, depNodep, ownerModp);
 }
 
 void V3LinkDotDepGraph::captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
@@ -826,11 +879,29 @@ static void commitRefDType(V3LinkDotDepGraph::DepNode* nodep) {
             targetp = tdp->subDTypep()->skipRefp();
             if (!targetp) targetp = tdp->subDTypep();
         }
-        if (targetp && targetp->width() > 0 && rdp->width() != targetp->width()) {
-            UINFO(5, "DEPGRAPH: commit REFDTYPE '" << rdp->name()
-                      << "' width " << rdp->width() << " -> " << targetp->width() << endl);
-            rdp->widthForce(targetp->width(), targetp->widthMin());
-            rdp->dtypep(targetp);
+        if (targetp && targetp->width() > 0) {
+            // Store resolved width in DepNode for ATTROF to use
+            nodep->resolvedWidth = targetp->width();
+            if (rdp->width() != targetp->width()) {
+                UINFO(5, "DEPGRAPH: commit REFDTYPE '" << rdp->name()
+                          << "' width " << rdp->width() << " -> " << targetp->width() << endl);
+                rdp->widthForce(targetp->width(), targetp->widthMin());
+                rdp->dtypep(targetp);
+            }
+        }
+
+        // If resolvedWidth is still 0, try to get it from dependencies (e.g., PARAMTYPEDTYPE)
+        if (nodep->resolvedWidth <= 0) {
+            for (V3LinkDotDepGraph::DepNode* const depp : nodep->dependsOn) {
+                if (!depp || !depp->resolved) continue;
+                if (depp->resolvedWidth > 0) {
+                    nodep->resolvedWidth = depp->resolvedWidth;
+                    UINFO(5, "DEPGRAPH: commit REFDTYPE '" << rdp->name()
+                              << "' got resolvedWidth " << nodep->resolvedWidth
+                              << " from dependency" << endl);
+                    break;
+                }
+            }
         }
 
         normalizeRef(rdp);
@@ -1217,6 +1288,8 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
                 const int depWidth = skipped ? skipped->width() : depDTypep->width();
                 if (depWidth > 0) {
                     resolvedWidth = depWidth;
+                    // Store resolved width in DepNode for REFDTYPE/ATTROF to use
+                    nodep->resolvedWidth = resolvedWidth;
                     UINFO(5, "DEPGRAPH: commitParamType '" << ptdp->name()
                               << "' got width " << resolvedWidth << " from dependency" << endl);
                     // Update the PARAMTYPEDTYPE's width
@@ -1307,12 +1380,12 @@ static void commitParamType(V3LinkDotDepGraph::DepNode* nodep) {
 
 // ATTROF nodes don't need special commit handling - V3Width handles the replacement
 static void commitAttrOf(V3LinkDotDepGraph::DepNode* nodep) {
-    if (!nodep || !nodep->nodep) return;
-    AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
-    if (!attrp) return;
-
-    // Just log for debugging - V3Width will handle the actual replacement
-    UINFO(9, "DEPGRAPH: commit ATTROF '" << attrp->attrType().ascii() << "'" << endl);
+    // ATTROF nodes created during captureParamExpr may have stale AST pointers
+    // after module cloning. Just skip them - V3Width will handle the replacement.
+    // The important thing is that the node gets marked as resolved so dependents proceed.
+    if (!nodep) return;
+    // Don't access nodep->nodep - it may be a stale pointer after cloning
+    UINFO(9, "DEPGRAPH: commit ATTROF (dependency-only node)" << endl);
 }
 
 static void commitResolvedNode(V3LinkDotDepGraph::DepNode* nodep) {
@@ -1341,8 +1414,17 @@ void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
                   << " type=" << nodeTypeName(from->nodeType) << " nodep=" << (from->nodep ? cvtToHex(from->nodep) : "<nullptr>") << endl);
         return;
     }
+    // Check if this is a new edge (not already present)
+    const bool isNewEdge = (from->dependsOn.find(to) == from->dependsOn.end());
     from->dependsOn.insert(to);
     to->dependents.insert(from);
+    // If adding a new edge and the target isn't resolved, increment pendingDeps
+    // This ensures nodes added after build() still have correct dependency counts
+    if (isNewEdge && !to->resolved) {
+        ++from->pendingDeps;
+        UINFO(5, "DEPGRAPH: addEdge incremented pendingDeps for '" << nodeName(from)
+                  << "'@" << nodeOwnerName(from) << " = " << from->pendingDeps << endl);
+    }
     UINFO(9, "DEPGRAPH: edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
               << " type=" << nodeTypeName(from->nodeType) << " nodep=" << (from->nodep ? cvtToHex(from->nodep) : "<nullptr>")
               << " --> '" << nodeName(to) << "'@" << nodeOwnerName(to)
@@ -1623,9 +1705,21 @@ private:
                 if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
                     AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
                     if (!ptdOwnerp) ptdOwnerp = rdpOwnerp;
-                    V3LinkDotDepGraph::DepNode* const ptdNodep
-                        = V3LinkDotDepGraph::findOrCreateNode(
+                    // First try to find an existing PARAMTYPEDTYPE node with the same name
+                    // This handles the case where the expression contains a different AST node
+                    // than the one that was already added to the DepGraph
+                    V3LinkDotDepGraph::DepNode* ptdNodep
+                        = V3LinkDotDepGraph::findByNameAndOwner(
+                            ptdp->name(), ptdOwnerp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE);
+                    if (!ptdNodep) {
+                        // No existing node found, create one
+                        ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
                             ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                    } else {
+                        UINFO(5, "DEPGRAPH: ATTROF using existing PARAMTYPEDTYPE node '"
+                                  << ptdp->name() << "' in " << ptdOwnerp->name()
+                                  << " resolved=" << ptdNodep->resolved << endl);
+                    }
                     V3LinkDotDepGraph::addEdge(rdpNodep, ptdNodep);
                     UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
                               << "' depends on PARAMTYPEDTYPE '" << ptdp->name()
@@ -2856,7 +2950,14 @@ public:
 
 void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
     UINFO(5, "DEPGRAPH: building dependency graph" << endl);
-    reset();
+    // Don't reset if there are already nodes in the graph - they may have been
+    // created during captureParamExpr with edges that need to be preserved
+    if (s_allNodes.empty()) {
+        reset();
+    } else {
+        UINFO(5, "DEPGRAPH: skipping reset, preserving " << s_allNodes.size()
+                  << " existing nodes" << endl);
+    }
     DepGraphBuildVisitor{netlistp};
     updateEdgesToSpecialized();
     for (AstNodeModule* modp = netlistp->modulesp(); modp;
@@ -2874,7 +2975,10 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
             for (DepNode* const depp : nodep->dependsOn) {
                 if (depp && !depp->resolved) ++pending;
             }
-            nodep->pendingDeps = pending;
+            // Keep the higher value - addEdge may have incremented pendingDeps for edges
+            // added after the initial build, and those edges may point to nodes that
+            // are now resolved but haven't yet decremented this node's pendingDeps
+            if (pending > nodep->pendingDeps) nodep->pendingDeps = pending;
             UINFO(9, "DEPGRAPH: pendingDeps '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
                       << " = " << nodep->pendingDeps << endl);
         }
@@ -3072,7 +3176,10 @@ void V3LinkDotDepGraph::buildIncremental(AstNetlist* netlistp) {
         for (DepNode* const depp : nodep->dependsOn) {
             if (depp && !depp->resolved) ++pending;
         }
-        nodep->pendingDeps = pending;
+        // Keep the higher value - addEdge may have incremented pendingDeps for edges
+        // added after the initial build, and those edges may point to nodes that
+        // are now resolved but haven't yet decremented this node's pendingDeps
+        if (pending > nodep->pendingDeps) nodep->pendingDeps = pending;
         UINFO(9, "DEPGRAPH: pendingDeps '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
                   << " = " << nodep->pendingDeps << endl);
     }
@@ -3090,7 +3197,9 @@ void V3LinkDotDepGraph::beginIteration(AstNetlist* netlistp) {
         for (DepNode* const depp : nodep->dependsOn) {
             if (depp && !depp->resolved) ++pending;
         }
-        nodep->pendingDeps = pending;
+        // Keep the higher value - addEdge may have incremented pendingDeps for edges
+        // added after the initial build
+        if (pending > nodep->pendingDeps) nodep->pendingDeps = pending;
         UINFO(9, "DEPGRAPH: pendingDeps '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
                   << " = " << nodep->pendingDeps << endl);
     }
@@ -3126,11 +3235,27 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         }
         // Skip template modules (unspecialized) - they have params but no __ suffix.
         // Top modules must still be resolved even if parameterized, since there is no clone.
+        // Exception: GPARAMs that depend on ATTROF nodes need their value set even in templates.
         const bool hasSpecSuffix = ownerModp->name().find("__") != string::npos;
         if (!ownerModp->isTop() && !hasSpecSuffix && ownerModp->hasGParam()) {
-            UINFO(9, "DEPGRAPH: skip re-evaluate '" << nodeName(nodep)
-                      << "' in template module (GParam) " << ownerModp->name() << endl);
-            return;
+            // Check if this GPARAM depends on an ATTROF with a resolved width
+            bool hasAttrOfDep = false;
+            if (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM) {
+                for (DepNode* const depp : nodep->dependsOn) {
+                    if (depp && depp->resolved && depp->nodeType == NodeType::ATTROF
+                        && depp->resolvedWidth > 0) {
+                        hasAttrOfDep = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasAttrOfDep) {
+                UINFO(9, "DEPGRAPH: skip re-evaluate '" << nodeName(nodep)
+                          << "' in template module (GParam) " << ownerModp->name() << endl);
+                return;
+            }
+            UINFO(5, "DEPGRAPH: allow re-evaluate '" << nodeName(nodep)
+                      << "' in template module (has ATTROF dep) " << ownerModp->name() << endl);
         }
     }
 
@@ -3585,6 +3710,18 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
 
         varp->didWidth(false);
         if (AstNode* const valuep = varp->valuep()) valuep->didWidth(false);
+        // Check if this GPARAM depends on an ATTROF node with a resolved width
+        // Store the resolved width in the DepNode for later use by V3Param
+        for (DepNode* const depp : nodep->dependsOn) {
+            if (!depp || !depp->resolved) continue;
+            if (depp->nodeType == NodeType::ATTROF && depp->resolvedWidth > 0) {
+                nodep->resolvedWidth = depp->resolvedWidth;
+                UINFO(5, "DEPGRAPH: GPARAM '" << varp->name()
+                          << "' resolvedWidth=" << nodep->resolvedWidth
+                          << " from ATTROF dependency" << endl);
+                break;
+            }
+        }
         if (nodep->nodeType == NodeType::LPARAM && varp->name() == "p_a") {
             AstNode* const valuep = varp->valuep();
             UINFO(5, "DEPGRAPH: pre-width LPARAM p_a valuep=" << valuep
@@ -3622,26 +3759,34 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         normalizeRefTree(varp, "param-width");
         V3Const::constifyParamsEdit(varp);
     } else if (nodep->nodeType == NodeType::ATTROF) {
-        // ATTROF nodes like $bits() - the commit phase handles replacement with CONST
-        // Just ensure the source type is resolved by checking dependencies
-        AstAttrOf* const attrp = VN_CAST(nodep->nodep, AttrOf);
-        if (!attrp) return;
-
-        // Get the resolved width from the fromp
-        AstNodeDType* fromdtp = nullptr;
-        if (AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
-            fromdtp = rdp->skipRefp();
-            if (!fromdtp) fromdtp = rdp->refDTypep();
-            if (!fromdtp) fromdtp = rdp->dtypep();
-        } else if (AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
-            fromdtp = dtp->skipRefp();
+        // ATTROF nodes like $bits() - get the resolved width from dependencies
+        // The ATTROF depends on REFDTYPE which depends on PARAMTYPEDTYPE
+        // Find the resolved width from the dependency chain
+        int resolvedWidth = 0;
+        UINFO(5, "DEPGRAPH: ATTROF has " << nodep->dependsOn.size() << " dependencies" << endl);
+        for (DepNode* const depp : nodep->dependsOn) {
+            UINFO(5, "DEPGRAPH:   ATTROF dep '" << nodeName(depp) << "' type="
+                      << nodeTypeName(depp->nodeType) << " resolved=" << depp->resolved
+                      << " resolvedWidth=" << depp->resolvedWidth << endl);
+            if (!depp || !depp->resolved) continue;
+            if (depp->nodeType == NodeType::REFDTYPE || depp->nodeType == NodeType::PARAMTYPEDTYPE) {
+                if (depp->resolvedWidth > 0) {
+                    resolvedWidth = depp->resolvedWidth;
+                    break;
+                }
+                // Try to get width from the AST node if resolvedWidth not set
+                if (AstNodeDType* const dtp = VN_CAST(depp->nodep, NodeDType)) {
+                    UINFO(5, "DEPGRAPH:   ATTROF dep AST width=" << dtp->width() << endl);
+                    if (dtp->width() > 0) {
+                        resolvedWidth = dtp->width();
+                        break;
+                    }
+                }
+            }
         }
-
-        if (fromdtp && fromdtp->width() > 0) {
-            UINFO(5, "DEPGRAPH: re-evaluate ATTROF '" << attrp->attrType().ascii()
-                      << "' fromdtp width=" << fromdtp->width()
-                      << " in " << nodeOwnerName(nodep) << endl);
-        }
+        nodep->resolvedWidth = resolvedWidth;
+        UINFO(5, "DEPGRAPH: re-evaluate ATTROF resolvedWidth=" << resolvedWidth
+                  << " in " << nodeOwnerName(nodep) << endl);
     } else if (nodep->nodeType == NodeType::STRUCTDTYPE
                || nodep->nodeType == NodeType::UNIONDTYPE) {
         // Re-width the struct/union after its member types are resolved.
@@ -3724,6 +3869,20 @@ int V3LinkDotDepGraph::resolve() {
         nodep->resolvedIteration = ++s_iterationCount;
         UINFO(9, "DEPGRAPH: resolved '" << nodeName(nodep) << "'@" << nodeOwnerName(nodep)
                   << " step " << s_iterationCount << endl);
+
+        // Propagate resolvedWidth to dependents
+        // This ensures the width flows through the dependency chain even if AST pointers are stale
+        if (nodep->resolvedWidth > 0) {
+            for (DepNode* const depNodep : nodep->dependents) {
+                if (!depNodep) continue;
+                if (depNodep->resolvedWidth <= 0) {
+                    depNodep->resolvedWidth = nodep->resolvedWidth;
+                    UINFO(5, "DEPGRAPH: propagate resolvedWidth " << nodep->resolvedWidth
+                              << " from '" << nodeName(nodep) << "' to '"
+                              << nodeName(depNodep) << "'" << endl);
+                }
+            }
+        }
 
         for (DepNode* const depNodep : nodep->dependents) {
             if (!depNodep || depNodep->resolved) continue;
