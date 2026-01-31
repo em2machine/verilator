@@ -1611,9 +1611,14 @@ private:
     }
     void visit(AstRefDType* nodep) override {
         AstNodeModule* ownerp = V3LinkDotDepGraph::findOwnerModule(nodep);
-        // For cloned RefDTypes (not attached to AST), use depNode's owner as fallback
-        if (!ownerp && m_depNode && m_depNode->ownerModp) ownerp = m_depNode->ownerModp;
-        if (!ownerp) return;
+        // For cloned RefDTypes (not attached to AST), use depNode's owner as fallback.
+        // But only if the node is truly detached (no backp). If backp exists but owner is null,
+        // the node is in the compilation unit and should stay that way.
+        const bool isDetached = !nodep->backp();
+        if (!ownerp && isDetached && m_depNode && m_depNode->ownerModp) {
+            ownerp = m_depNode->ownerModp;
+        }
+        // Null owner means compilation unit - that's valid, don't skip
         V3LinkDotDepGraph::DepNode* const targetp
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
         // Skip edge if parent is PARAMTYPE and this REFDTYPE points back to the same PARAMTYPE
@@ -1790,6 +1795,7 @@ private:
                         AstNode* const clonedExprp = origNodep->origExprp->cloneTree(false);
                         int relinkedRefs = 0;
                         clonedExprp->foreach([&](AstVarRef* refp) {
+                            UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned origExprp");
                             const auto it = m_varsByName.find(refp->varp()->name());
                             if (it != m_varsByName.end()) refp->varp(it->second);
                             if (it != m_varsByName.end()) ++relinkedRefs;
@@ -1876,6 +1882,7 @@ private:
                         return nullptr;
                     };
                     clonedExprp->foreach([&](AstVarRef* refp) {
+                        UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned origExprp");
                         const auto it = m_varsByName.find(refp->varp()->name());
                         if (it != m_varsByName.end()) refp->varp(it->second);
                         if (it != m_varsByName.end()) ++relinkedRefs;
