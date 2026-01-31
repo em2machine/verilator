@@ -3605,14 +3605,17 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
     } else if (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM) {
         AstVar* const varp = VN_CAST(nodep->nodep, Var);
         if (!varp) return;
+        AstNodeModule* const ownerModp
+            = nodep->ownerModp ? nodep->ownerModp : V3LinkDotDepGraph::findOwnerModule(varp);
         if (nodep->origExprp) {
             if (varp->valuep()) varp->valuep()->unlinkFrBack()->deleteTree();
             AstNode* const clonedExprp = nodep->origExprp->cloneTree(false);
             // Relink RefDTypes in the cloned expression to ParamTypeDType in this module
-            AstNodeModule* const ownerModp
-                = nodep->ownerModp ? nodep->ownerModp : V3LinkDotDepGraph::findOwnerModule(varp);
             if (ownerModp) {
                 clonedExprp->foreach([&](AstRefDType* rdp) {
+                    UINFO(5, "DEPGRAPH: reEvaluateNode checking RefDType '" << rdp->name()
+                              << "' in " << ownerModp->name() << " typedefp=" << rdp->typedefp() << endl);
+                    // First try PARAMTYPEDTYPE
                     for (AstNode* stmtp = ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                         if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
                             if (ptdp->name() == rdp->name()) {
@@ -3623,7 +3626,33 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                                     rdp->widthForce(ptdp->width(), ptdp->widthMin());
                                     rdp->didWidth(false);
                                 }
-                                break;
+                                return;
+                            }
+                        }
+                    }
+                    // Second, look for resolved REFDTYPE node in DepGraph (for interface typedefs)
+                    DepNode* const refDepNode = findByNameAndOwner(
+                        rdp->name(), ownerModp, NodeType::REFDTYPE);
+                    UINFO(5, "DEPGRAPH: reEvaluateNode RefDType '" << rdp->name()
+                              << "' refDepNode=" << refDepNode
+                              << " resolved=" << (refDepNode ? refDepNode->resolved : false) << endl);
+                    if (refDepNode && refDepNode->resolved && refDepNode->nodep) {
+                        if (AstRefDType* const resolvedRdp = VN_CAST(refDepNode->nodep, RefDType)) {
+                            UINFO(5, "DEPGRAPH: reEvaluateNode RefDType '" << rdp->name()
+                                      << "' resolvedRdp->typedefp=" << resolvedRdp->typedefp()
+                                      << " rdp->typedefp=" << rdp->typedefp()
+                                      << " resolvedRdp->dtypep=" << resolvedRdp->dtypep()
+                                      << " rdp->dtypep=" << rdp->dtypep() << endl);
+                            // Always update from resolved node to ensure width is correct
+                            if (resolvedRdp->typedefp()) {
+                                UINFO(5, "DEPGRAPH: reEvaluateNode update RefDType '" << rdp->name()
+                                          << "' from resolved node in " << ownerModp->name() << endl);
+                                rdp->typedefp(resolvedRdp->typedefp());
+                                if (resolvedRdp->dtypep()) {
+                                    rdp->dtypep(resolvedRdp->dtypep());
+                                    rdp->widthForce(resolvedRdp->width(), resolvedRdp->widthMin());
+                                }
+                                rdp->didWidth(false);
                             }
                         }
                     }
@@ -4025,6 +4054,40 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
         varp->didWidth(false);
         V3Width::widthParamsEdit(varp);
         V3Const::constifyParamsEdit(varp);
+    }
+
+    // Update REFDTYPEs in the expression to match resolved state from DepGraph
+    // This handles interface typedefs like if_inst.RFTag that were cloned from template
+    if (AstNode* const valuep = varp->valuep()) {
+        AstNodeModule* const ownerModp = nodep->ownerModp;
+        if (ownerModp) {
+            bool updated = false;
+            valuep->foreach([&](AstRefDType* rdp) {
+                // Find the resolved REFDTYPE node in the DepGraph
+                V3LinkDotDepGraph::DepNode* const refDepNode
+                    = V3LinkDotDepGraph::findByNameAndOwner(
+                        rdp->name(), ownerModp, V3LinkDotDepGraph::NodeType::REFDTYPE);
+                if (refDepNode && refDepNode->resolved && refDepNode->nodep) {
+                    if (AstRefDType* const resolvedRdp = VN_CAST(refDepNode->nodep, RefDType)) {
+                        // Copy the resolved typedefp if different
+                        if (resolvedRdp->typedefp() && rdp->typedefp() != resolvedRdp->typedefp()) {
+                            UINFO(5, "DEPGRAPH: finalizeParam update RefDType '" << rdp->name()
+                                      << "' typedefp in " << ownerModp->name() << endl);
+                            rdp->typedefp(resolvedRdp->typedefp());
+                            rdp->dtypep(nullptr);
+                            rdp->didWidth(false);
+                            updated = true;
+                        }
+                    }
+                }
+            });
+            // Re-width if we updated any REFDTYPEs
+            if (updated) {
+                varp->didWidth(false);
+                V3Width::widthParamsEdit(varp);
+                V3Const::constifyParamsEdit(varp);
+            }
+        }
     }
 }
 

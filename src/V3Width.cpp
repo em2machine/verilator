@@ -8576,6 +8576,8 @@ class WidthVisitor final : public VNVisitor {
                 // they extend correctly
                 warnOn = false;
             }
+            // Defer width warnings during DepGraph execution - types may not be fully resolved yet
+            if (!V3LinkDotDepGraph::allowParamMutation()) warnOn = false;
             if (bad && warnOn) {
                 UINFOTREE(5, parentp->backp(), "", "back");
 

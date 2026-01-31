@@ -1,0 +1,32 @@
+// Test case for REFDTYPE not linked to type
+// This reproduces the error where a REFDTYPE in a parameter expression
+// is not properly linked to its type after DepGraph resolution
+
+package Include;
+    typedef logic [11:0] mbox_addr_t;
+endpackage
+
+interface mbox_if #(parameter int WIDTH = 0);
+    typedef Include::mbox_addr_t mbox_addr_t;
+
+    typedef struct packed {
+        logic [1:0] tag;
+        logic [WIDTH-1:0] addr;
+    } RFTag;
+endinterface
+
+module mbox #(parameter int WIDTH = 0);
+    mbox_if #(WIDTH) if_inst();
+
+    // This should reproduce the REFDTYPE UNLINKED error
+    // Using a type cast of an interface typedef in a parameter
+    localparam logic [16:0] TAG_ZERO = {1'b1, if_inst.RFTag'(0)};
+
+    initial begin
+        $display("TAG_ZERO = %b", TAG_ZERO);
+    end
+endmodule
+
+module top;
+    mbox #(.WIDTH(14)) u_mbox();
+endmodule
