@@ -982,7 +982,7 @@ class ParamProcessor final {
                     AstConst* const exprp = VN_CAST(newp, Const);
                     AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
                     const bool overridden
-                        = !(origp && ParameterizedHierBlocks::areSame(exprp, origp));
+                        = !(origp && exprp && ParameterizedHierBlocks::areSame(exprp, origp));
                     // Remove any existing parameter
                     if (modvarp->valuep()) modvarp->valuep()->unlinkFrBack()->deleteTree();
                     // Set this parameter to value requested by cell
