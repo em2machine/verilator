@@ -2741,6 +2741,10 @@ void V3Param::param(AstNetlist* rootp) {
 
         // Apply all deferred AST mutations in a single pass after the loop
         V3LinkDotDepGraph::finalizeAST();
+
+        // DepGraph execution is complete - re-enable all width checks
+        // Guards that checked allowParamMutation() will now allow checks to run
+        V3LinkDotDepGraph::useInParam(false);
     } else {
         { ParamTop{rootp}; }  // Destruct before checking
     }
