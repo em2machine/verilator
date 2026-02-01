@@ -157,14 +157,6 @@ public:
     static void registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp);
     static void registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp);
 
-    // Capture original param/localparam expression before constification
-    static void captureParamExpr(AstVar* varp, AstNodeModule* ownerModp);
-    static void captureParamExpr(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp);
-
-    // Capture type parameter binding for specialized classes
-    static void captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
-                                      AstNodeModule* ownerModp);
-
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
     static int iterationCount() { return s_iterationCount; }
@@ -191,8 +183,6 @@ private:
     static void dumpModuleTree(AstNodeModule* modp, const string& prefix, bool isLast);
     // Helper for resolution - re-evaluate a single node
     static void reEvaluateNode(DepNode* nodep);
-    // Helper for resolve - update edges to specialized nodes
-    static void updateEdgesToSpecialized();
 };
 
 #endif  // VERILATOR_V3LINKDOTDEPGRAPH_H_

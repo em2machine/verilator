@@ -922,9 +922,6 @@ class ParamProcessor final {
         for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
             if (pinp->exprp()) {
                 if (AstVar* const modvarp = pinp->modVarp()) {
-                    UINFO(5, "DEPGRAPH: capture override expr for '" << modvarp->name()
-                              << "' in " << (newModp ? newModp->name() : "<null>") << endl);
-                    V3LinkDotDepGraph::captureParamExpr(modvarp, pinp->exprp(), newModp);
                     AstNode* const newp = pinp->exprp();  // Const or InitArray
                     AstConst* const exprp = VN_CAST(newp, Const);
                     AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
@@ -942,10 +939,6 @@ class ParamProcessor final {
                     if (modptp->childDTypep()) modptp->childDTypep()->unlinkFrBack()->deleteTree();
                     // Set this parameter to value requested by cell
                     modptp->childDTypep(dtypep->cloneTree(false));
-                    // Capture type parameter binding for DepGraph resolution
-                    UINFO(5, "DEPGRAPH: capture type param binding for '" << modptp->name()
-                              << "' in " << (newModp ? newModp->name() : "<null>") << endl);
-                    V3LinkDotDepGraph::captureParamTypeDType(modptp, dtypep, newModp);
                     // Later V3LinkDot will convert the ParamDType to a Typedef
                     // Not done here as may be localparams, etc, that also need conversion
                 }
@@ -2396,22 +2389,6 @@ public:
     explicit ParamVisitor(ParamState& state, AstNetlist* netlistp)
         : m_state{state}
         , m_processor{netlistp} {
-
-        // Capture localparam expressions after widthing but before constification
-        // for dependency graph resolution. Width resolves MEMBERSELs through dtype.
-        for (AstNodeModule* modp = netlistp->modulesp(); modp;
-            modp = VN_AS(modp->nextp(), NodeModule)) {
-            for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                    if ((varp->isGParam() || varp->varType() == VVarType::LPARAM)
-                        && varp->valuep() && !VN_IS(varp->valuep(), Const)) {
-                        UINFO(5, "DEPGRAPH: capture default expr for '" << varp->name()
-                                  << "' in " << (modp ? modp->name() : "<null>") << endl);
-                        V3LinkDotDepGraph::captureParamExpr(varp, varp->valuep(), modp);
-                    }
-                }
-            }
-        }
 
         // Relies on modules already being in top-down-order
         iterate(netlistp);

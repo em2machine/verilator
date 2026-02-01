@@ -523,195 +523,6 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findByNameAndOwner(
     return nullptr;
 }
 
-void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNodeModule* ownerModp) {
-    if (!varp || !ownerModp) return;
-    if (!varp->isGParam() && !varp->isParam()) return;
-    if (!varp->valuep()) return;
-
-    DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
-    if (!depNodep || depNodep->initialValuep) return;
-    depNodep->initialValuep = varp->valuep()->cloneTree(false);
-    UINFO(5, "DEPGRAPH: captured default expr for param '" << varp->name()
-              << "' in " << ownerModp->name() << endl);
-}
-
-void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNode* exprp,
-                                         AstNodeModule* ownerModp) {
-    if (!varp || !exprp || !ownerModp) return;
-    if (!varp->isGParam() && !varp->isParam()) return;
-
-    DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
-    if (!depNodep) return;
-
-    // Override REPLACES any default value - this is the "real" boundary condition
-    if (depNodep->initialValuep) {
-        depNodep->initialValuep->deleteTree();
-    }
-    depNodep->initialValuep = exprp->cloneTree(false);
-    if (AstConst* const constp = VN_CAST(exprp, Const)) {
-        depNodep->initialWidth = constp->width();
-        UINFO(5, "DEPGRAPH: captured override const width=" << constp->width()
-                  << " for param '" << varp->name() << "' in " << ownerModp->name() << endl);
-    }
-
-    UINFO(5, "DEPGRAPH: captured override expr for param '" << varp->name()
-              << "' in " << ownerModp->name() << endl);
-
-    // Collect dependencies from the captured expression
-    // This ensures that if the expression contains ATTROF ($bits, etc.) that reference
-    // PARAMTYPEDTYPEs, the GPARAM will depend on those types being resolved first
-    collectExpressionDeps(exprp, depNodep, ownerModp);
-}
-
-void V3LinkDotDepGraph::captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
-                                               AstNodeModule* ownerModp) {
-    // Capture type parameter binding for specialized classes.
-    // This ensures that when a class like my_pool#(T) is specialized with a concrete type,
-    // the DepGraph has the binding information needed to resolve T inside the specialized class.
-    if (!ptdp || !dtypep || !ownerModp) return;
-
-    DepNode* const depNodep = findOrCreateNode(ptdp, NodeType::PARAMTYPEDTYPE, ownerModp);
-    if (!depNodep) return;
-
-    // Store the bound dtype in initialTypep for type parameters
-    if (!depNodep->initialTypep) {
-        depNodep->initialTypep = dtypep->cloneTree(false);
-        UINFO(5, "DEPGRAPH: captured type param binding for '" << ptdp->name()
-                  << "' = " << dtypep->prettyDTypeName(true)
-                  << " in " << ownerModp->name() << endl);
-    }
-}
-
-// NEW ARCHITECTURE: Simplified normalizeRef
-// Most of the old "commit" logic was for interleaved V3Param iterations.
-// In the new architecture, DepGraph resolves everything first, then finalizeAST()
-// applies resolved state to AST in one pass. This function now only handles:
-// 1. Clearing invalid/dangling pointers (defensive)
-// 2. Explicit retargets from dependency resolution
-// 3. Enforcing the typedefp/refDTypep invariant
-
-static bool normalizeRef(AstRefDType* rdp, AstNodeDType* newRefDTypep = nullptr,
-                         AstTypedef* newTypedefp = nullptr,
-                         AstNodeModule* newClassOwnerp = nullptr) {
-    if (!rdp) return false;
-    bool changed = false;
-
-    // Defensive: clear obviously invalid pointers
-    if (AstTypedef* const tdp = rdp->typedefp()) {
-        if (reinterpret_cast<uintptr_t>(tdp) < 4096) {
-            UINFO(5, "DEPGRAPH: normalizeRef clear invalid typedefp for '" << rdp->name() << "'" << endl);
-            rdp->typedefp(nullptr);
-            rdp->dtypep(nullptr);
-            rdp->didWidth(false);
-            changed = true;
-        }
-    }
-    if (AstNodeDType* const refp = rdp->refDTypep()) {
-        if (reinterpret_cast<uintptr_t>(refp) < 4096) {
-            UINFO(5, "DEPGRAPH: normalizeRef clear invalid refDTypep for '" << rdp->name() << "'" << endl);
-            rdp->refDTypep(nullptr);
-            rdp->dtypep(nullptr);
-            rdp->didWidth(false);
-            changed = true;
-        }
-    }
-
-    // Clear dangling pointers (deleted nodes)
-    if (AstNodeDType* const refp = rdp->refDTypep()) {
-        if (VN_DELETED(refp) || VN_DELETED(refp->backp()) || !refp->backp()) {
-            UINFO(5, "DEPGRAPH: normalizeRef clear dangling refDTypep for '" << rdp->name() << "'" << endl);
-            rdp->refDTypep(nullptr);
-            rdp->dtypep(nullptr);
-            rdp->didWidth(false);
-            changed = true;
-        }
-    }
-    if (AstTypedef* const tdp = rdp->typedefp()) {
-        if (VN_DELETED(tdp) || VN_DELETED(tdp->backp()) || !tdp->backp()) {
-            UINFO(5, "DEPGRAPH: normalizeRef clear dangling typedefp for '" << rdp->name() << "'" << endl);
-            rdp->typedefp(nullptr);
-            rdp->dtypep(nullptr);
-            rdp->didWidth(false);
-            changed = true;
-        }
-    }
-
-    // Explicit retargets from dependency resolution
-    if (newTypedefp && rdp->typedefp() != newTypedefp) {
-        rdp->typedefp(newTypedefp);
-        rdp->refDTypep(nullptr);
-        rdp->dtypep(nullptr);
-        if (newClassOwnerp) rdp->classOrPackagep(newClassOwnerp);
-        rdp->didWidth(false);
-        changed = true;
-    }
-    if (newRefDTypep && rdp->refDTypep() != newRefDTypep) {
-        rdp->refDTypep(newRefDTypep);
-        rdp->typedefp(nullptr);
-        rdp->dtypep(nullptr);
-        rdp->didWidth(false);
-        changed = true;
-    }
-
-    // Enforce invariant: RefDType should not keep both typedefp and refDTypep
-    if (rdp->refDTypep() && rdp->typedefp()) {
-        UINFO(5, "DEPGRAPH: normalizeRef clear typedefp (refDTypep is set) for '" << rdp->name() << "'" << endl);
-        rdp->typedefp(nullptr);
-        rdp->dtypep(nullptr);
-        rdp->didWidth(false);
-        changed = true;
-    }
-
-    // Sync width with target
-    if (AstNodeDType* const refp = rdp->refDTypep()) {
-        if (refp->width() > 0 && refp->width() != rdp->width()) {
-            UINFO(5, "DEPGRAPH: normalizeRef sync width " << rdp->width()
-                      << " -> " << refp->width() << " for '" << rdp->name() << "'" << endl);
-            rdp->dtypep(refp);
-            rdp->widthForce(refp->width(), refp->widthMin());
-            changed = true;
-        }
-    }
-
-    return changed;
-}
-
-static void normalizeRefTree(AstNode* nodep, const char* context = nullptr) {
-    if (!nodep) return;
-    // NEW ARCHITECTURE: No special template-skip handling needed.
-    // Template modules are simply skipped during build - DepGraph resolves
-    // everything first, then V3Param runs once seeing only constants.
-    int refCount = 0;
-    nodep->foreach([&](AstRefDType* rdp) {
-        ++refCount;
-        normalizeRef(rdp);
-    });
-    if (context) {
-        string nodeName;
-        if (AstTypedef* const tdp = VN_CAST(nodep, Typedef)) nodeName = tdp->name();
-        if (AstParamTypeDType* const ptdp = VN_CAST(nodep, ParamTypeDType)) nodeName = ptdp->name();
-        UINFO(5, "DEPGRAPH: normalizeRefTree " << context << " on " << nodep->typeName()
-                  << " name=" << (nodeName.empty() ? "<anon>" : nodeName)
-                  << " nodep=" << nodep
-                  << " refs=" << refCount << endl);
-    }
-}
-
-static void forEachRefDType(AstNodeModule* ownerModp, const std::function<void(AstRefDType*)>& fn) {
-    if (v3Global.rootp()->typeTablep()) {
-        v3Global.rootp()->typeTablep()->foreach([&](AstRefDType* rdp) { fn(rdp); });
-    }
-    if (ownerModp) ownerModp->foreach([&](AstRefDType* rdp) { fn(rdp); });
-}
-
-// NEW ARCHITECTURE: All commit functions removed - AST updates happen in finalizeAST()
-
-static void commitResolvedNode(V3LinkDotDepGraph::DepNode* nodep) {
-    // NEW ARCHITECTURE: No AST manipulation during resolution.
-    // All AST updates happen in finalizeAST() after all nodes are resolved.
-    (void)nodep;  // Unused - kept for API compatibility
-}
-
 void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
     if (!from || !to) return;
     if (from == to) {
@@ -2311,11 +2122,6 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
 
     DepGraphBuildVisitor{netlistp};
 
-    // OLD ARCHITECTURE REMNANT: updateEdgesToSpecialized() was needed when V3Param
-    // created clones during interleaved execution. In new architecture, V3Param
-    // runs after DepGraph completes, so no specialized modules exist yet.
-    // TODO: Remove this call once new architecture is verified
-    updateEdgesToSpecialized();
     for (AstNodeModule* modp = netlistp->modulesp(); modp;
          modp = VN_AS(modp->nextp(), NodeModule)) {
         s_builtModules.insert(modp);
@@ -2343,168 +2149,6 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
     UINFO(5, "DEPGRAPH: built " << s_allNodes.size() << " nodes" << endl);
     dumpGraph("after-build");
 }
-
-// Update edges for REFDTYPE nodes that point to template nodes when specialized versions exist
-void V3LinkDotDepGraph::updateEdgesToSpecialized() {
-    int updatedEdges = 0;
-    for (DepNode* nodep : s_allNodes) {
-        if (!nodep || nodep->nodeType != NodeType::REFDTYPE) continue;
-        if (!nodep->ownerModp) continue;
-
-        // Check each dependency - if it points to a template, find specialized version
-        std::set<DepNode*> newDeps;
-        bool changed = false;
-
-        for (DepNode* const depNodep : nodep->dependsOn) {
-            if (!depNodep || !depNodep->ownerModp) {
-                newDeps.insert(depNodep);
-                continue;
-            }
-
-            // If this node is in a specialized module, retarget deps that still point
-            // at the base module to the matching node in the specialized owner.
-            const string ownerName = nodep->ownerModp->name();
-            const size_t ownerSuffixPos = ownerName.find("__");
-            if (ownerSuffixPos != string::npos) {
-                const string baseOwnerName = ownerName.substr(0, ownerSuffixPos);
-                if (depNodep->ownerModp->name() == baseOwnerName) {
-                    DepNode* specializedOwnerNodep = nullptr;
-                    const string nodeNameStr = nodeName(depNodep);
-                    for (DepNode* const candp : s_allNodes) {
-                        if (!candp || candp == depNodep) continue;
-                        if (candp->nodeType != depNodep->nodeType) continue;
-                        if (candp->ownerModp != nodep->ownerModp) continue;
-                        if (nodeName(candp) != nodeNameStr) continue;
-                        specializedOwnerNodep = candp;
-                        break;
-                    }
-                    if (specializedOwnerNodep) {
-                        newDeps.insert(specializedOwnerNodep);
-                        changed = true;
-                        UINFO(5, "DEPGRAPH: updated edge from '" << nodeName(nodep)
-                                  << "'@" << nodep->ownerModp->name()
-                                  << " to specialized owner '" << nodeName(specializedOwnerNodep)
-                                  << "'@" << specializedOwnerNodep->ownerModp->name()
-                                  << " (was base @" << depNodep->ownerModp->name() << ")" << endl);
-                        ++updatedEdges;
-                        continue;
-                    }
-                }
-            }
-
-            // Check if dependency is to a template module
-            const bool isTemplate = isTemplateModule(depNodep->ownerModp);
-            if (!isTemplate) {
-                newDeps.insert(depNodep);
-                continue;
-            }
-
-            // Search for specialized version of this node
-            DepNode* specializedNodep = nullptr;
-            const string templateBaseName = depNodep->ownerModp->name();
-            const string nodeNameStr = nodeName(depNodep);
-
-            // If the REFDTYPE has a cellName, use it to find the correct specialization
-            // by looking up which specialized module the cell instantiates
-            string targetSpecSuffix;
-            if (!nodep->cellName.empty() && nodep->ownerModp) {
-                // Find the cell in the owner module and get its specialized module
-                for (AstNode* stmtp = nodep->ownerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                        if (cellp->name() == nodep->cellName && cellp->modp()) {
-                            const string cellModName = cellp->modp()->name();
-                            const size_t suffixPos = cellModName.find("__");
-                            if (suffixPos != string::npos) {
-                                targetSpecSuffix = cellModName.substr(suffixPos);
-                                UINFO(9, "DEPGRAPH: updateEdges cellName '" << nodep->cellName
-                                          << "' -> module '" << cellModName
-                                          << "' suffix '" << targetSpecSuffix << "'" << endl);
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            for (DepNode* const candp : s_allNodes) {
-                if (!candp || candp == depNodep) continue;
-                if (candp->nodeType != depNodep->nodeType) continue;
-                if (!candp->ownerModp) continue;
-                if (nodeName(candp) != nodeNameStr) continue;
-
-                // Check if candidate is a specialization of the template
-                const string candOwnerName = candp->ownerModp->name();
-                if (candOwnerName.find(templateBaseName + "__") != string::npos) {
-                    // If we have a target suffix from cellName lookup, prefer exact match
-                    if (!targetSpecSuffix.empty()) {
-                        if (candOwnerName.find(targetSpecSuffix) != string::npos) {
-                            specializedNodep = candp;
-                            UINFO(9, "DEPGRAPH: updateEdges matched via cellName suffix '"
-                                      << targetSpecSuffix << "' -> " << candOwnerName << endl);
-                            break;
-                        }
-                        // Don't use fallback if we have a specific target
-                        continue;
-                    }
-                    // Found a specialized version - prefer one in same module hierarchy
-                    const string ownerName = nodep->ownerModp->name();
-                    const size_t ownerSuffixPos = ownerName.find("__");
-                    if (ownerSuffixPos != string::npos) {
-                        const string ownerSuffix = ownerName.substr(ownerSuffixPos);
-                        // Check for matching suffix pattern
-                        if (candOwnerName.find(ownerSuffix) != string::npos
-                            || ownerSuffix.find(candOwnerName.substr(candOwnerName.find("__"))) != string::npos) {
-                            specializedNodep = candp;
-                            break;
-                        }
-                    }
-                    // Fallback: use first specialized version found (only if no cellName target)
-                    if (!specializedNodep) specializedNodep = candp;
-                }
-            }
-
-            if (specializedNodep) {
-                newDeps.insert(specializedNodep);
-                changed = true;
-                UINFO(5, "DEPGRAPH: updated edge from '" << nodeName(nodep)
-                          << "'@" << nodep->ownerModp->name()
-                          << " to specialized '" << nodeName(specializedNodep)
-                          << "'@" << specializedNodep->ownerModp->name()
-                          << " (was template @" << depNodep->ownerModp->name() << ")" << endl);
-                ++updatedEdges;
-
-                // Store resolved typedef for REFDTYPE nodes pointing to specialized typedef
-                if (nodep->nodeType == NodeType::REFDTYPE
-                    && specializedNodep->nodeType == NodeType::TYPEDEF) {
-                    if (AstTypedef* const specTdp = VN_CAST(specializedNodep->nodep, Typedef)) {
-                        nodep->resolvedTypedefp = specTdp;
-                        nodep->resolvedOwnerModp = specializedNodep->ownerModp;
-                        UINFO(5, "DEPGRAPH: resolved REFDTYPE '" << nodeName(nodep)
-                                  << "' typedefp to specialized typedef in "
-                                  << specializedNodep->ownerModp->name() << endl);
-                    }
-                }
-            } else {
-                newDeps.insert(depNodep);
-            }
-        }
-
-        if (changed) {
-            // Update edges
-            for (DepNode* const oldDepp : nodep->dependsOn) {
-                if (oldDepp) oldDepp->dependents.erase(nodep);
-            }
-            nodep->dependsOn = newDeps;
-            for (DepNode* const newDepp : newDeps) {
-                if (newDepp) newDepp->dependents.insert(nodep);
-            }
-        }
-    }
-    if (updatedEdges > 0) {
-        UINFO(5, "DEPGRAPH: updated " << updatedEdges << " edges to specialized nodes" << endl);
-    }
-}
-
 
 //======================================================================
 // Resolution - helper to re-evaluate a single node
@@ -2636,7 +2280,6 @@ int V3LinkDotDepGraph::resolve() {
         }
 
         reEvaluateNode(nodep);
-        commitResolvedNode(nodep);
 
         // Always mark as resolved - if commit skipped replacement (e.g., width=0),
         // the guards in V3Width/V3Const will handle it later.
@@ -2755,21 +2398,19 @@ static void finalizeParamType(V3LinkDotDepGraph::DepNode* nodep) {
               << " resolvedTypep=" << nodep->resolvedTypep
               << endl);
 
-    // Apply resolved type from DepNode
-    if (nodep->resolvedTypep) {
+    // Apply resolved type from DepNode - only if different
+    if (nodep->resolvedTypep && ptdp->dtypep() != nodep->resolvedTypep) {
+        UINFO(5, "DEPGRAPH: finalizeParamType '" << ptdp->name()
+                  << "' updating dtypep" << endl);
         ptdp->dtypep(nodep->resolvedTypep);
     }
 
-    // Apply resolved width from DepNode
+    // Apply resolved width from DepNode - only if different
     if (nodep->resolvedWidth > 0 && ptdp->width() != nodep->resolvedWidth) {
         UINFO(5, "DEPGRAPH: finalizeParamType '" << ptdp->name()
                   << "' width " << ptdp->width() << " -> " << nodep->resolvedWidth << endl);
         ptdp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
-        ptdp->didWidth(true);
     }
-
-    // Normalize RefDTypes in this paramtype subtree
-    normalizeRefTree(ptdp, "finalize-paramtype");
 }
 
 static void finalizeRefDType(V3LinkDotDepGraph::DepNode* nodep) {
@@ -2779,17 +2420,31 @@ static void finalizeRefDType(V3LinkDotDepGraph::DepNode* nodep) {
     UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
               << "' resolvedWidth=" << nodep->resolvedWidth
               << " resolvedTypep=" << nodep->resolvedTypep
+              << " resolvedTypedefp=" << nodep->resolvedTypedefp
               << endl);
 
-    // Apply resolved type from DepNode
-    if (nodep->resolvedTypep) {
+    // Apply resolved type from DepNode - only if different
+    if (nodep->resolvedTypep && rdp->refDTypep() != nodep->resolvedTypep) {
+        UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
+                  << "' updating refDTypep" << endl);
         rdp->refDTypep(nodep->resolvedTypep);
         rdp->typedefp(nullptr);
-        rdp->dtypep(nullptr);
-        rdp->didWidth(false);
     }
 
-    // Apply resolved width from DepNode
+    // Apply resolved typedef from DepNode - only if different
+    if (nodep->resolvedTypedefp && rdp->typedefp() != nodep->resolvedTypedefp) {
+        UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
+                  << "' updating typedefp" << endl);
+        rdp->typedefp(nodep->resolvedTypedefp);
+        rdp->refDTypep(nullptr);
+    }
+
+    // Apply resolved owner module from DepNode
+    if (nodep->resolvedOwnerModp && rdp->classOrPackagep() != nodep->resolvedOwnerModp) {
+        rdp->classOrPackagep(nodep->resolvedOwnerModp);
+    }
+
+    // Apply resolved width from DepNode - only if different
     if (nodep->resolvedWidth > 0 && rdp->width() != nodep->resolvedWidth) {
         UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
                   << "' width " << rdp->width() << " -> " << nodep->resolvedWidth << endl);
@@ -2801,10 +2456,26 @@ static void finalizeTypedef(V3LinkDotDepGraph::DepNode* nodep) {
     AstTypedef* const tdp = VN_CAST(nodep->nodep, Typedef);
     if (!tdp) return;
 
-    UINFO(5, "DEPGRAPH: finalizeTypedef '" << tdp->name() << "'" << endl);
+    UINFO(5, "DEPGRAPH: finalizeTypedef '" << tdp->name()
+              << "' resolvedWidth=" << nodep->resolvedWidth
+              << " resolvedTypep=" << nodep->resolvedTypep
+              << endl);
 
-    // Typedefs don't have deferred state currently - they're handled via normalizeRef
-    // This is a placeholder for future deferred typedef mutations
+    // Apply resolved type from DepNode - only if different
+    // Typedef uses dtypep() for the resolved type
+    if (nodep->resolvedTypep && tdp->dtypep() != nodep->resolvedTypep) {
+        UINFO(5, "DEPGRAPH: finalizeTypedef '" << tdp->name()
+                  << "' updating dtypep" << endl);
+        tdp->dtypep(nodep->resolvedTypep);
+    }
+
+    // Apply resolved width from DepNode - only if different and dtypep exists
+    if (nodep->resolvedWidth > 0 && tdp->dtypep()
+        && tdp->width() != nodep->resolvedWidth) {
+        UINFO(5, "DEPGRAPH: finalizeTypedef '" << tdp->name()
+                  << "' width " << tdp->width() << " -> " << nodep->resolvedWidth << endl);
+        tdp->dtypep()->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
+    }
 }
 
 static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
@@ -2854,8 +2525,6 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
     }
 }
 
-// ATTROF replacement is handled by V3Width, not here
-
 void V3LinkDotDepGraph::finalizeAST() {
     if (!s_enabled) return;
 
@@ -2896,10 +2565,9 @@ void V3LinkDotDepGraph::finalizeAST() {
     int refDTypeCount = 0;
     int typedefCount = 0;
     int paramCount = 0;
-    int normalizeCount = 0;
-    int normalizeTreeCount = 0;
 
-    // First pass: apply deferred mutations by node type
+    // Single pass: apply resolved state to AST by node type
+    // Each finalize* function checks if update is needed before applying
     for (DepNode* nodep : s_allNodes) {
         if (!nodep || !nodep->resolved) continue;
 
@@ -2921,116 +2589,24 @@ void V3LinkDotDepGraph::finalizeAST() {
             finalizeParam(nodep);
             ++paramCount;
             break;
+        case NodeType::STRUCTDTYPE:
+        case NodeType::UNIONDTYPE:
+            // Struct/union widths are computed from member types during resolve
+            // Apply resolved width here
+            if (AstNodeUOrStructDType* const usp = VN_CAST(nodep->nodep, NodeUOrStructDType)) {
+                if (nodep->resolvedWidth > 0 && usp->width() != nodep->resolvedWidth) {
+                    UINFO(5, "DEPGRAPH: finalizeAST struct '" << usp->name()
+                              << "' width " << usp->width() << " -> " << nodep->resolvedWidth << endl);
+                    usp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
+                }
+            }
+            break;
         case NodeType::ATTROF:
-            // ATTROF replacement is handled by V3Width, not here
+            // ATTROF ($bits) replacement handled separately - the resolved width
+            // is used by V3Width when it processes the AttrOf node
             break;
         default:
             break;
-        }
-    }
-
-    // Second pass: apply resolved state to RefDTypes
-    for (DepNode* nodep : s_allNodes) {
-        if (!nodep || !nodep->nodep) continue;
-
-        if (nodep->nodeType == NodeType::REFDTYPE) {
-            if (AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType)) {
-                // Apply resolved state before normalizing
-                if (nodep->resolvedTypedefp) {
-                    rdp->typedefp(nodep->resolvedTypedefp);
-                    rdp->refDTypep(nullptr);
-                }
-                if (nodep->resolvedOwnerModp) {
-                    rdp->classOrPackagep(nodep->resolvedOwnerModp);
-                }
-                normalizeRef(rdp);
-                ++normalizeCount;
-            }
-        }
-    }
-
-    // Global cleanup pass for all RefDTypes (handles nodes not in DepGraph)
-    forEachRefDType(nullptr, [](AstRefDType* rdp) {
-        if (!rdp) return;
-        normalizeRef(rdp);
-    });
-
-    // Global cleanup pass for PARAMTYPEDTYPE nodes with unresolved REQUIREDTYPE.
-    // This handles template modules that were skipped during DepGraph building
-    // but are reused when instantiated with default type parameters (e.g., T = logic).
-    // Only resolve for template modules (hasGParam && no "__" suffix) that are not dead.
-    // IMPORTANT: Don't delete REQUIREDTYPE - just set dtypep to the resolved type.
-    // Deleting nodes can corrupt the AST if they're referenced elsewhere.
-    std::vector<AstParamTypeDType*> reqTypeToResolve;
-    if (AstNetlist* const netlistp = v3Global.rootp()) {
-        netlistp->foreach([&](AstParamTypeDType* ptdp) {
-            if (!ptdp) return;
-            AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType);
-            if (!reqp) return;
-            AstNodeDType* defaultTypep = VN_CAST(reqp->lhsp(), NodeDType);
-            if (!defaultTypep) return;
-            // Only resolve for template modules (hasGParam && no "__" suffix)
-            AstNodeModule* const ownerModp = findOwnerModule(ptdp);
-            if (!ownerModp) return;
-            if (!ownerModp->hasGParam()) return;  // Not a template module
-            if (isSpecializedModule(ownerModp)) return;  // Already specialized
-            if (ownerModp->dead()) return;  // Dead module - will be removed
-            reqTypeToResolve.push_back(ptdp);
-        });
-    }
-    for (AstParamTypeDType* ptdp : reqTypeToResolve) {
-        AstRequireDType* const reqp = VN_CAST(ptdp->subDTypep(), RequireDType);
-        if (!reqp) continue;
-        AstNodeDType* defaultTypep = VN_CAST(reqp->lhsp(), NodeDType);
-        if (!defaultTypep) continue;
-        UINFO(5, "DEPGRAPH: finalizeAST resolving REQUIREDTYPE for '"
-                  << ptdp->name() << "' to default type "
-                  << defaultTypep->prettyTypeName() << endl);
-        // Just set dtypep to the default type - don't delete REQUIREDTYPE
-        // The REQUIREDTYPE will be cleaned up later by V3Dead
-        ptdp->dtypep(defaultTypep);
-        if (defaultTypep->width() > 0) {
-            ptdp->widthForce(defaultTypep->width(), defaultTypep->widthMin());
-        }
-    }
-    if (!reqTypeToResolve.empty()) {
-        UINFO(5, "DEPGRAPH: finalizeAST resolved " << reqTypeToResolve.size()
-                  << " REQUIREDTYPE nodes in PARAMTYPEDTYPE" << endl);
-    }
-
-    // Re-width all structs in TYPETABLE. Structs may have been cloned during V3Param
-    // with width=0, and need to be re-widthed based on their resolved member types.
-    int structCount = 0;
-    if (AstNetlist* const netlistp = v3Global.rootp()) {
-        if (AstTypeTable* const typetablep = netlistp->typeTablep()) {
-            for (AstNode* nodep = typetablep->typesp(); nodep; nodep = nodep->nextp()) {
-                if (AstNodeUOrStructDType* const usp = VN_CAST(nodep, NodeUOrStructDType)) {
-                    const int oldWidth = usp->width();
-                    UINFO(5, "DEPGRAPH: finalizeAST checking struct '" << usp->name()
-                              << "' width=" << oldWidth << endl);
-                    // Update member types to have correct width from their subDTypep
-                    for (AstMemberDType* memp = usp->membersp(); memp;
-                         memp = VN_AS(memp->nextp(), MemberDType)) {
-                        AstNodeDType* const subp = memp->subDTypep();
-                        UINFO(5, "DEPGRAPH: finalizeAST   member '" << memp->name()
-                                  << "' memp->width=" << memp->width()
-                                  << " subp=" << (subp ? subp->prettyTypeName() : "<null>")
-                                  << " subp->width=" << (subp ? subp->width() : -1) << endl);
-                        if (subp && subp->width() > 0 && memp->width() != subp->width()) {
-                            UINFO(5, "DEPGRAPH: finalizeAST update member '" << memp->name()
-                                      << "' width " << memp->width() << " -> " << subp->width() << endl);
-                            memp->widthForce(subp->width(), subp->widthMin());
-                            memp->dtypep(subp);
-                        }
-                    }
-                    V3Width::widthParamsEdit(usp);
-                    if (usp->width() != oldWidth) {
-                        UINFO(5, "DEPGRAPH: finalizeAST re-width struct '" << usp->name()
-                                  << "' " << oldWidth << " -> " << usp->width() << endl);
-                    }
-                    ++structCount;
-                }
-            }
         }
     }
 
@@ -3038,9 +2614,6 @@ void V3LinkDotDepGraph::finalizeAST() {
               << " REFDTYPE=" << refDTypeCount
               << " TYPEDEF=" << typedefCount
               << " PARAM=" << paramCount
-              << " normalize=" << normalizeCount
-              << " normalizeTree=" << normalizeTreeCount
-              << " struct=" << structCount
               << endl);
 }
 
