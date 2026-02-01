@@ -172,7 +172,8 @@ public:
 
     // Debugging - print the entire graph
     static void dumpGraph();
-    static void dumpGraphDepsTree();  // Dependency edge tree view
+    static void dumpGraphDepsTree(const char* stageName = "");  // Dependency tree (what each node depends on)
+    static void dumpGraphDependentsTree(const char* stageName = "");  // Dependents tree (what depends on each node)
     static void dumpGraphTree(AstNetlist* netlistp);  // Hierarchy tree view
     static void dumpNode(const DepNode* nodep);
     static string nodeName(const DepNode* nodep);

@@ -112,13 +112,29 @@ string V3LinkDotDepGraph::nodeOwnerName(const DepNode* nodep) {
 //======================================================================
 // Debug: Dump dependency graph tree view
 
+// File-scope helper for node type name (needed by static helper functions)
+static const char* nodeTypeName(V3LinkDotDepGraph::NodeType type) {
+    switch (type) {
+    case V3LinkDotDepGraph::NodeType::GPARAM: return "GPARAM";
+    case V3LinkDotDepGraph::NodeType::LPARAM: return "LPARAM";
+    case V3LinkDotDepGraph::NodeType::TYPEDEF: return "TYPEDEF";
+    case V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE: return "PARAMTYPE";
+    case V3LinkDotDepGraph::NodeType::REFDTYPE: return "REFDTYPE";
+    case V3LinkDotDepGraph::NodeType::STRUCTDTYPE: return "STRUCTDTYPE";
+    case V3LinkDotDepGraph::NodeType::UNIONDTYPE: return "UNIONDTYPE";
+    case V3LinkDotDepGraph::NodeType::ATTROF: return "ATTROF";
+    case V3LinkDotDepGraph::NodeType::FUNC: return "FUNC";
+    }
+    return "?";
+}
+
 void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
     if (!debug()) return;
 
-    UINFO(3, "\n");
-    UINFO(3, "========== DEPGRAPH DUMP: " << stageName << " ==========" << endl);
-    UINFO(3, "Total nodes: " << s_allNodes.size() << endl);
-    UINFO(3, "\n");
+    UINFO(3, "DEPGRAPH: \n");
+    UINFO(3, "DEPGRAPH: ========== DUMP: " << stageName << " ==========" << endl);
+    UINFO(3, "DEPGRAPH: Total nodes: " << s_allNodes.size() << endl);
+    UINFO(3, "DEPGRAPH: \n");
 
     // Group nodes by owner module for cleaner output
     std::map<string, std::vector<DepNode*>> nodesByModule;
@@ -129,14 +145,14 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
     }
 
     for (const auto& pair : nodesByModule) {
-        UINFO(3, "--- Module: " << pair.first << " (" << pair.second.size() << " nodes) ---" << endl);
+        UINFO(3, "DEPGRAPH: --- Module: " << pair.first << " (" << pair.second.size() << " nodes) ---" << endl);
         for (DepNode* nodep : pair.second) {
             // Node identity
-            UINFO(3, "  [" << nodeTypeName(nodep->nodeType) << "] "
+            UINFO(3, "DEPGRAPH:   [" << nodeTypeName(nodep->nodeType) << "] "
                       << nodeName(nodep) << endl);
 
             // Initial state (inputs from AST at build time)
-            UINFO(3, "    initial: width=" << nodep->initialWidth);
+            UINFO(3, "DEPGRAPH:     initial: width=" << nodep->initialWidth);
             if (nodep->initialValuep) {
                 UINFO(3, " valuep=" << nodep->initialValuep);
             }
@@ -146,7 +162,7 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
             UINFO(3, endl);
 
             // Resolved state (outputs after execution)
-            UINFO(3, "    resolved: " << (nodep->resolved ? "YES" : "NO")
+            UINFO(3, "DEPGRAPH:     resolved: " << (nodep->resolved ? "YES" : "NO")
                       << " width=" << nodep->resolvedWidth);
             if (nodep->resolvedTypep) {
                 UINFO(3, " typep=" << nodep->resolvedTypep);
@@ -157,15 +173,15 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
             UINFO(3, endl);
 
             // Execution state
-            UINFO(3, "    exec: pendingDeps=" << nodep->pendingDeps
+            UINFO(3, "DEPGRAPH:     exec: pendingDeps=" << nodep->pendingDeps
                       << " iteration=" << nodep->resolvedIteration << endl);
 
             // Dependencies (inputs - what this node reads from)
             if (!nodep->dependsOn.empty()) {
-                UINFO(3, "    dependsOn (" << nodep->dependsOn.size() << "):" << endl);
+                UINFO(3, "DEPGRAPH:     dependsOn (" << nodep->dependsOn.size() << "):" << endl);
                 for (DepNode* const depp : nodep->dependsOn) {
                     if (!depp) continue;
-                    UINFO(3, "      <- [" << nodeTypeName(depp->nodeType) << "] "
+                    UINFO(3, "DEPGRAPH:       <- [" << nodeTypeName(depp->nodeType) << "] "
                               << nodeName(depp) << "@" << nodeOwnerName(depp)
                               << " resolved=" << (depp->resolved ? "Y" : "N")
                               << " width=" << depp->resolvedWidth << endl);
@@ -174,16 +190,16 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
 
             // Dependents (outputs - what nodes read from this)
             if (!nodep->dependents.empty()) {
-                UINFO(3, "    dependents (" << nodep->dependents.size() << "):" << endl);
+                UINFO(3, "DEPGRAPH:     dependents (" << nodep->dependents.size() << "):" << endl);
                 for (DepNode* const depp : nodep->dependents) {
                     if (!depp) continue;
-                    UINFO(3, "      -> [" << nodeTypeName(depp->nodeType) << "] "
+                    UINFO(3, "DEPGRAPH:       -> [" << nodeTypeName(depp->nodeType) << "] "
                               << nodeName(depp) << "@" << nodeOwnerName(depp)
                               << " pending=" << depp->pendingDeps << endl);
                 }
             }
         }
-        UINFO(3, endl);
+        UINFO(3, "DEPGRAPH: \n");
     }
 
     // Summary statistics
@@ -199,11 +215,156 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
             if (nodep->pendingDeps == 0) ++readyCount;
         }
     }
-    UINFO(3, "Summary: resolved=" << resolvedCount
+    UINFO(3, "DEPGRAPH: Summary: resolved=" << resolvedCount
               << " unresolved=" << unresolvedCount
               << " ready=" << readyCount << endl);
-    UINFO(3, "========== END DEPGRAPH DUMP ==========" << endl);
-    UINFO(3, "\n");
+    UINFO(3, "DEPGRAPH: ========== END DUMP ==========" << endl);
+    UINFO(3, "DEPGRAPH: \n");
+}
+
+// Helper for dumpGraphDepsTree - recursively print dependency tree
+static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& prefix,
+                             bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
+    if (!nodep) return;
+
+    // Print this node
+    const string connector = isLast ? "└── " : "├── ";
+    UINFO(3, "DEPGRAPH: " << prefix << connector
+              << "[" << nodeTypeName(nodep->nodeType) << "] "
+              << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
+              << " (pending=" << nodep->pendingDeps
+              << " resolved=" << (nodep->resolved ? "Y" : "N")
+              << " width=" << nodep->resolvedWidth << ")" << endl);
+
+    // Check for cycles
+    if (visited.count(nodep)) {
+        UINFO(3, "DEPGRAPH: " << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+        return;
+    }
+    visited.insert(nodep);
+
+    // Print dependencies (what this node depends on)
+    const string childPrefix = prefix + (isLast ? "    " : "│   ");
+    std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependsOn.begin(), nodep->dependsOn.end());
+    for (size_t i = 0; i < deps.size(); ++i) {
+        dumpDepsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited);
+    }
+
+    visited.erase(nodep);
+}
+
+void V3LinkDotDepGraph::dumpGraphDepsTree(const char* stageName) {
+    if (!debug()) return;
+
+    UINFO(3, "DEPGRAPH: \n");
+    UINFO(3, "DEPGRAPH: ========== DEPS TREE: " << stageName << " ==========" << endl);
+    UINFO(3, "DEPGRAPH: (shows what each node DEPENDS ON - arrows point to dependencies)" << endl);
+    UINFO(3, "DEPGRAPH: \n");
+
+    // Find root nodes (nodes with dependents but no one depends on them, i.e., leaf consumers)
+    // Actually, for a "what depends on what" tree, we want to start from nodes that
+    // have dependents (are depended upon) - these are the "roots" of the dependency tree
+    std::set<DepNode*> rootNodes;
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        // A root is a node with no dependsOn (boundary condition)
+        if (nodep->dependsOn.empty()) {
+            rootNodes.insert(nodep);
+        }
+    }
+
+    UINFO(3, "DEPGRAPH: Boundary nodes (no dependencies - ready to execute):" << endl);
+    for (DepNode* rootp : rootNodes) {
+        UINFO(3, "DEPGRAPH:   [" << nodeTypeName(rootp->nodeType) << "] "
+                  << nodeName(rootp) << "@" << nodeOwnerName(rootp) << endl);
+    }
+    UINFO(3, "DEPGRAPH: \n");
+
+    // Now print the tree from each leaf node (nodes with no dependents)
+    UINFO(3, "DEPGRAPH: Dependency chains (leaf -> ... -> root):" << endl);
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        // Leaf nodes have no dependents (nothing depends on them)
+        if (nodep->dependents.empty() && !nodep->dependsOn.empty()) {
+            std::set<DepNode*> visited;
+            dumpDepsTreeNode(nodep, "", true, visited);
+            UINFO(3, "DEPGRAPH: \n");
+        }
+    }
+
+    UINFO(3, "DEPGRAPH: ========== END DEPS TREE ==========" << endl);
+    UINFO(3, "DEPGRAPH: \n");
+}
+
+// Helper for dumpGraphDependentsTree - recursively print dependents tree (reverse direction)
+static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& prefix,
+                                   bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
+    if (!nodep) return;
+
+    // Print this node
+    const string connector = isLast ? "└── " : "├── ";
+    UINFO(3, "DEPGRAPH: " << prefix << connector
+              << "[" << nodeTypeName(nodep->nodeType) << "] "
+              << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
+              << " (pending=" << nodep->pendingDeps
+              << " resolved=" << (nodep->resolved ? "Y" : "N")
+              << " width=" << nodep->resolvedWidth << ")" << endl);
+
+    // Check for cycles
+    if (visited.count(nodep)) {
+        UINFO(3, "DEPGRAPH: " << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+        return;
+    }
+    visited.insert(nodep);
+
+    // Print dependents (what depends on this node) - reverse direction
+    const string childPrefix = prefix + (isLast ? "    " : "│   ");
+    std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependents.begin(), nodep->dependents.end());
+    for (size_t i = 0; i < deps.size(); ++i) {
+        dumpDependentsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited);
+    }
+
+    visited.erase(nodep);
+}
+
+void V3LinkDotDepGraph::dumpGraphDependentsTree(const char* stageName) {
+    if (!debug()) return;
+
+    UINFO(3, "DEPGRAPH: \n");
+    UINFO(3, "DEPGRAPH: ========== DEPENDENTS TREE: " << stageName << " ==========" << endl);
+    UINFO(3, "DEPGRAPH: (shows what DEPENDS ON each node - execution order view)" << endl);
+    UINFO(3, "DEPGRAPH: \n");
+
+    // Find leaf nodes (nodes with no dependents - final consumers)
+    std::set<DepNode*> leafNodes;
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        if (nodep->dependents.empty()) {
+            leafNodes.insert(nodep);
+        }
+    }
+
+    UINFO(3, "DEPGRAPH: Leaf nodes (no dependents - final consumers):" << endl);
+    for (DepNode* leafp : leafNodes) {
+        UINFO(3, "DEPGRAPH:   [" << nodeTypeName(leafp->nodeType) << "] "
+                  << nodeName(leafp) << "@" << nodeOwnerName(leafp) << endl);
+    }
+    UINFO(3, "DEPGRAPH: \n");
+
+    // Print the tree from each root node (nodes with no dependencies - boundary conditions)
+    UINFO(3, "DEPGRAPH: Execution chains (root -> ... -> leaf):" << endl);
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        // Root nodes have no dependencies (boundary conditions)
+        if (nodep->dependsOn.empty() && !nodep->dependents.empty()) {
+            std::set<DepNode*> visited;
+            dumpDependentsTreeNode(nodep, "", true, visited);
+            UINFO(3, "DEPGRAPH: \n");
+        }
+    }
+
+    UINFO(3, "DEPGRAPH: ========== END DEPENDENTS TREE ==========" << endl);
+    UINFO(3, "DEPGRAPH: \n");
 }
 
 static AstIfaceRefDType* findIfaceRefDType(AstNodeDType* dtypep) {
@@ -821,6 +982,23 @@ private:
                           << "' depends on REFDTYPE '" << rdp->name()
                           << "' in " << rdpOwnerp->name() << endl);
 
+                // Add edge from REFDTYPE to TYPEDEF if applicable
+                if (AstTypedef* const tdp = rdp->typedefp()) {
+                    AstNodeModule* tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+                    if (!tdOwnerp) tdOwnerp = rdpOwnerp;
+                    V3LinkDotDepGraph::DepNode* tdNodep
+                        = V3LinkDotDepGraph::findByNameAndOwner(
+                            tdp->name(), tdOwnerp, V3LinkDotDepGraph::NodeType::TYPEDEF);
+                    if (!tdNodep) {
+                        tdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                            tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                    }
+                    V3LinkDotDepGraph::addEdge(rdpNodep, tdNodep);
+                    UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
+                              << "' depends on TYPEDEF '" << tdp->name()
+                              << "' in " << tdOwnerp->name() << endl);
+                }
+
                 // Also add edge from REFDTYPE to PARAMTYPEDTYPE if applicable
                 if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
                     AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
@@ -879,16 +1057,11 @@ private:
     }
 
     void visit(AstNodeModule* nodep) override {
-        // Skip dead modules and template modules (unspecialized parameterized modules)
-        // Template modules have GParams but no specialization suffix. Top modules must
-        // still be visited/resolved, even if parameterized, since there is no clone.
+        // NEW ARCHITECTURE: Visit ALL modules including templates.
+        // DepGraph runs BEFORE V3Param creates specializations, so we must capture
+        // template module contents (typedefs, localparams, $bits expressions) to
+        // resolve the dependency chain. V3Param will then see resolved constants.
         if (nodep->dead()) return;
-        if (isTemplateModule(nodep)) {
-            UINFO(9, "DEPGRAPH: skip template module " << nodep->name() << endl);
-            // NEW ARCHITECTURE: Simply skip template modules - no special cleanup needed.
-            // DepGraph resolves everything first, then V3Param runs once.
-            return;
-        }
 
         VL_RESTORER(m_modp);
         m_modp = nodep;
@@ -1211,9 +1384,13 @@ private:
                           << (VN_IS(usp, UnionDType) ? "UNIONDTYPE" : "STRUCTDTYPE")
                           << " '" << usp->name() << "' w" << usp->width()
                           << " deps=" << uspNodep->dependsOn.size() << endl);
+                // Collect expression deps from struct members onto STRUCTDTYPE node (not TYPEDEF)
+                // This ensures WIDTH dependency goes to struct, not typedef
+                V3LinkDotDepGraph::collectExpressionDeps(dtypep, uspNodep, m_modp);
+            } else {
+                // For other types (not struct/union), collect deps onto TYPEDEF node
+                V3LinkDotDepGraph::collectExpressionDeps(dtypep, depNodep, m_modp);
             }
-            // For other types, iterate children
-            V3LinkDotDepGraph::collectExpressionDeps(dtypep, depNodep, m_modp);
         }
     }
 
@@ -2148,6 +2325,8 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
     recomputePendingDeps();
     UINFO(5, "DEPGRAPH: built " << s_allNodes.size() << " nodes" << endl);
     dumpGraph("after-build");
+    dumpGraphDepsTree("after-build");
+    dumpGraphDependentsTree("after-build");
 }
 
 //======================================================================
@@ -2897,53 +3076,6 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
             }
         }
     }
-}
-
-void V3LinkDotDepGraph::dumpGraphDepsTree() {
-    UINFO(5, "DEPGRAPH: ========== DEPENDENCY EDGE TREE ==========" << endl);
-    UINFO(5, "DEPGRAPH: Total nodes: " << s_allNodes.size()
-              << "  Iterations: " << s_iterationCount << endl);
-
-    auto nodeLabel = [](const DepNode* nodep) {
-        std::ostringstream label;
-        label << nodeTypeName(nodep->nodeType) << " " << nodeName(nodep)
-              << "@" << nodeOwnerName(nodep);
-        if (nodep->resolved) label << " [R]";
-        return label.str();
-    };
-
-    std::map<string, std::vector<const DepNode*>> byOwner;
-    for (const DepNode* nodep : s_allNodes) {
-        if (!nodep) continue;
-        byOwner[nodeOwnerName(nodep)].push_back(nodep);
-    }
-
-    for (const auto& kv : byOwner) {
-        UINFO(5, "DEPGRAPH: " << kv.first << endl);
-        const auto& nodes = kv.second;
-        for (size_t i = 0; i < nodes.size(); ++i) {
-            const DepNode* const nodep = nodes[i];
-            if (!nodep) continue;
-            const bool isLastNode = (i + 1 == nodes.size());
-            const string nodeConnector = isLastNode ? "└── " : "├── ";
-            const string nodePrefix = isLastNode ? "    " : "│   ";
-            UINFO(5, "DEPGRAPH: " << nodeConnector << nodeLabel(nodep) << endl);
-            if (nodep->dependsOn.empty()) {
-                UINFO(5, "DEPGRAPH: " << nodePrefix << "(no deps)" << endl);
-                continue;
-            }
-            size_t depIdx = 0;
-            for (const DepNode* dep : nodep->dependsOn) {
-                if (!dep) continue;
-                const bool isLastDep = (++depIdx == nodep->dependsOn.size());
-                const string depConnector = isLastDep ? "└── " : "├── ";
-                UINFO(5, "DEPGRAPH: " << nodePrefix << depConnector
-                          << nodeLabel(dep) << endl);
-            }
-        }
-    }
-
-    UINFO(5, "DEPGRAPH: ========== END EDGE TREE ==========" << endl);
 }
 
 void V3LinkDotDepGraph::dumpGraphTree(AstNetlist* netlistp) {
