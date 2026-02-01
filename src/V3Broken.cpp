@@ -192,10 +192,6 @@ private:
         if (v3Global.assertDTypesResolved()) {
             if (nodep->hasDType()) {
                 if (!nodep->dtypep()) {
-                    // DepGraph may defer widthing for template/type-table dtypes.
-                    // Guard on DepGraph's param flow so non-DepGraph paths
-                    // still require all dtypes resolved at this stage.
-                    if (!V3LinkDotDepGraph::allowBrokenDTypeCheck(nodep)) return;
                     UASSERT_OBJ(false, nodep,
                                 "No dtype on node with hasDType(): " << nodep->prettyTypeName());
                 }

@@ -9305,7 +9305,6 @@ AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
     WidthVisitor visitor{true, false};
     nodep = visitor.mainAcceptEdit(nodep);
     // No WidthRemoveVisitor, as don't want to drop $signed etc inside gen blocks
-    V3LinkDotDepGraph::postWidthCleanup(nodep);
     return nodep;
 }
 
@@ -9325,6 +9324,5 @@ AstNode* V3Width::widthGenerateParamsEdit(
     WidthVisitor visitor{true, true};
     nodep = visitor.mainAcceptEdit(nodep);
     // No WidthRemoveVisitor, as don't want to drop $signed etc inside gen blocks
-    V3LinkDotDepGraph::postWidthCleanup(nodep);
     return nodep;
 }

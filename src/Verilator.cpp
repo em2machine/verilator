@@ -162,7 +162,6 @@ static void process() {
         // This must happen before the primary pass to prevent IfaceCapture from running at all
         V3LinkDotIfaceCapture::enable(false);
         V3LinkDotDepGraph::enable(true);
-        V3LinkDotDepGraph::preserveCapturedExprs(true);
 
         // Cross-link dotted hierarchical references
         V3LinkDot::linkDotPrimary(v3Global.rootp());
@@ -184,7 +183,6 @@ static void process() {
         // Remove parameters by cloning modules to de-parameterized versions
         //   This requires some width calculations and constant propagation
         // No more AstGenCase/AstGenFor/AstGenIf after this
-        V3LinkDotDepGraph::useInParam(true);
         V3Param::param(v3Global.rootp());
 
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules

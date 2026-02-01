@@ -33,10 +33,7 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 V3LinkDotDepGraph::NodeMap V3LinkDotDepGraph::s_nodes;
 std::vector<V3LinkDotDepGraph::DepNode*> V3LinkDotDepGraph::s_allNodes;
 int V3LinkDotDepGraph::s_iterationCount = 0;
-int V3LinkDotDepGraph::s_commitChanges = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
-bool V3LinkDotDepGraph::s_preserveCapturedExprs = false;
-bool V3LinkDotDepGraph::s_useInParam = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
 std::unordered_map<V3LinkDotDepGraph::TypedefClassKey, AstClass*,
@@ -143,7 +140,10 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
             // Initial state (inputs from AST at build time)
             UINFO(3, "    initial: width=" << nodep->initialWidth);
             if (nodep->initialValuep) {
-                UINFO(3, " value=" << nodep->initialValuep);
+                UINFO(3, " valuep=" << nodep->initialValuep);
+            }
+            if (nodep->initialTypep) {
+                UINFO(3, " typep=" << nodep->initialTypep);
             }
             UINFO(3, endl);
 
@@ -276,48 +276,15 @@ void V3LinkDotDepGraph::reset() {
                   << s_cellAssociations.size() << " cell associations, "
                   << s_refDTypeDotPathRegistry.size() << " refdtype dotpath registrations)"
                   << endl);
-    if (!s_preserveCapturedExprs) {
-        for (DepNode* nodep : s_allNodes) {
-            if (nodep && nodep->origExprp) {
-                nodep->origExprp->deleteTree();
-                nodep->origExprp = nullptr;
-            }
-            delete nodep;
+    for (DepNode* nodep : s_allNodes) {
+        if (nodep && nodep->origExprp) {
+            nodep->origExprp->deleteTree();
+            nodep->origExprp = nullptr;
         }
-        s_allNodes.clear();
-        s_nodes.clear();
-    } else {
-        std::vector<DepNode*> preserved;
-        NodeMap preservedMap;
-        preserved.reserve(s_allNodes.size());
-        for (DepNode* nodep : s_allNodes) {
-            if (nodep && nodep->origExprp
-                && (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM)) {
-                // Drop preserved nodes whose AST node no longer maps to their owner module
-                AstNodeModule* const currentOwnerp
-                    = nodep->nodep ? findOwnerModule(nodep->nodep) : nullptr;
-                if (!nodep->nodep || (nodep->ownerModp && currentOwnerp != nodep->ownerModp)) {
-                    nodep->origExprp->deleteTree();
-                    nodep->origExprp = nullptr;
-                    delete nodep;
-                    continue;
-                }
-                // Preserve captured exprs but clear stale dependency links
-                nodep->dependsOn.clear();
-                nodep->dependents.clear();
-                preserved.push_back(nodep);
-                preservedMap[nodep->nodep] = nodep;
-            } else {
-                if (nodep && nodep->origExprp) {
-                    nodep->origExprp->deleteTree();
-                    nodep->origExprp = nullptr;
-                }
-                delete nodep;
-            }
-        }
-        s_allNodes.swap(preserved);
-        s_nodes.swap(preservedMap);
+        delete nodep;
     }
+    s_allNodes.clear();
+    s_nodes.clear();
     // Note: Do NOT clear s_cellAssociations here - they are captured during linkdot primary
     // and need to persist until graph building which happens later
     // Note: Do NOT clear s_refDTypeDotPathRegistry here - populated during linkdot primary
@@ -629,9 +596,11 @@ void V3LinkDotDepGraph::captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDT
     DepNode* const depNodep = findOrCreateNode(ptdp, NodeType::PARAMTYPEDTYPE, ownerModp);
     if (!depNodep) return;
 
-    // Store the bound dtype as the origExprp (reusing this field for type params)
-    if (!depNodep->origExprp) {
-        depNodep->origExprp = dtypep->cloneTree(false);
+    // Store the bound dtype in initialTypep for type parameters
+    if (!depNodep->initialTypep) {
+        depNodep->initialTypep = dtypep->cloneTree(false);
+        // Also keep origExprp for legacy code paths until fully migrated
+        depNodep->origExprp = depNodep->initialTypep;
         UINFO(5, "DEPGRAPH: captured type param binding for '" << ptdp->name()
                   << "' = " << dtypep->prettyDTypeName(true)
                   << " in " << ownerModp->name() << endl);
@@ -2569,35 +2538,6 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
     }
 }
 
-// OLD ARCHITECTURE REMNANTS - These functions were used for interleaved V3Param iterations
-// In the new architecture, build() runs once before V3Param, so these are no longer needed.
-// Keeping stubs for API compatibility until callers are updated.
-
-void V3LinkDotDepGraph::buildIncremental(AstNetlist* netlistp) {
-    // OLD ARCHITECTURE: Was used to add nodes for newly cloned modules during V3Param iterations
-    // NEW ARCHITECTURE: Not needed - build() runs once before V3Param creates any clones
-    (void)netlistp;
-    UINFO(3, "DEPGRAPH WARNING: buildIncremental() called - old architecture remnant" << endl);
-}
-
-void V3LinkDotDepGraph::beginIteration(AstNetlist* netlistp) {
-    // OLD ARCHITECTURE: Was used to recompute pendingDeps at start of each V3Param iteration
-    // NEW ARCHITECTURE: Not needed - single-pass resolution
-    (void)netlistp;
-    UINFO(3, "DEPGRAPH WARNING: beginIteration() called - old architecture remnant" << endl);
-}
-
-void V3LinkDotDepGraph::postIterationCleanup(AstNetlist* netlistp) {
-    // OLD ARCHITECTURE: Hook for cleanup after each V3Param iteration
-    // NEW ARCHITECTURE: Not needed
-    (void)netlistp;
-}
-
-void V3LinkDotDepGraph::postWidthCleanup(AstNode* nodep) {
-    // OLD ARCHITECTURE: Was used to normalize RefDTypes after V3Width during interleaved execution
-    // NEW ARCHITECTURE: Not needed - finalizeAST() handles all AST updates
-    (void)nodep;
-}
 
 //======================================================================
 // Resolution - helper to re-evaluate a single node
@@ -2681,7 +2621,6 @@ int V3LinkDotDepGraph::resolve() {
     // - All nodes must resolve before finalizeAST
 
     s_iterationCount = 0;
-    s_commitChanges = 0;  // OLD ARCHITECTURE REMNANT: commit tracking not needed
     std::deque<DepNode*> ready;
 
     // Identify boundary conditions - nodes with no unresolved dependencies
@@ -2693,7 +2632,8 @@ int V3LinkDotDepGraph::resolve() {
             UINFO(3, "  [" << nodeTypeName(nodep->nodeType) << "] "
                       << nodeName(nodep) << "@" << nodeOwnerName(nodep)
                       << " initial={width=" << nodep->initialWidth
-                      << (nodep->initialValuep ? " hasValue" : "") << "}" << endl);
+                      << (nodep->initialValuep ? " hasValue" : "")
+                      << (nodep->initialTypep ? " hasType" : "") << "}" << endl);
         }
     }
     UINFO(3, "Total boundary nodes: " << ready.size() << endl);
@@ -2715,6 +2655,7 @@ int V3LinkDotDepGraph::resolve() {
         UINFO(3, "  INPUTS:" << endl);
         UINFO(3, "    initial: width=" << nodep->initialWidth);
         if (nodep->initialValuep) UINFO(3, " valuep=" << nodep->initialValuep);
+        if (nodep->initialTypep) UINFO(3, " typep=" << nodep->initialTypep);
         UINFO(3, endl);
         for (DepNode* const depp : nodep->dependsOn) {
             if (!depp) continue;
@@ -2833,16 +2774,6 @@ int V3LinkDotDepGraph::resolve() {
     }
 
     return s_iterationCount;
-}
-
-//======================================================================
-// Apply - update RefDType pointers after resolution
-
-int V3LinkDotDepGraph::apply() {
-    // All AST mutations are now deferred to finalizeAST().
-    // This function just returns the commit change count for fixed-point convergence.
-    UINFO(5, "DEPGRAPH: apply complete - commit changes " << s_commitChanges << endl);
-    return s_commitChanges;
 }
 
 //======================================================================

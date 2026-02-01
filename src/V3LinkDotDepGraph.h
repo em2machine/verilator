@@ -64,8 +64,10 @@ public:
         std::set<DepNode*> dependents;       // Child nodes that depend on this (wake on commit)
 
         // === Initial state (captured from AST during build) ===
-        int initialWidth = 0;                // Width from AST at build time
-        AstNode* initialValuep = nullptr;    // Value expression from AST at build time (cloned)
+        // These are the "boundary conditions" for graph execution - either from defaults or overrides
+        int initialWidth = 0;                // Width from AST at build time (value params)
+        AstNode* initialValuep = nullptr;    // Value expression (GPARAM/LPARAM) - cloned
+        AstNodeDType* initialTypep = nullptr; // Bound dtype (PARAMTYPEDTYPE) - cloned
 
         // === Execution state ===
         bool resolved = false;               // Has this node completed execution?
@@ -102,11 +104,8 @@ private:
     static NodeMap s_nodes;                  // All nodes in the graph
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
-    static int s_commitChanges;              // OLD ARCHITECTURE: commit tracking (kept for API compat)
     static bool s_enabled;                   // Is the graph active?
-    static bool s_preserveCapturedExprs;     // OLD ARCHITECTURE: preserve exprs across reset (not needed)
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
-    static bool s_useInParam;             // OLD ARCHITECTURE: interleaved V3Param (not needed)
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
 
     // Typedef -> class mapping for parameterized class typedefs
@@ -134,16 +133,9 @@ public:
     // Enable/disable the graph
     static void enable(bool flag) {
         s_enabled = flag;
-        if (!flag) {
-            s_preserveCapturedExprs = false;
-            reset();
-        }
+        if (!flag) reset();
     }
     static bool enabled() { return s_enabled; }
-
-    // Preserve captured param/localparam expressions across reset/build
-    static void preserveCapturedExprs(bool flag) { s_preserveCapturedExprs = flag; }
-    static bool preserveCapturedExprs() { return s_preserveCapturedExprs; }
 
     // Find specialized typedef clone by name; optionally returns owner module
     static AstTypedef* findSpecializedTypedef(const std::string& name,
@@ -154,10 +146,8 @@ public:
     // Reset everything including cell associations
     static void resetAll();
 
-    // Build the graph from the AST (call after V3Param)
+    // Build the graph from the AST
     static void build(AstNetlist* netlistp);
-    // Incremental build: add nodes/edges for newly cloned modules
-    static void buildIncremental(AstNetlist* netlistp);
 
     // Debug: dump dependency graph tree view
     static void dumpGraph(const char* stageName);
@@ -168,98 +158,15 @@ public:
     // Utility: check if an AST node is in an unspecialized template module
     static bool inTemplateModule(const AstNode* nodep);
 
-    // Guard helpers for DepGraph param flow
-    static bool shouldDeferTemplateType(const AstNode* nodep) {
-        return useInParam() && inTemplateModule(nodep);
-    }
-    static bool allowParamMutation() { return !useInParam(); }
-    static bool allowBrokenDTypeCheck(const AstNode* nodep) {
-        return !useInParam() && !inTemplateModule(nodep);
-    }
-    // Guard helper: defer const-folding ATTROF when source type is unresolved during DepGraph param flow.
-    static bool shouldDeferAttrOf(const AstAttrOf* attrp) {
-        if (!attrp) return false;
-        if (!useInParam()) return false;  // Only defer during DepGraph param flow
-        // Check if the fromp (source type) has width=0, meaning it's not resolved yet
-        if (const AstRefDType* const rdp = VN_CAST(attrp->fromp(), RefDType)) {
-            const AstNodeDType* const skipped = rdp->skipRefp();
-            if (!skipped || skipped->width() == 0) return true;
-            if (rdp->refDTypep() && rdp->refDTypep()->width() == 0) return true;
-        } else if (const AstNodeDType* const dtp = VN_CAST(attrp->fromp(), NodeDType)) {
-            if (dtp->width() == 0) return true;
-        }
-        return false;
-    }
-    // Guard helper: defer widthing when dtype is unresolved during DepGraph param flow.
-    static bool shouldDeferDType(const AstNodeDType* dtypep) {
-        auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
-        if (!dtypep) {
-            UINFO(5, "DEPGRAPH: shouldDeferDType null dtypep -> true\n");
-            return true;
-        }
-        // Check for RequireDType directly to avoid recursion in skipRefOrNullp
-        if (VN_IS(dtypep, RequireDType)) {
-            UINFO(5, "DEPGRAPH: shouldDeferDType is RequireDType for " << dtypep << " -> true\n");
-            return true;
-        }
-        if (const AstParamTypeDType* const ptdp = VN_CAST(dtypep, ParamTypeDType)) {
-            if (ptdp->subDTypep() && VN_IS(ptdp->subDTypep(), RequireDType)) {
-                UINFO(5, "DEPGRAPH: shouldDeferDType ParamTypeDType -> RequireDType for " << dtypep << " -> true\n");
-                return true;
-            }
-        }
-
-        // Use skipRefOrNullp to catch unresolved ParamType/RequireDType chains.
-        const AstNodeDType* const basep = dtypep->skipRefOrNullp();
-        if (!basep) {
-            UINFO(5, "DEPGRAPH: shouldDeferDType skipRefOrNullp null for " << dtypep << " -> true\n");
-            return true;
-        }
-        if (VN_IS(basep, RequireDType)) {
-            UINFO(5, "DEPGRAPH: shouldDeferDType basep is RequireDType for " << dtypep << " -> true\n");
-            return true;
-        }
-        if (const AstParamTypeDType* const ptdp = VN_CAST(basep, ParamTypeDType)) {
-            if (ptdp->subDTypep() && VN_IS(ptdp->subDTypep(), RequireDType)) {
-                UINFO(5, "DEPGRAPH: shouldDeferDType ParamTypeDType -> RequireDType for " << dtypep << " -> true\n");
-                return true;
-            }
-        }
-        if (const AstNodeUOrStructDType* const uorp = VN_CAST(basep, NodeUOrStructDType)) {
-            if (!uorp->dtypep()) {
-                UINFO(5, "DEPGRAPH: shouldDeferDType UOrStruct missing dtypep for " << basep
-                            << " -> true\n");
-                return true;
-            }
-        }
-        UINFO(5, "DEPGRAPH: shouldDeferDType " << dtypep << " basep=" << basep
-                    << " -> false\n");
-        return false;
-    }
-
-    // OLD ARCHITECTURE: Track per-node commit changes (kept for API compat)
-    static void commitChange() { ++s_commitChanges; }
 
     // Resolve all dependencies using OOO execution model
     // Returns number of nodes resolved
     static int resolve();
 
-    // OLD ARCHITECTURE: Iteration hooks (stubs - not needed in new architecture)
-    static void beginIteration(AstNetlist* netlistp);
-    static void postIterationCleanup(AstNetlist* netlistp);
-    static void postWidthCleanup(AstNode* nodep);
-
-    // OLD ARCHITECTURE: Apply changes (returns commit count for compat)
-    static int apply();
-
-    // NEW ARCHITECTURE: Finalize AST after resolution
+    // Finalize AST after resolution
     // This is the ONLY place that mutates the AST based on DepGraph results
     // Call this after resolve() completes
     static void finalizeAST();
-
-    // OLD ARCHITECTURE: Interleaved V3Param flag (not needed)
-    static void useInParam(bool flag) { s_useInParam = flag; }
-    static bool useInParam() { return s_useInParam; }
 
     // Sync RefDType widths with their refDTypep targets in a specific module.
     // Call this BEFORE widthParamsEdit to ensure $bits() expressions get correct values.

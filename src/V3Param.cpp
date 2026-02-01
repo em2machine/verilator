@@ -333,7 +333,7 @@ class ParamProcessor final {
 
     static string paramValueString(const AstNode* nodep) {
         if (const AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
-            if (V3LinkDotDepGraph::allowParamMutation()) nodep = refp->skipRefToNonRefp();
+            nodep = refp->skipRefToNonRefp();
         }
         string key = nodep->name();
         if (const AstIfaceRefDType* const ifrtp = VN_CAST(nodep, IfaceRefDType)) {
@@ -426,7 +426,7 @@ class ParamProcessor final {
         // types represented by different AST nodes (e.g., parameterized class specializations).
         // For value parameters, we can still use the AST hash for better collision resistance.
         if (AstRefDType* const refp = VN_CAST(nodep, RefDType)) {
-            if (V3LinkDotDepGraph::allowParamMutation()) nodep = refp->skipRefToNonRefp();
+            nodep = refp->skipRefToNonRefp();
         }
         const string paramStr = paramValueString(nodep);
         V3Hash hash;
@@ -475,7 +475,6 @@ class ParamProcessor final {
         return nullptr;
     }
     bool isString(AstNodeDType* nodep) {
-        if (!V3LinkDotDepGraph::allowParamMutation()) return false;
         if (AstBasicDType* const basicp = VN_CAST(nodep->skipRefToNonRefp(), BasicDType))
             return basicp->isString();
         return false;
@@ -592,10 +591,7 @@ class ParamProcessor final {
                         params.emplace(varp->name(), constp);
                     }
                 } else if (AstParamTypeDType* const p = VN_CAST(stmtp, ParamTypeDType)) {
-                    AstNode* const dtypep
-                        = V3LinkDotDepGraph::allowParamMutation()
-                              ? static_cast<AstNode*>(p->skipRefp())
-                              : static_cast<AstNode*>(p);
+                    AstNode* const dtypep = static_cast<AstNode*>(p->skipRefp());
                     params.emplace(p->name(), dtypep);
                 }
             }
@@ -926,11 +922,9 @@ class ParamProcessor final {
         for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
             if (pinp->exprp()) {
                 if (AstVar* const modvarp = pinp->modVarp()) {
-                    if (V3LinkDotDepGraph::preserveCapturedExprs()) {
-                        UINFO(5, "DEPGRAPH: capture override expr for '" << modvarp->name()
-                                  << "' in " << (newModp ? newModp->name() : "<null>") << endl);
-                        V3LinkDotDepGraph::captureParamExpr(modvarp, pinp->exprp(), newModp);
-                    }
+                    UINFO(5, "DEPGRAPH: capture override expr for '" << modvarp->name()
+                              << "' in " << (newModp ? newModp->name() : "<null>") << endl);
+                    V3LinkDotDepGraph::captureParamExpr(modvarp, pinp->exprp(), newModp);
                     AstNode* const newp = pinp->exprp();  // Const or InitArray
                     AstConst* const exprp = VN_CAST(newp, Const);
                     AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
@@ -949,11 +943,9 @@ class ParamProcessor final {
                     // Set this parameter to value requested by cell
                     modptp->childDTypep(dtypep->cloneTree(false));
                     // Capture type parameter binding for DepGraph resolution
-                    if (V3LinkDotDepGraph::preserveCapturedExprs()) {
-                        UINFO(5, "DEPGRAPH: capture type param binding for '" << modptp->name()
-                                  << "' in " << (newModp ? newModp->name() : "<null>") << endl);
-                        V3LinkDotDepGraph::captureParamTypeDType(modptp, dtypep, newModp);
-                    }
+                    UINFO(5, "DEPGRAPH: capture type param binding for '" << modptp->name()
+                              << "' in " << (newModp ? newModp->name() : "<null>") << endl);
+                    V3LinkDotDepGraph::captureParamTypeDType(modptp, dtypep, newModp);
                     // Later V3LinkDot will convert the ParamDType to a Typedef
                     // Not done here as may be localparams, etc, that also need conversion
                 }
@@ -1170,12 +1162,8 @@ class ParamProcessor final {
 
             AstNodeDType* rawTypep = VN_CAST(pinp->exprp(), NodeDType);
             if (rawTypep) V3Width::widthParamsEdit(rawTypep);
-            AstNodeDType* exprp = rawTypep;
-            const AstNodeDType* origp = modvarp;
-            if (V3LinkDotDepGraph::allowParamMutation()) {
-                exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
-                origp = modvarp->skipRefToNonRefp();
-            }
+            AstNodeDType* exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+            const AstNodeDType* origp = modvarp->skipRefToNonRefp();
             if (!exprp) {
                 pinp->v3error("Parameter type pin value isn't a type: Param "
                               << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
@@ -1187,45 +1175,24 @@ class ParamProcessor final {
                 V3Const::constifyParamsEdit(pinp->exprp());  // Reconcile typedefs
                 // Constify may have caused pinp->exprp to change
                 rawTypep = VN_AS(pinp->exprp(), NodeDType);
-                exprp = rawTypep;
-                if (V3LinkDotDepGraph::allowParamMutation()) {
-                    exprp = rawTypep->skipRefToNonRefp();
-                    if (!modvarp->fwdType().isNodeCompatible(exprp)) {
-                        pinp->v3error("Parameter type expression type "
+                exprp = rawTypep->skipRefToNonRefp();
+                if (!modvarp->fwdType().isNodeCompatible(exprp)) {
+                    pinp->v3error("Parameter type expression type "
                                       << exprp->prettyDTypeNameQ()
                                       << " violates parameter's forwarding type '"
                                       << modvarp->fwdType().ascii() << "'");
-                    }
-                    if (exprp->similarDType(origp)) {
-                        // Setting parameter to its default value.  Just ignore it.
-                        // This prevents making additional modules, and makes coverage more
-                        // obvious as it won't show up under a unique module page name.
-                    } else {
-                        VL_DO_DANGLING(V3Const::constifyParamsEdit(exprp), exprp);
-                        rawTypep = VN_CAST(pinp->exprp(), NodeDType);
-                        exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
-                        longnamer += "_" + paramSmallName(srcModp, modvarp)
-                                     + paramValueNumber(exprp);
-                        any_overridesr = true;
-                    }
-                } else if (exprp) {
-                    // When DepGraph is enabled, also check if the explicit param matches the default.
-                    // This ensures ClsTypedefParam#(int) matches ClsTypedefParam#() when default is typedef int.
-                    const AstNodeDType* exprSkipRefp = exprp->skipRefToNonRefp();
-                    const AstNodeDType* origSkipRefp = origp->skipRefToNonRefp();
-                    // Also skip through REQUIREDTYPE wrapper if present
-                    if (VN_IS(exprSkipRefp, RequireDType) && exprSkipRefp->subDTypep()) {
-                        exprSkipRefp = exprSkipRefp->subDTypep()->skipRefToNonRefp();
-                    }
-                    if (VN_IS(origSkipRefp, RequireDType) && origSkipRefp->subDTypep()) {
-                        origSkipRefp = origSkipRefp->subDTypep()->skipRefToNonRefp();
-                    }
-                    if (exprSkipRefp && origSkipRefp && exprSkipRefp->similarDType(origSkipRefp)) {
-                        // Setting parameter to its default value.  Just ignore it.
-                    } else {
-                        longnamer += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(exprp);
-                        any_overridesr = true;
-                    }
+                }
+                if (exprp->similarDType(origp)) {
+                    // Setting parameter to its default value.  Just ignore it.
+                    // This prevents making additional modules, and makes coverage more
+                    // obvious as it won't show up under a unique module page name.
+                } else {
+                    VL_DO_DANGLING(V3Const::constifyParamsEdit(exprp), exprp);
+                    rawTypep = VN_CAST(pinp->exprp(), NodeDType);
+                    exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+                    longnamer += "_" + paramSmallName(srcModp, modvarp)
+                                 + paramValueNumber(exprp);
+                    any_overridesr = true;
                 }
             }
         } else {
@@ -1534,8 +1501,7 @@ class ParamProcessor final {
 
         for (auto* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             if (AstParamTypeDType* dtypep = VN_CAST(stmtp, ParamTypeDType)) {
-                if (V3LinkDotDepGraph::allowParamMutation()
-                    && VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
+                if (VN_IS(dtypep->skipRefOrNullp(), VoidDType)) {
                     nodep->v3error(
                         "Class parameter type without default value is never given value"
                         << " (IEEE 1800-2023 6.20.1): " << dtypep->prettyNameQ());
@@ -2092,10 +2058,6 @@ class ParamVisitor final : public VNVisitor {
     }
 
     void visit(AstRefDType* nodep) override {
-        if (!V3LinkDotDepGraph::allowParamMutation()) {
-            iterateChildren(nodep);
-            return;
-        }
         if (isCircularType(nodep)) {
             nodep->v3error("Typedef's type is circular: " << nodep->prettyName());
         } else if (nodep->typedefp() && nodep->subDTypep()
@@ -2158,7 +2120,6 @@ class ParamVisitor final : public VNVisitor {
     }
     void visit(AstParamTypeDType* nodep) override {
         iterateChildren(nodep);
-        if (!V3LinkDotDepGraph::allowParamMutation()) return;
         if (VN_IS(nodep->skipRefOrNullp(), VoidDType)) {
             nodep->v3error("Parameter type without default value is never given value"
                            << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());
@@ -2438,17 +2399,15 @@ public:
 
         // Capture localparam expressions after widthing but before constification
         // for dependency graph resolution. Width resolves MEMBERSELs through dtype.
-        if (V3LinkDotDepGraph::preserveCapturedExprs()) {
-            for (AstNodeModule* modp = netlistp->modulesp(); modp;
-                modp = VN_AS(modp->nextp(), NodeModule)) {
-                for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                        if ((varp->isGParam() || varp->varType() == VVarType::LPARAM)
-                            && varp->valuep() && !VN_IS(varp->valuep(), Const)) {
-                            UINFO(5, "DEPGRAPH: capture default expr for '" << varp->name()
-                                      << "' in " << (modp ? modp->name() : "<null>") << endl);
-                            V3LinkDotDepGraph::captureParamExpr(varp, varp->valuep(), modp);
-                        }
+        for (AstNodeModule* modp = netlistp->modulesp(); modp;
+            modp = VN_AS(modp->nextp(), NodeModule)) {
+            for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                    if ((varp->isGParam() || varp->varType() == VVarType::LPARAM)
+                        && varp->valuep() && !VN_IS(varp->valuep(), Const)) {
+                        UINFO(5, "DEPGRAPH: capture default expr for '" << varp->name()
+                                  << "' in " << (modp ? modp->name() : "<null>") << endl);
+                        V3LinkDotDepGraph::captureParamExpr(varp, varp->valuep(), modp);
                     }
                 }
             }
@@ -2626,35 +2585,27 @@ public:
 void V3Param::param(AstNetlist* rootp) {
     UINFO(2, __FUNCTION__ << ":");
 
-    // DepGraph-driven architecture: resolve ALL dependencies first, then clone once
-    if (V3LinkDotDepGraph::useInParam()) {
-        // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
-        //
-        // Phase 1: Build complete dependency graph
-        // This captures ALL cells, params, types, $bits() expressions
-        UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
-        V3LinkDotDepGraph::build(rootp);
+    // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
+    //
+    // Phase 1: Build complete dependency graph
+    // This captures ALL cells, params, types, $bits() expressions
+    UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
+    V3LinkDotDepGraph::build(rootp);
 
-        // Phase 2: Resolve all dependencies in topological order
-        // This computes all constants by propagating through dependency chains
-        UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
-        V3LinkDotDepGraph::beginIteration(rootp);
-        const int depSteps = V3LinkDotDepGraph::resolve();
-        const int applyChanges = V3LinkDotDepGraph::apply();
-        UINFO(2, "DEPGRAPH: Resolved " << depSteps << " steps, " << applyChanges << " changes" << endl);
+    // Phase 2: Resolve all dependencies in topological order
+    // This computes all constants by propagating through dependency chains
+    UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
+    const int depSteps = V3LinkDotDepGraph::resolve();
+    UINFO(2, "DEPGRAPH: Resolved " << depSteps << " nodes" << endl);
 
-        // Phase 3: Back-annotate resolved constants to AST
-        // This replaces expressions like $bits(var) with their computed constant values
-        UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
-        V3LinkDotDepGraph::finalizeAST();
+    // Phase 3: Back-annotate resolved constants to AST
+    // This replaces expressions like $bits(var) with their computed constant values
+    UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
+    V3LinkDotDepGraph::finalizeAST();
 
-        // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
-        UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
-        V3LinkDotDepGraph::useInParam(false);  // Disable guards before ParamTop
-        { ParamTop{rootp}; }
-    } else {
-        { ParamTop{rootp}; }  // Destruct before checking
-    }
+    // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
+    UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
+    { ParamTop{rootp}; }
 
     V3Global::dumpCheckGlobalTree("param", 0, dumpTreeEitherLevel() >= 3);
 }
