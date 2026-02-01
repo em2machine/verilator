@@ -79,23 +79,8 @@ public:
         int resolvedWidth = 0;               // Computed width (for $bits())
         AstNodeDType* resolvedTypep = nullptr;  // Computed type (for type parameters)
         AstNode* resolvedValuep = nullptr;   // Computed value (for value parameters)
-
-        // === Legacy deferred state (to be migrated to resolved state) ===
-        AstNodeDType* deferredDTypep = nullptr;
-        bool deferredNeedsWidthForce = false;
-        int deferredForcedWidth = 0;
-        int deferredForcedWidthMin = 0;
-        bool deferredNeedsChildDTypeClear = false;
-        AstTypedef* deferredChildTypedefp = nullptr;
-        AstTypedef* deferredTypedefp = nullptr;
-        AstNodeDType* deferredRefDTypep = nullptr;
-        AstNodeModule* deferredClassOwnerp = nullptr;
-        AstNode* deferredValuep = nullptr;
-        bool needsNormalize = false;
-        bool needsNormalizeTree = false;
-
-        // Legacy - to be removed
-        AstNode* origExprp = nullptr;
+        AstTypedef* resolvedTypedefp = nullptr; // Resolved typedef (for REFDTYPE retargeting)
+        AstNodeModule* resolvedOwnerModp = nullptr; // Owner module of resolved type (for class scope)
     };
 
     using NodeMap = std::unordered_map<AstNode*, DepNode*>;
@@ -107,16 +92,6 @@ private:
     static bool s_enabled;                   // Is the graph active?
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
-
-    // Typedef -> class mapping for parameterized class typedefs
-    // Key: (typedef owner module name, typedef name), Value: target class
-    using TypedefClassKey = std::pair<std::string, std::string>;
-    struct TypedefClassKeyHash {
-        std::size_t operator()(const TypedefClassKey& k) const {
-            return std::hash<std::string>{}(k.first) ^ (std::hash<std::string>{}(k.second) << 1);
-        }
-    };
-    static std::unordered_map<TypedefClassKey, AstClass*, TypedefClassKeyHash> s_typedefClassMap;
 
     // Forward declare visitor classes as friends
     friend class DepExprVisitor;
@@ -168,16 +143,6 @@ public:
     // Call this after resolve() completes
     static void finalizeAST();
 
-    // Sync RefDType widths with their refDTypep targets in a specific module.
-    // Call this BEFORE widthParamsEdit to ensure $bits() expressions get correct values.
-    static void syncRefDTypeWidths(AstNodeModule* modp);
-
-    // Mark template module types as didWidth(true) to prevent V3Width errors
-    // during V3Param. Must be called BEFORE V3Param::param().
-    // Template modules have unresolved parameters, so their types may have
-    // incorrect widths. Marking them prevents spurious errors.
-    static void markTemplateTypes(AstNetlist* netlistp);
-
     // Register cell association for a node (called from linkdot during primary pass)
     // This captures which cell a PARAMTYPEDTYPE references through
     // typedefName is the name of the typedef being referenced (e.g., "a_t" in "types.a_t")
@@ -199,11 +164,6 @@ public:
     // Capture type parameter binding for specialized classes
     static void captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDType* dtypep,
                                       AstNodeModule* ownerModp);
-
-    // Register typedef -> class mapping for parameterized class typedefs
-    static void registerTypedefClass(AstTypedef* tdp, AstClass* classp, AstNodeModule* ownerModp);
-    // Lookup registered typedef class
-    static AstClass* findTypedefClass(const std::string& ownerName, const std::string& typedefName);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
@@ -231,7 +191,7 @@ private:
     static void dumpModuleTree(AstNodeModule* modp, const string& prefix, bool isLast);
     // Helper for resolution - re-evaluate a single node
     static void reEvaluateNode(DepNode* nodep);
-    // Helper for buildIncremental - update edges to specialized nodes
+    // Helper for resolve - update edges to specialized nodes
     static void updateEdgesToSpecialized();
 };
 

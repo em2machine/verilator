@@ -36,8 +36,6 @@ int V3LinkDotDepGraph::s_iterationCount = 0;
 bool V3LinkDotDepGraph::s_enabled = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
-std::unordered_map<V3LinkDotDepGraph::TypedefClassKey, AstClass*,
-                   V3LinkDotDepGraph::TypedefClassKeyHash> V3LinkDotDepGraph::s_typedefClassMap;
 static std::unordered_map<AstRefDType*, AstTypedef*> s_refDTypeScopedTypedefs;
 static std::unordered_map<AstTypedef*, AstTypedef*> s_typedefScopedTypedefs;
 
@@ -277,9 +275,16 @@ void V3LinkDotDepGraph::reset() {
                   << s_refDTypeDotPathRegistry.size() << " refdtype dotpath registrations)"
                   << endl);
     for (DepNode* nodep : s_allNodes) {
-        if (nodep && nodep->origExprp) {
-            nodep->origExprp->deleteTree();
-            nodep->origExprp = nullptr;
+        if (nodep) {
+            // Clean up cloned initial state
+            if (nodep->initialValuep) {
+                nodep->initialValuep->deleteTree();
+                nodep->initialValuep = nullptr;
+            }
+            if (nodep->initialTypep) {
+                nodep->initialTypep->deleteTree();
+                nodep->initialTypep = nullptr;
+            }
         }
         delete nodep;
     }
@@ -301,34 +306,6 @@ void V3LinkDotDepGraph::resetAll() {
     s_refDTypeDotPathRegistry.clear();
     s_refDTypeScopedTypedefs.clear();
     s_typedefScopedTypedefs.clear();
-    s_typedefClassMap.clear();
-}
-
-void V3LinkDotDepGraph::registerTypedefClass(AstTypedef* tdp, AstClass* classp,
-                                              AstNodeModule* ownerModp) {
-    if (!tdp || !classp || !ownerModp) return;
-    TypedefClassKey key{ownerModp->name(), tdp->name()};
-    auto it = s_typedefClassMap.find(key);
-    if (it != s_typedefClassMap.end()) {
-        // Already registered - update if different class
-        if (it->second != classp) {
-            UINFO(5, "DEPGRAPH: updating typedef-class mapping " << ownerModp->name()
-                      << "::" << tdp->name() << " from " << it->second->name()
-                      << " to " << classp->name() << endl);
-            it->second = classp;
-        }
-        return;
-    }
-    s_typedefClassMap.emplace(key, classp);
-    UINFO(5, "DEPGRAPH: registered typedef-class mapping " << ownerModp->name()
-              << "::" << tdp->name() << " -> " << classp->name() << endl);
-}
-
-AstClass* V3LinkDotDepGraph::findTypedefClass(const string& ownerName, const string& typedefName) {
-    TypedefClassKey key{ownerName, typedefName};
-    auto it = s_typedefClassMap.find(key);
-    if (it != s_typedefClassMap.end()) return it->second;
-    return nullptr;
 }
 
 void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
@@ -552,8 +529,8 @@ void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNodeModule* ownerModp)
     if (!varp->valuep()) return;
 
     DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
-    if (!depNodep || depNodep->origExprp) return;
-    depNodep->origExprp = varp->valuep()->cloneTree(false);
+    if (!depNodep || depNodep->initialValuep) return;
+    depNodep->initialValuep = varp->valuep()->cloneTree(false);
     UINFO(5, "DEPGRAPH: captured default expr for param '" << varp->name()
               << "' in " << ownerModp->name() << endl);
 }
@@ -564,12 +541,12 @@ void V3LinkDotDepGraph::captureParamExpr(AstVar* varp, AstNode* exprp,
     if (!varp->isGParam() && !varp->isParam()) return;
 
     DepNode* const depNodep = findOrCreateNode(varp, classifyVar(varp), ownerModp);
-    if (!depNodep || depNodep->origExprp) return;
-    depNodep->origExprp = exprp->cloneTree(false);
+    if (!depNodep) return;
 
-    // For shadow architecture: capture override value for parameters
-    // Override REPLACES the default value - this is the "real" boundary condition
-    // for ready nodes when a constant override is provided
+    // Override REPLACES any default value - this is the "real" boundary condition
+    if (depNodep->initialValuep) {
+        depNodep->initialValuep->deleteTree();
+    }
     depNodep->initialValuep = exprp->cloneTree(false);
     if (AstConst* const constp = VN_CAST(exprp, Const)) {
         depNodep->initialWidth = constp->width();
@@ -599,8 +576,6 @@ void V3LinkDotDepGraph::captureParamTypeDType(AstParamTypeDType* ptdp, AstNodeDT
     // Store the bound dtype in initialTypep for type parameters
     if (!depNodep->initialTypep) {
         depNodep->initialTypep = dtypep->cloneTree(false);
-        // Also keep origExprp for legacy code paths until fully migrated
-        depNodep->origExprp = depNodep->initialTypep;
         UINFO(5, "DEPGRAPH: captured type param binding for '" << ptdp->name()
                   << "' = " << dtypep->prettyDTypeName(true)
                   << " in " << ownerModp->name() << endl);
@@ -1122,15 +1097,15 @@ private:
             = V3LinkDotDepGraph::findOrCreateNode(nodep, type, m_modp);
 
         // If this is a specialized clone, inherit captured expression from original
-        if (!depNodep->origExprp) {
+        if (!depNodep->initialValuep) {
             if (AstVar* const origVarp = nodep->clonep()) {
                 if (const V3LinkDotDepGraph::DepNode* const origNodep
                     = V3LinkDotDepGraph::find(origVarp)) {
-                    if (origNodep->origExprp) {
-                        AstNode* const clonedExprp = origNodep->origExprp->cloneTree(false);
+                    if (origNodep->initialValuep) {
+                        AstNode* const clonedExprp = origNodep->initialValuep->cloneTree(false);
                         int relinkedRefs = 0;
                         clonedExprp->foreach([&](AstVarRef* refp) {
-                            UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned origExprp");
+                            UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned initialValuep");
                             const auto it = m_varsByName.find(refp->varp()->name());
                             if (it != m_varsByName.end()) refp->varp(it->second);
                             if (it != m_varsByName.end()) ++relinkedRefs;
@@ -1150,7 +1125,7 @@ private:
                                 }
                             }
                         });
-                        depNodep->origExprp = clonedExprp;
+                        depNodep->initialValuep = clonedExprp;
                         UINFO(5, "DEPGRAPH: inherited expr for param '" << nodep->name()
                                   << "' in " << m_modp->name() << " from template "
                                   << origNodep->ownerModp->name() << " (relinked "
@@ -1159,19 +1134,19 @@ private:
                 }
             }
         }
-        if (!depNodep->origExprp && m_modp) {
+        if (!depNodep->initialValuep && m_modp) {
             string baseModName = m_modp->name();
             const size_t suffixPos = baseModName.find("__");
             if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
             if (baseModName != m_modp->name()) {
                 for (const V3LinkDotDepGraph::DepNode* const candp : V3LinkDotDepGraph::s_allNodes) {
-                    if (!candp || !candp->origExprp) continue;
+                    if (!candp || !candp->initialValuep) continue;
                     if (candp->nodeType != depNodep->nodeType) continue;
                     if (!candp->ownerModp || candp->ownerModp->name() != baseModName) continue;
                     if (V3LinkDotDepGraph::nodeName(candp) != V3LinkDotDepGraph::nodeName(depNodep)) {
                         continue;
                     }
-                    AstNode* const clonedExprp = candp->origExprp->cloneTree(false);
+                    AstNode* const clonedExprp = candp->initialValuep->cloneTree(false);
                     int relinkedRefs = 0;
                     const auto resolveXRef = [&](AstVarXRef* xrefp) -> AstVar* {
                         if (!xrefp || !m_modp || xrefp->dotted().empty()) return nullptr;
@@ -1217,7 +1192,7 @@ private:
                         return nullptr;
                     };
                     clonedExprp->foreach([&](AstVarRef* refp) {
-                        UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned origExprp");
+                        UASSERT_OBJ(refp->varp(), refp, "VarRef has null varp in cloned initialValuep");
                         const auto it = m_varsByName.find(refp->varp()->name());
                         if (it != m_varsByName.end()) refp->varp(it->second);
                         if (it != m_varsByName.end()) ++relinkedRefs;
@@ -1244,7 +1219,7 @@ private:
                             }
                         }
                     });
-                    depNodep->origExprp = clonedExprp;
+                    depNodep->initialValuep = clonedExprp;
                     UINFO(5, "DEPGRAPH: inherited expr for param '" << nodep->name()
                               << "' in " << m_modp->name() << " from template "
                               << baseModName << " (name match, relinked "
@@ -1255,7 +1230,7 @@ private:
         }
 
         // Collect dependencies from the value expression (prefer captured pre-constify)
-        AstNode* exprp = depNodep->origExprp ? depNodep->origExprp : nodep->valuep();
+        AstNode* exprp = depNodep->initialValuep ? depNodep->initialValuep : nodep->valuep();
         if (exprp) {
             V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp);
         }
@@ -1352,12 +1327,8 @@ private:
             // Track the class dependency so we can resolve it correctly later
             if (AstClassRefDType* const crdtp = VN_CAST(dtypep, ClassRefDType)) {
                 if (AstClass* const classp = crdtp->classp()) {
-                    // Store the typedef -> class relationship for later resolution
-                    // The class might be a specialized class (e.g., uvm_object_registry__Tz191)
                     UINFO(5, "DEPGRAPH: typedef '" << nodep->name() << "' points to class '"
                               << classp->name() << "' in " << m_modp->name() << endl);
-                    // Register this typedef's target class for method resolution
-                    V3LinkDotDepGraph::registerTypedefClass(nodep, classp, m_modp);
                 }
             }
             // For struct/union types, create a DepNode and track member dependencies.
@@ -1799,20 +1770,17 @@ private:
                           << childVarp->name() << endl);
                 V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp);
 
-                // Also capture the override expression so we can resolve it later
-                // and apply the constant back to the AST
-                if (!childNodep->deferredValuep) {
-                    childNodep->deferredValuep = exprp->cloneTree(false);
-                    childNodep->origExprp = exprp;
-                    // For shadow architecture: override REPLACES default as boundary condition
-                    childNodep->initialValuep = exprp->cloneTree(false);
-                    if (AstConst* const constp = VN_CAST(exprp, Const)) {
-                        childNodep->initialWidth = constp->width();
-                        UINFO(5, "DEPGRAPH: Cell override const width=" << constp->width()
-                                  << " for param '" << childVarp->name() << "'" << endl);
-                    }
-                    UINFO(9, "DEPGRAPH: Captured override expr for " << childVarp->name() << endl);
+                // Capture override expression - override REPLACES default as boundary condition
+                if (childNodep->initialValuep) {
+                    childNodep->initialValuep->deleteTree();
                 }
+                childNodep->initialValuep = exprp->cloneTree(false);
+                if (AstConst* const constp = VN_CAST(exprp, Const)) {
+                    childNodep->initialWidth = constp->width();
+                    UINFO(5, "DEPGRAPH: Cell override const width=" << constp->width()
+                              << " for param '" << childVarp->name() << "'" << endl);
+                }
+                UINFO(9, "DEPGRAPH: Captured override expr for " << childVarp->name() << endl);
             }
         }
 
@@ -2505,14 +2473,13 @@ void V3LinkDotDepGraph::updateEdgesToSpecialized() {
                           << " (was template @" << depNodep->ownerModp->name() << ")" << endl);
                 ++updatedEdges;
 
-                // Store deferred typedefp for REFDTYPE nodes pointing to specialized typedef
-                // This will be applied during commit/finalize, not here during graph build
+                // Store resolved typedef for REFDTYPE nodes pointing to specialized typedef
                 if (nodep->nodeType == NodeType::REFDTYPE
                     && specializedNodep->nodeType == NodeType::TYPEDEF) {
                     if (AstTypedef* const specTdp = VN_CAST(specializedNodep->nodep, Typedef)) {
-                        nodep->deferredTypedefp = specTdp;
-                        nodep->deferredClassOwnerp = specializedNodep->ownerModp;
-                        UINFO(5, "DEPGRAPH: deferred REFDTYPE '" << nodeName(nodep)
+                        nodep->resolvedTypedefp = specTdp;
+                        nodep->resolvedOwnerModp = specializedNodep->ownerModp;
+                        UINFO(5, "DEPGRAPH: resolved REFDTYPE '" << nodeName(nodep)
                                   << "' typedefp to specialized typedef in "
                                   << specializedNodep->ownerModp->name() << endl);
                     }
@@ -2801,36 +2768,6 @@ static void finalizeParamType(V3LinkDotDepGraph::DepNode* nodep) {
         ptdp->didWidth(true);
     }
 
-    // Apply deferred child typedef retarget
-    if (nodep->deferredChildTypedefp) {
-        if (AstRequireDType* const reqp = VN_CAST(ptdp->getChildDTypep(), RequireDType)) {
-            if (AstRefDType* const refp = VN_CAST(reqp->lhsp(), RefDType)) {
-                refp->refDTypep(nullptr);
-                refp->typedefp(nodep->deferredChildTypedefp);
-            }
-        }
-    }
-
-    // Clear childDTypep if needed
-    if (nodep->deferredNeedsChildDTypeClear) {
-        if (AstNodeDType* const childp = ptdp->getChildDTypep()) {
-            AstNodeDType* newChildp = nullptr;
-            // If the new type is inside the child we are about to delete (e.g. unwrapping REQUIREDTYPE),
-            // we must rescue it and make it the new child to preserve ownership.
-            if (nodep->deferredDTypep && nodep->deferredDTypep->backp() == childp) {
-                newChildp = nodep->deferredDTypep;
-                newChildp->unlinkFrBack();
-            }
-
-            if (childp->backp() == ptdp) {
-                // Child is owned by this node - safe to delete
-                childp->unlinkFrBack();
-                VL_DO_DANGLING(childp->deleteTree(), childp);
-            }
-            ptdp->childDTypep(newChildp);
-        }
-    }
-
     // Normalize RefDTypes in this paramtype subtree
     normalizeRefTree(ptdp, "finalize-paramtype");
 }
@@ -2879,24 +2816,41 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
               << " resolvedValuep=" << nodep->resolvedValuep
               << endl);
 
-    // Apply resolved value from DepNode
+    // Apply resolved value from DepNode - should already be a constant
     if (nodep->resolvedValuep) {
-        if (varp->valuep()) {
-            varp->valuep()->unlinkFrBack()->deleteTree();
+        AstConst* const resolvedConstp = VN_CAST(nodep->resolvedValuep, Const);
+        AstConst* const astConstp = varp->valuep() ? VN_CAST(varp->valuep(), Const) : nullptr;
+
+        // Only update if AST doesn't already have the correct constant value
+        bool needsUpdate = false;
+        if (!astConstp) {
+            // AST has no constant value (or non-const expression)
+            needsUpdate = true;
+        } else if (resolvedConstp && !astConstp->num().isCaseEq(resolvedConstp->num())) {
+            // AST has a different constant value
+            needsUpdate = true;
         }
-        varp->valuep(nodep->resolvedValuep->cloneTree(false));
-        varp->didWidth(false);
-        V3Width::widthParamsEdit(varp);
-        V3Const::constifyParamsEdit(varp);
+
+        if (needsUpdate) {
+            UINFO(5, "DEPGRAPH: finalizeParam '" << varp->name()
+                      << "' updating value" << endl);
+            if (varp->valuep()) {
+                varp->valuep()->unlinkFrBack()->deleteTree();
+            }
+            varp->valuep(nodep->resolvedValuep->cloneTree(false));
+            // Update dtype from the resolved value if it has one
+            if (nodep->resolvedValuep->dtypep()) {
+                varp->dtypep(nodep->resolvedValuep->dtypep());
+            }
+        }
     }
 
-    // Apply resolved width from DepNode (via dtypep)
-    if (nodep->resolvedWidth > 0 && varp->width() != nodep->resolvedWidth) {
+    // Apply resolved width from DepNode (only if dtype exists and differs)
+    if (nodep->resolvedWidth > 0 && varp->dtypep()
+        && varp->width() != nodep->resolvedWidth) {
         UINFO(5, "DEPGRAPH: finalizeParam '" << varp->name()
                   << "' width " << varp->width() << " -> " << nodep->resolvedWidth << endl);
-        // For AstVar, width is determined by dtypep, so we need to re-width
-        varp->didWidth(false);
-        V3Width::widthParamsEdit(varp);
+        varp->dtypep()->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
     }
 }
 
@@ -2975,32 +2929,23 @@ void V3LinkDotDepGraph::finalizeAST() {
         }
     }
 
-    // Second pass: apply deferred normalizations
+    // Second pass: apply resolved state to RefDTypes
     for (DepNode* nodep : s_allNodes) {
         if (!nodep || !nodep->nodep) continue;
 
-        if (nodep->needsNormalize) {
+        if (nodep->nodeType == NodeType::REFDTYPE) {
             if (AstRefDType* const rdp = VN_CAST(nodep->nodep, RefDType)) {
-                // Apply any deferred state before normalizing
-                if (nodep->deferredTypedefp) {
-                    rdp->typedefp(nodep->deferredTypedefp);
+                // Apply resolved state before normalizing
+                if (nodep->resolvedTypedefp) {
+                    rdp->typedefp(nodep->resolvedTypedefp);
                     rdp->refDTypep(nullptr);
                 }
-                if (nodep->deferredRefDTypep) {
-                    rdp->refDTypep(nodep->deferredRefDTypep);
-                    rdp->typedefp(nullptr);
-                }
-                if (nodep->deferredClassOwnerp) {
-                    rdp->classOrPackagep(nodep->deferredClassOwnerp);
+                if (nodep->resolvedOwnerModp) {
+                    rdp->classOrPackagep(nodep->resolvedOwnerModp);
                 }
                 normalizeRef(rdp);
                 ++normalizeCount;
             }
-        }
-
-        if (nodep->needsNormalizeTree) {
-            normalizeRefTree(nodep->nodep, "finalize");
-            ++normalizeTreeCount;
         }
     }
 
@@ -3097,89 +3042,6 @@ void V3LinkDotDepGraph::finalizeAST() {
               << " normalizeTree=" << normalizeTreeCount
               << " struct=" << structCount
               << endl);
-}
-
-//======================================================================
-// Mark template types BEFORE V3Param
-
-void V3LinkDotDepGraph::markTemplateTypes(AstNetlist* netlistp) {
-    (void)netlistp;
-}
-
-//======================================================================
-// Per-module resolution with widthing - call DURING V3Param before constification
-
-void V3LinkDotDepGraph::syncRefDTypeWidths(AstNodeModule* modp) {
-    // Resolve RefDType widths by following the type chain and widthing as needed.
-    // This ensures $bits() expressions get correct values during widthParamsEdit.
-    //
-    // The key is to follow: RefDType -> ParamTypeDType -> RefDType -> StructDType
-    // and width each type in the chain, then propagate widths back up.
-    if (!modp) return;
-
-    UINFO(5, "DEPGRAPH: syncRefDTypeWidths for " << modp->name() << endl);
-
-    // Iterate until no progress (handles nested dependencies)
-    int iteration = 0;
-    bool progress = true;
-    while (progress && iteration < 100) {
-        progress = false;
-        ++iteration;
-
-        modp->foreach([&](AstRefDType* rdp) {
-            // Follow the type chain to find the ultimate type
-            AstNodeDType* ultimateTypep = rdp;
-            int depth = 0;
-            while (ultimateTypep && depth < 50) {
-                ++depth;
-                if (AstRefDType* const rp = VN_CAST(ultimateTypep, RefDType)) {
-                    if (rp->refDTypep()) {
-                        ultimateTypep = rp->refDTypep();
-                        continue;
-                    }
-                }
-                if (AstParamTypeDType* const ptp = VN_CAST(ultimateTypep, ParamTypeDType)) {
-                    if (ptp->subDTypep()) {
-                        ultimateTypep = ptp->subDTypep();
-                        continue;
-                    }
-                }
-                break;  // Reached a concrete type
-            }
-
-            if (!ultimateTypep) return;
-
-            // If the ultimate type has width but RefDType doesn't, width the RefDType
-            const int ultimateWidth = ultimateTypep->width();
-            if (ultimateWidth > 0 && ultimateWidth != rdp->width()) {
-                UINFO(5, "DEPGRAPH: syncRefDTypeWidths iter=" << iteration
-                          << " '" << rdp->name() << "' in " << modp->name()
-                          << " w" << rdp->width() << " -> w" << ultimateWidth
-                          << " (via " << ultimateTypep->prettyTypeName() << ")" << endl);
-
-                // Update the RefDType's width
-                if (AstNodeDType* const refp = rdp->refDTypep()) {
-                    rdp->dtypep(refp);
-                }
-                rdp->widthForce(ultimateWidth, ultimateWidth);
-                progress = true;
-            }
-
-            // Also try to width ParamTypeDTypes in the chain
-            if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
-                if (ptdp->width() != ultimateWidth && ultimateWidth > 0) {
-                    UINFO(5, "DEPGRAPH: syncRefDTypeWidths widthing PARAMTYPEDTYPE '"
-                              << ptdp->name() << "' w" << ptdp->width()
-                              << " -> w" << ultimateWidth << endl);
-                    ptdp->widthForce(ultimateWidth, ultimateWidth);
-                    progress = true;
-                }
-            }
-        });
-    }
-
-    UINFO(5, "DEPGRAPH: syncRefDTypeWidths completed in " << iteration
-              << " iterations for " << modp->name() << endl);
 }
 
 //======================================================================
