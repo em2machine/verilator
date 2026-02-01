@@ -2907,12 +2907,6 @@ class ConstVisitor final : public VNVisitor {
 
     void visit(AstAttrOf* nodep) override {
         VL_RESTORER(m_attrp);
-        // During DepGraph param flow, defer const-folding if ATTROF source type is unresolved.
-        // The ATTROF will be replaced with CONST during DepGraph resolution.
-        if (V3LinkDotDepGraph::shouldDeferAttrOf(nodep)) {
-            m_attrp = nodep;  // Mark that we're inside an unresolved ATTROF
-            return;  // Skip iterating children - defer until ATTROF is resolved
-        }
         m_attrp = nodep;
         iterateChildren(nodep);
     }
@@ -3044,15 +3038,6 @@ class ConstVisitor final : public VNVisitor {
             }
         }
         if (!did && m_required) {
-            // During DepGraph flow, if this VARREF references an LPARAM that hasn't been
-            // constified yet, defer the error - DepGraph will resolve it later
-            AstVar* const varp = nodep->varp();
-            if (V3LinkDotDepGraph::useInParam() && varp && varp->isParam() && !varp->isGParam()
-                && (!varp->valuep() || !VN_IS(varp->valuep(), Const))) {
-                UINFO(5, "DEPGRAPH: deferring constify error for LPARAM '"
-                          << varp->name() << "' - will be resolved later" << endl);
-                return;  // Defer - DepGraph will resolve this LPARAM
-            }
             nodep->v3error("Expecting expression to be constant, but variable isn't const: "
                            << nodep->varp()->prettyNameQ());
         }

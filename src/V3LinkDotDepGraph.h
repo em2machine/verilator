@@ -46,43 +46,54 @@ public:
         FUNC            // Function/Task (AstNodeFTask)
     };
 
-    // A node in the dependency graph
+    // A node in the dependency graph - shadow data structure for parameters/types
+    // Execution model:
+    //   1. Build: Create nodes, capture initial state from AST, create edges
+    //   2. Resolve: OOO execution - read from parent DepNodes, compute, store in self, wake children
+    //   3. FinalizeAST: Apply resolved state to AST before V3Param creates clones
     struct DepNode final {
-        AstNode* nodep = nullptr;            // The AST node
+        // === Identity (set during build, immutable) ===
+        AstNode* nodep = nullptr;            // The AST node (for finalizeAST to update)
         NodeType nodeType = NodeType::GPARAM;
-        AstNodeModule* ownerModp = nullptr;  // Specialized module/interface owning this
+        AstNodeModule* ownerModp = nullptr;  // Module/interface owning this node
         AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
         std::string cellName;                // Cell name for typedef lookup (survives cloning)
-        AstNode* origExprp = nullptr;         // Original expression (pre-constify) for params
 
-        std::set<DepNode*> dependsOn;        // Nodes this depends on
-        std::set<DepNode*> dependents;       // Nodes that depend on this
+        // === Edges (set during build) ===
+        std::set<DepNode*> dependsOn;        // Parent nodes this depends on (read during execute)
+        std::set<DepNode*> dependents;       // Child nodes that depend on this (wake on commit)
 
-        bool resolved = false;               // Has this been fully resolved?
+        // === Initial state (captured from AST during build) ===
+        int initialWidth = 0;                // Width from AST at build time
+        AstNode* initialValuep = nullptr;    // Value expression from AST at build time (cloned)
+
+        // === Execution state ===
+        bool resolved = false;               // Has this node completed execution?
         int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
-        int resolvedWidth = 0;               // Resolved width (for PARAMTYPEDTYPEs)
-        int pendingDeps = 0;                 // Unresolved dependency count (work-queue)
+        int pendingDeps = 0;                 // Unresolved parent count (ready when 0)
 
-        // Deferred AST mutation state - populated during resolve(), applied in finalizeAST()
-        // For PARAMTYPEDTYPE:
-        AstNodeDType* deferredDTypep = nullptr;       // Resolved dtype to set
-        bool deferredNeedsWidthForce = false;         // Whether to force width
-        int deferredForcedWidth = 0;                  // Width to force
-        int deferredForcedWidthMin = 0;               // WidthMin to force
-        bool deferredNeedsChildDTypeClear = false;    // Whether to clear childDTypep
-        AstTypedef* deferredChildTypedefp = nullptr;  // Typedef to set on child RefDType
+        // === Resolved state (computed during execute, applied in finalizeAST) ===
+        // These are the "outputs" of this node that children can read
+        int resolvedWidth = 0;               // Computed width (for $bits())
+        AstNodeDType* resolvedTypep = nullptr;  // Computed type (for type parameters)
+        AstNode* resolvedValuep = nullptr;   // Computed value (for value parameters)
 
-        // For REFDTYPE:
-        AstTypedef* deferredTypedefp = nullptr;       // Typedef to set
-        AstNodeDType* deferredRefDTypep = nullptr;    // RefDType to set
-        AstNodeModule* deferredClassOwnerp = nullptr; // ClassOrPackage to set
+        // === Legacy deferred state (to be migrated to resolved state) ===
+        AstNodeDType* deferredDTypep = nullptr;
+        bool deferredNeedsWidthForce = false;
+        int deferredForcedWidth = 0;
+        int deferredForcedWidthMin = 0;
+        bool deferredNeedsChildDTypeClear = false;
+        AstTypedef* deferredChildTypedefp = nullptr;
+        AstTypedef* deferredTypedefp = nullptr;
+        AstNodeDType* deferredRefDTypep = nullptr;
+        AstNodeModule* deferredClassOwnerp = nullptr;
+        AstNode* deferredValuep = nullptr;
+        bool needsNormalize = false;
+        bool needsNormalizeTree = false;
 
-        // For GPARAM/LPARAM:
-        AstNode* deferredValuep = nullptr;            // Value expression to set
-
-        // General flags for finalize pass
-        bool needsNormalize = false;                  // Needs normalizeRef in finalize
-        bool needsNormalizeTree = false;              // Needs normalizeRefTree in finalize
+        // Legacy - to be removed
+        AstNode* origExprp = nullptr;
     };
 
     using NodeMap = std::unordered_map<AstNode*, DepNode*>;
@@ -91,11 +102,11 @@ private:
     static NodeMap s_nodes;                  // All nodes in the graph
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
-    static int s_commitChanges;              // Changes applied during per-node commit
+    static int s_commitChanges;              // OLD ARCHITECTURE: commit tracking (kept for API compat)
     static bool s_enabled;                   // Is the graph active?
-    static bool s_preserveCapturedExprs;     // Preserve captured param exprs across reset
+    static bool s_preserveCapturedExprs;     // OLD ARCHITECTURE: preserve exprs across reset (not needed)
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
-    static bool s_useInParam;             // Use DepGraph during V3Param fixed-point loop
+    static bool s_useInParam;             // OLD ARCHITECTURE: interleaved V3Param (not needed)
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
 
     // Typedef -> class mapping for parameterized class typedefs
@@ -147,6 +158,9 @@ public:
     static void build(AstNetlist* netlistp);
     // Incremental build: add nodes/edges for newly cloned modules
     static void buildIncremental(AstNetlist* netlistp);
+
+    // Debug: dump dependency graph tree view
+    static void dumpGraph(const char* stageName);
 
     // Utility: find owning module for an AST node
     static AstNodeModule* findOwnerModule(AstNode* nodep);
@@ -223,32 +237,27 @@ public:
         return false;
     }
 
-    // Track per-node commit changes
+    // OLD ARCHITECTURE: Track per-node commit changes (kept for API compat)
     static void commitChange() { ++s_commitChanges; }
 
-    // Resolve all dependencies using fixed-point iteration
-    // Returns number of iterations needed
+    // Resolve all dependencies using OOO execution model
+    // Returns number of nodes resolved
     static int resolve();
 
-    // Iteration boundary hook (recompute pending deps / mark-ready)
+    // OLD ARCHITECTURE: Iteration hooks (stubs - not needed in new architecture)
     static void beginIteration(AstNetlist* netlistp);
-
-    // Optional post-iteration cleanup hook (no structural changes by default)
     static void postIterationCleanup(AstNetlist* netlistp);
-
-    // Optional post-width cleanup hook (called from V3Width in param flow)
     static void postWidthCleanup(AstNode* nodep);
 
-    // Apply resolved typedefs to RefDType nodes
-    // Returns number of changes applied (for fixed-point looping)
+    // OLD ARCHITECTURE: Apply changes (returns commit count for compat)
     static int apply();
 
-    // Finalize AST: apply all deferred mutations from resolve() in a single pass
+    // NEW ARCHITECTURE: Finalize AST after resolution
     // This is the ONLY place that mutates the AST based on DepGraph results
-    // Call this after the V3Param fixed-point loop completes
+    // Call this after resolve() completes
     static void finalizeAST();
 
-    // Use DepGraph during V3Param fixed-point loop
+    // OLD ARCHITECTURE: Interleaved V3Param flag (not needed)
     static void useInParam(bool flag) { s_useInParam = flag; }
     static bool useInParam() { return s_useInParam; }
 

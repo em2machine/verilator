@@ -74,53 +74,6 @@
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //######################################################################
-// Helper to check if an expression references an unresolved dependency
-// Used during DepGraph flow to defer constification errors
-// Returns true if:
-// 1. Expression references an LPARAM that hasn't been constified yet, OR
-// 2. Expression contains an ATTROF ($bits, etc.) that references a PARAMTYPEDTYPE
-//    with an unresolved REQUIREDTYPE
-
-static bool exprReferencesUnresolvedDep(AstNode* exprp) {
-    if (!exprp) return false;
-    bool hasUnresolved = false;
-
-    // Check for unresolved LPARAMs
-    exprp->foreach([&](AstVarRef* refp) {
-        if (hasUnresolved) return;
-        AstVar* const varp = refp->varp();
-        if (!varp) return;
-        if (varp->isParam() && !varp->isGParam()) {
-            if (!varp->valuep() || !VN_IS(varp->valuep(), Const)) {
-                UINFO(5, "DEPGRAPH: PIN expr references unresolved LPARAM '"
-                          << varp->name() << "'" << endl);
-                hasUnresolved = true;
-            }
-        }
-    });
-
-    // Check for ATTROF nodes that reference unresolved PARAMTYPEDTYPEs
-    // e.g., $bits(op_pkt_t) where op_pkt_t is a PARAMTYPEDTYPE with REQUIREDTYPE
-    exprp->foreach([&](AstAttrOf* attrp) {
-        if (hasUnresolved) return;
-        if (AstNode* const fromp = attrp->fromp()) {
-            fromp->foreach([&](AstRefDType* rdp) {
-                if (hasUnresolved) return;
-                if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
-                    if (VN_IS(ptdp->subDTypep(), RequireDType)) {
-                        UINFO(5, "DEPGRAPH: PIN expr ATTROF references unresolved PARAMTYPEDTYPE '"
-                                  << ptdp->name() << "'" << endl);
-                        hasUnresolved = true;
-                    }
-                }
-            });
-        }
-    });
-
-    return hasUnresolved;
-}
-
-//######################################################################
 // Hierarchical block and parameter db (modules without parameters are also handled)
 
 class ParameterizedHierBlocks final {
@@ -1183,21 +1136,8 @@ class ParamProcessor final {
                 AstConst* const exprp = VN_CAST(pinp->exprp(), Const);
                 AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
                 if (!exprp) {
-                    // During DepGraph flow, if the PIN expression references an unresolved
-                    // dependency (LPARAM or PARAMTYPEDTYPE), capture the expression and create
-                    // dependency edges so the CELL will be re-processed after resolution
-                    if (V3LinkDotDepGraph::useInParam()
-                        && exprReferencesUnresolvedDep(pinp->exprp())) {
-                        UINFO(5, "DEPGRAPH: deferring PIN constification for "
-                                  << pinp->prettyNameQ() << " - references unresolved dependency" << endl);
-                        // Capture the expression and create dependency edges
-                        // This ensures the GPARAM depends on the PARAMTYPEDTYPE being resolved
-                        // Use srcModp as the owner since modvarp is in the target module
-                        if (V3LinkDotDepGraph::preserveCapturedExprs()) {
-                            V3LinkDotDepGraph::captureParamExpr(modvarp, pinp->exprp(), srcModp);
-                        }
-                        return;  // Defer - will be processed again after DepGraph resolves
-                    }
+                    // With DepGraph architecture, all expressions should be constants
+                    // by the time V3Param runs. If not, it's an error.
                     UINFOTREE(1, pinp, "", "errnode");
                     pinp->v3error("Can't convert defparam value to constant: Param "
                                   << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
@@ -2686,65 +2626,32 @@ public:
 void V3Param::param(AstNetlist* rootp) {
     UINFO(2, __FUNCTION__ << ":");
 
-    // DepGraph-driven fixed-point loop (guarded)
+    // DepGraph-driven architecture: resolve ALL dependencies first, then clone once
     if (V3LinkDotDepGraph::useInParam()) {
-        const int maxIters = 20;
-        int iter = 0;
-        size_t prevModuleCount = 0;
-        bool changed = true;
+        // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
+        //
+        // Phase 1: Build complete dependency graph
+        // This captures ALL cells, params, types, $bits() expressions
+        UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
+        V3LinkDotDepGraph::build(rootp);
 
-        while (changed && iter < maxIters) {
-            ++iter;
-            UINFO(5, "DEPGRAPH: V3Param fixed-point iteration " << iter << endl);
+        // Phase 2: Resolve all dependencies in topological order
+        // This computes all constants by propagating through dependency chains
+        UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
+        V3LinkDotDepGraph::beginIteration(rootp);
+        const int depSteps = V3LinkDotDepGraph::resolve();
+        const int applyChanges = V3LinkDotDepGraph::apply();
+        UINFO(2, "DEPGRAPH: Resolved " << depSteps << " steps, " << applyChanges << " changes" << endl);
 
-            { ParamTop{rootp}; }  // One pass of V3Param cloning
-
-            // Count modules after this iteration
-            size_t moduleCount = 0;
-            for (AstNodeModule* modp = rootp->modulesp(); modp;
-                 modp = VN_AS(modp->nextp(), NodeModule)) {
-                ++moduleCount;
-            }
-
-            // Build once, then incrementally add new modules for subsequent iterations.
-            if (iter == 1) {
-                V3LinkDotDepGraph::build(rootp);
-            } else {
-                V3LinkDotDepGraph::buildIncremental(rootp);
-            }
-
-            V3LinkDotDepGraph::beginIteration(rootp);
-
-            // OOO analogy: resolve() "executes" nodes once deps are ready, apply() "commits".
-            const int depSteps = V3LinkDotDepGraph::resolve();
-            const int applyChanges = V3LinkDotDepGraph::apply();
-            V3LinkDotDepGraph::postIterationCleanup(rootp);
-            UINFO(5, "DEPGRAPH: iteration " << iter << " depSteps=" << depSteps
-                      << " applyChanges=" << applyChanges
-                      << " moduleCount=" << moduleCount
-                      << " prevModuleCount=" << prevModuleCount << endl);
-
-// Optional debug checkpoint
-            if (debug() >= 6) {
-                V3LinkDotDepGraph::dumpGraphTree(rootp);
-                V3LinkDotDepGraph::dumpGraphDepsTree();
-            }
-
-            changed = (moduleCount != prevModuleCount) || (applyChanges > 0);
-            prevModuleCount = moduleCount;
-        }
-
-        if (iter >= maxIters) {
-            UINFO(5, "DEPGRAPH: WARNING: V3Param fixed-point reached max iterations "
-                      << maxIters << endl);
-        }
-
-        // Apply all deferred AST mutations in a single pass after the loop
+        // Phase 3: Back-annotate resolved constants to AST
+        // This replaces expressions like $bits(var) with their computed constant values
+        UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
         V3LinkDotDepGraph::finalizeAST();
 
-        // DepGraph execution is complete - re-enable all width checks
-        // Guards that checked allowParamMutation() will now allow checks to run
-        V3LinkDotDepGraph::useInParam(false);
+        // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
+        UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
+        V3LinkDotDepGraph::useInParam(false);  // Disable guards before ParamTop
+        { ParamTop{rootp}; }
     } else {
         { ParamTop{rootp}; }  // Destruct before checking
     }

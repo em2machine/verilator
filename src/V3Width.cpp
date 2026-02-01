@@ -981,19 +981,13 @@ class WidthVisitor final : public VNVisitor {
         UINFO(6, "RANGE " << nodep);
         V3Const::constifyParamsEdit(nodep->leftp());  // May relink pointed to node
         V3Const::constifyParamsEdit(nodep->rightp());  // May relink pointed to node
-        // Skip constant check and range validation for template modules - their parameters
-        // may not be resolved yet (X values). Only specialized clones have fully resolved
-        // parameter values and should be validated.
-        const bool skipTemplateRange = V3LinkDotDepGraph::shouldDeferTemplateType(nodep);
-        if (!skipTemplateRange) {
-            checkConstantOrReplace(nodep->leftp(), true,
-                                   "left side of bit range isn't a two-state constant"
-                                   " (IEEE 1800-2023 6.9.1)");
-            checkConstantOrReplace(nodep->rightp(), true,
-                                   "right side of bit range isn't a two-state constant"
-                                   " (IEEE 1800-2023 6.9.1)");
-        }
-        if (m_vup->prelim() && !skipTemplateRange) {
+        checkConstantOrReplace(nodep->leftp(), true,
+                               "left side of bit range isn't a two-state constant"
+                               " (IEEE 1800-2023 6.9.1)");
+        checkConstantOrReplace(nodep->rightp(), true,
+                               "right side of bit range isn't a two-state constant"
+                               " (IEEE 1800-2023 6.9.1)");
+        if (m_vup->prelim()) {
             // Don't need to iterate because V3Const already constified
             const int width = nodep->elementsConst();
             if (nodep->fromBracket() && nodep->leftConst() > nodep->rightConst()) {
@@ -1840,31 +1834,6 @@ class WidthVisitor final : public VNVisitor {
     void visit(AstAttrOf* nodep) override {
         VL_RESTORER(m_attrp);
         m_attrp = nodep;
-        if (!V3LinkDotDepGraph::allowParamMutation()) {
-            if (nodep->attrType() == VAttrType::DIM_BITS) {
-                if (AstVar* const backVarp = VN_CAST(nodep->backp(), Var)) {
-                    if (backVarp->name() == "p_a") {
-                        UINFO(5, "DEPGRAPH: visit AttrOf DIM_BITS backp=VAR p_a nodep="
-                                  << static_cast<const void*>(nodep)
-                                  << " backp=" << nodep->backp()
-                                  << " fromp=" << nodep->fromp() << endl);
-                    }
-                }
-                if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
-                    if (rdp->name() == "pair_t") {
-                        UINFO(5, "DEPGRAPH: visit AttrOf DIM_BITS nodep="
-                                  << static_cast<const void*>(nodep)
-                                  << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
-                                  << " fromdtp=" << (nodep->fromp() ? nodep->fromp()->dtypep() : nullptr)
-                                  << " fromdtpW="
-                                  << ((nodep->fromp() && nodep->fromp()->dtypep())
-                                          ? nodep->fromp()->dtypep()->width()
-                                          : 0)
-                                  << endl);
-                    }
-                }
-            }
-        }
         userIterateAndNext(nodep->fromp(), WidthVP{SELF, BOTH}.p());
         if (nodep->dimp()) userIterateAndNext(nodep->dimp(), WidthVP{SELF, BOTH}.p());
         // Don't iterate children, don't want to lose VarRef.
@@ -1881,23 +1850,6 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_DIMENSIONS:
         case VAttrType::DIM_UNPK_DIMENSIONS: {
             AstNodeDType* const dtypep = fromDTypep();
-            if (!V3LinkDotDepGraph::allowParamMutation()
-                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
-                // Defer widthing until dtype resolves, but keep a placeholder dtype
-                // so later checks don't trip on null dtype.
-                nodep->dtypep(nodep->findSigned32DType());
-                if (nodep->attrType() == VAttrType::DIM_BITS) {
-                    if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
-                        if (rdp->name() == "pair_t") {
-                            UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
-                                      << static_cast<const void*>(nodep)
-                                      << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
-                                      << endl);
-                        }
-                    }
-                }
-                return;
-            }
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
             const std::pair<uint32_t, uint32_t> dim = dtypep->dimensions(true);
             const int val
@@ -1929,25 +1881,6 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_RIGHT:
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep();
-            // Defer ATTROF replacement when source type is unresolved during DepGraph param flow.
-            // The ATTROF will be replaced with CONST during DepGraph resolution.
-            if (V3LinkDotDepGraph::shouldDeferAttrOf(nodep)) {
-                nodep->dtypeSetSigned32();
-                UINFO(5, "DEPGRAPH: AttrOf defer unresolved source type nodep="
-                              << static_cast<const void*>(nodep)
-                              << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
-                              << " setDtype=" << nodep->dtypep() << endl);
-                return;
-            }
-            if (!V3LinkDotDepGraph::allowParamMutation()
-                && V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
-                nodep->dtypeSetSigned32();
-                UINFO(5, "DEPGRAPH: AttrOf DIM_BITS defer missing dtype nodep="
-                              << static_cast<const void*>(nodep)
-                              << " backp=" << nodep->backp() << " fromp=" << nodep->fromp()
-                              << " setDtype=" << nodep->dtypep() << endl);
-                return;
-            }
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
             if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
                 switch (nodep->attrType()) {
@@ -2015,44 +1948,11 @@ class WidthVisitor final : public VNVisitor {
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(pushDeletep(nodep), nodep);
                     } else {
-                        if (V3LinkDotDepGraph::shouldDeferDType(dtypep)) {
-                            nodep->dtypeSetSigned32();
-                            UINFO(5, "DEPGRAPH: AttrOf DIM_BITS missing dtype nodep="
-                                          << static_cast<const void*>(nodep)
-                                          << " backp=" << nodep->backp() << " fromp="
-                                          << nodep->fromp() << " dtypep=" << dtypep
-                                          << " attrType=" << nodep->attrType() << endl);
-                            return;
-                        }
                         AstNodeDType* const baseDTypep = dtypep->skipRefp();
                         UASSERT_OBJ(baseDTypep, nodep, "Unsized expression");
                         const int dim = 1;
-                        UINFO(5, "DEPGRAPH: AttrOf DIM_BITS dimValue nodep="
-                                      << static_cast<const void*>(nodep)
-                                      << " backp=" << nodep->backp() << " fromp="
-                                      << nodep->fromp() << " dtypep=" << dtypep
-                                      << " attrType=" << nodep->attrType() << endl);
                         AstConst* const newp
                             = dimensionValue(nodep->fileline(), baseDTypep, nodep->attrType(), dim);
-                        if (!V3LinkDotDepGraph::allowParamMutation()
-                            && nodep->attrType() == VAttrType::DIM_BITS) {
-                            if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
-                                if (rdp->name() == "pair_t") {
-                                    UINFO(5, "DEPGRAPH: AttrOf DIM_BITS replace nodep="
-                                              << static_cast<const void*>(nodep)
-                                              << " backp=" << nodep->backp()
-                                              << " fromp=" << nodep->fromp()
-                                              << " fromdtp="
-                                              << (nodep->fromp() ? nodep->fromp()->dtypep()
-                                                                 : nullptr)
-                                              << " fromdtpW="
-                                              << ((nodep->fromp() && nodep->fromp()->dtypep())
-                                                      ? nodep->fromp()->dtypep()->width()
-                                                      : 0)
-                                              << " value=" << newp->toSInt() << endl);
-                                }
-                            }
-                        }
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(nodep->deleteTree(), nodep);
                     }
@@ -2393,65 +2293,25 @@ class WidthVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(nodep->unlinkFrBack()), nodep);
             return;
         }
-        if (!nodep->subDTypep() && V3LinkDotDepGraph::shouldDeferTemplateType(nodep)) {
-            // DepGraph clears template typedef subDTypep during commit to avoid
-            // dangling type pointers. Defer widthing until specialized clones exist.
-            return;
-        }
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
     }
     void visit(AstParamTypeDType* nodep) override {
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
 
-        // Check for deferral conditions FIRST
-        if (V3LinkDotDepGraph::shouldDeferDType(nodep)) {
-            UINFO(9, "Deferring ParamTypeDType via shouldDeferDType " << nodep << endl);
-            nodep->doingWidth(false); // Important: Clear doingWidth to avoid "Recursive type definition" on revisit
-            return;
-        }
-
-        // Explicitly check for RequireDType in the subtype chain to avoid recursion
-        // This is a special case of deferral where we know the type isn't ready.
-        if (AstNodeDType* const subp = nodep->subDTypep()) {
-            const AstNodeDType* const basep = subp->skipRefOrNullp();
-            if (VN_IS(basep, RequireDType)) {
-                UINFO(9, "Deferring ParamTypeDType -> RequireDType " << nodep << endl);
-                // We mark as didWidth(true) here because RequireDType is a valid (placeholder) state
-                // and we don't want to re-process it until it's replaced.
-                // Actually, if we want to re-process it later (when resolved), we should probably use doingWidth(false).
-                // But for now, let's treat it as a deferral that waits for resolution.
-                nodep->doingWidth(false);
-                return;
-            }
-        }
-
-        if (!V3LinkDotDepGraph::allowParamMutation()) {
-             // If we can't mutate, we proceed? Or defer?
-             // Existing logic allowed proceeding to iterate children.
-        }
-        if (!V3LinkDotDepGraph::allowParamMutation()) return;
-
         nodep->dtypep(iterateEditMoveDTypep(nodep, nodep->subDTypep()));
         userIterateChildren(nodep, nullptr);
         nodep->widthFromSub(nodep->subDTypep());
         // Clear childDTypep after dtypep is set to satisfy V3Broken invariant.
         // The child dtype has been moved to the type table by iterateEditMoveDTypep.
-        if (V3LinkDotDepGraph::allowParamMutation() && nodep->dtypep() && nodep->childDTypep()) {
+        if (nodep->dtypep() && nodep->childDTypep()) {
             nodep->childDTypep(nullptr);
         }
     }
     void visit(AstRequireDType* nodep) override {
-        if (!V3LinkDotDepGraph::allowParamMutation()) {
-            userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
-            return;
-        }
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
         if (AstNodeDType* const dtp = VN_CAST(nodep->lhsp(), NodeDType)) {
             nodep->replaceWith(dtp->unlinkFrBack());
-        } else if (V3LinkDotDepGraph::shouldDeferDType(nodep)) {
-            nodep->doingWidth(false); // Clear recursion guard
-            return;
         } else {
             if (nodep->lhsp())
                 nodep->lhsp()->v3error("Expected data type, not a "
@@ -2559,12 +2419,6 @@ class WidthVisitor final : public VNVisitor {
             UINFOTREE(9, nodep, "", "CastDit");
             AstNodeDType* const toDtp = nodep->dtypep()->skipRefToEnump();
             AstNodeDType* const fromDtp = nodep->fromp()->dtypep()->skipRefToEnump();
-            // During DepGraph execution, the target type may still be a REQUIREDTYPE wrapper
-            // that hasn't been resolved yet. Skip the check - it will be re-run after finalizeAST().
-            if (!V3LinkDotDepGraph::allowParamMutation() && VN_IS(toDtp, RequireDType)) {
-                UINFO(5, "DEPGRAPH: deferring cast check for REQUIREDTYPE target" << endl);
-                return;
-            }
             const auto castable = AstNode::computeCastable(toDtp, fromDtp, nodep->fromp());
             bool bad = false;
             if (castable == VCastable::UNSUPPORTED) {
@@ -2760,13 +2614,6 @@ class WidthVisitor final : public VNVisitor {
         nodep->dtypep(nodep->rangep()->dtypep());
     }
     void visit(AstVar* nodep) override {
-        if (nodep->name() == "p_a") {
-            UINFO(5, "DEPGRAPH: visit Var p_a didWidth=" << nodep->didWidth()
-                      << " doingWidth=" << nodep->doingWidth()
-                      << " allowParamMutation=" << V3LinkDotDepGraph::allowParamMutation()
-                      << " valuep=" << nodep->valuep()
-                      << " valuepPtr=" << static_cast<const void*>(nodep->valuep()) << endl);
-        }
         // UINFOTREE(1, nodep, "", "InitPre");
         // Must have deterministic constant width
         // We can't skip this step when width()!=0, as creating a AstVar
@@ -2774,7 +2621,6 @@ class WidthVisitor final : public VNVisitor {
         if (nodep->didWidth()) return;
         if (nodep->doingWidth()) {  // Early exit if have circular parameter definition
             UASSERT_OBJ(nodep->valuep(), nodep, "circular, but without value");
-            if (!V3LinkDotDepGraph::allowParamMutation()) return;
             nodep->v3error("Variable's initial value is circular: " << nodep->prettyNameQ());
             pushDeletep(nodep->valuep()->unlinkFrBack());
             nodep->valuep(new AstConst{nodep->fileline(), AstConst::BitTrue{}});
@@ -3464,8 +3310,6 @@ class WidthVisitor final : public VNVisitor {
         for (AstMemberDType* itemp = nodep->membersp(); itemp;
              itemp = VN_AS(itemp->nextp(), MemberDType)) {
             AstNodeDType* const dtp = itemp->subDTypep()->skipRefp();
-            // Skip error checks if member type is unresolved (e.g. REQUIREDTYPE during early param flow)
-            if (V3LinkDotDepGraph::shouldDeferDType(dtp)) continue;
             if (nodep->packed()
                 && !dtp->isIntegralOrPacked()
                 // Historically lax:
@@ -7991,9 +7835,6 @@ class WidthVisitor final : public VNVisitor {
                                   << " has no dtype?? Missing Visitor func?");
         if (expDTypep->basicp()->untyped() || nodep->dtypep()->basicp()->untyped()) return false;
         // During DepGraph execution, expected width may be 0 if the type hasn't been
-        // fully resolved yet. Skip the check - it will be re-run after finalizeAST().
-        if (!V3LinkDotDepGraph::allowParamMutation() && expWidth == 0) return false;
-        if (!V3LinkDotDepGraph::allowParamMutation() && nodep->width() == 0) return false;
         UASSERT_OBJ(nodep->width() != 0, nodep,
                     "Under node " << nodep->prettyTypeName()
                                   << " has no expected width?? Missing Visitor func?");
@@ -8576,8 +8417,6 @@ class WidthVisitor final : public VNVisitor {
                 // they extend correctly
                 warnOn = false;
             }
-            // Defer width warnings during DepGraph execution - types may not be fully resolved yet
-            if (!V3LinkDotDepGraph::allowParamMutation()) warnOn = false;
             if (bad && warnOn) {
                 UINFOTREE(5, parentp->backp(), "", "back");
 
