@@ -58,6 +58,8 @@ public:
         AstNodeModule* ownerModp = nullptr;  // Module/interface owning this node
         AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
         std::string cellName;                // Cell name for typedef lookup (survives cloning)
+        std::string cellPath;                // Full hierarchical path to cell context (e.g., "t.u_sub")
+        AstPin* pinp = nullptr;              // Parameter pin to update in finalizeAST (for GPARAMs)
 
         // === Edges (set during build) ===
         std::set<DepNode*> dependsOn;        // Parent nodes this depends on (read during execute)
@@ -83,7 +85,20 @@ public:
         AstNodeModule* resolvedOwnerModp = nullptr; // Owner module of resolved type (for class scope)
     };
 
-    using NodeMap = std::unordered_map<AstNode*, DepNode*>;
+    // Key for per-cell-context DepNodes: (AstNode*, cellPath)
+    struct NodeKey {
+        AstNode* nodep;
+        std::string cellPath;
+        bool operator==(const NodeKey& other) const {
+            return nodep == other.nodep && cellPath == other.cellPath;
+        }
+    };
+    struct NodeKeyHash {
+        size_t operator()(const NodeKey& key) const {
+            return std::hash<AstNode*>()(key.nodep) ^ (std::hash<std::string>()(key.cellPath) << 1);
+        }
+    };
+    using NodeMap = std::unordered_map<NodeKey, DepNode*, NodeKeyHash>;
 
 private:
     static NodeMap s_nodes;                  // All nodes in the graph
@@ -98,7 +113,8 @@ private:
     friend class DepGraphBuildVisitor;
 
     // Internal helpers
-    static DepNode* findOrCreateNode(AstNode* nodep, NodeType type, AstNodeModule* ownerModp);
+    static DepNode* findOrCreateNode(AstNode* nodep, NodeType type, AstNodeModule* ownerModp,
+                                     const std::string& cellPath = "");
     static void addEdge(DepNode* from, DepNode* to);
     static void collectExpressionDeps(AstNode* exprp, DepNode* depNode, AstNodeModule* scopeModp);
     static NodeType classifyVar(const AstVar* varp);
@@ -161,11 +177,12 @@ public:
     static std::size_t size() { return s_allNodes.size(); }
     static int iterationCount() { return s_iterationCount; }
 
-    // Find a node by AST pointer
-    static const DepNode* find(AstNode* nodep);
-    static DepNode* findMutable(AstNode* nodep);
-    // Find a node by name, owner module, and type
-    static DepNode* findByNameAndOwner(const string& name, AstNodeModule* ownerModp, NodeType type);
+    // Find a node by AST pointer and cell path (for per-cell-context nodes)
+    static const DepNode* find(AstNode* nodep, const std::string& cellPath = "");
+    static DepNode* findMutable(AstNode* nodep, const std::string& cellPath = "");
+    // Find a node by name, owner module, type, and cellPath
+    static DepNode* findByNameAndOwner(const string& name, AstNodeModule* ownerModp, NodeType type,
+                                       const std::string& cellPath = "");
 
     // Iterate over all nodes
     static void forEach(const std::function<void(const DepNode&)>& fn);

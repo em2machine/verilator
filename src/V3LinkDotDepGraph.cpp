@@ -227,11 +227,13 @@ static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& pr
                              bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
     if (!nodep) return;
 
-    // Print this node
+    // Print this node with cellPath qualifier if present
     const string connector = isLast ? "└── " : "├── ";
+    const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
     UINFO(3, "DEPGRAPH: " << prefix << connector
               << "[" << nodeTypeName(nodep->nodeType) << "] "
               << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
+              << cellQualifier
               << " (pending=" << nodep->pendingDeps
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " width=" << nodep->resolvedWidth << ")" << endl);
@@ -301,11 +303,13 @@ static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const stri
                                    bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
     if (!nodep) return;
 
-    // Print this node
+    // Print this node with cellPath qualifier if present
     const string connector = isLast ? "└── " : "├── ";
+    const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
     UINFO(3, "DEPGRAPH: " << prefix << connector
               << "[" << nodeTypeName(nodep->nodeType) << "] "
               << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
+              << cellQualifier
               << " (pending=" << nodep->pendingDeps
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " width=" << nodep->resolvedWidth << ")" << endl);
@@ -538,14 +542,16 @@ void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
               << "' typedef '" << typedefName << "'" << endl);
 }
 
-const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::find(AstNode* nodep) {
-    const auto it = s_nodes.find(nodep);
+const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::find(AstNode* nodep, const string& cellPath) {
+    const NodeKey key{nodep, cellPath};
+    const auto it = s_nodes.find(key);
     if (it == s_nodes.end()) return nullptr;
     return it->second;
 }
 
-V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findMutable(AstNode* nodep) {
-    const auto it = s_nodes.find(nodep);
+V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findMutable(AstNode* nodep, const string& cellPath) {
+    const NodeKey key{nodep, cellPath};
+    const auto it = s_nodes.find(key);
     if (it == s_nodes.end()) return nullptr;
     return it->second;
 }
@@ -565,9 +571,11 @@ AstTypedef* V3LinkDotDepGraph::findSpecializedTypedef(const std::string& name,
 }
 
 V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, NodeType type,
-                                                                 AstNodeModule* ownerModp) {
+                                                                 AstNodeModule* ownerModp,
+                                                                 const string& cellPath) {
     if (!nodep) return nullptr;
-    auto it = s_nodes.find(nodep);
+    const NodeKey key{nodep, cellPath};
+    auto it = s_nodes.find(key);
     if (it != s_nodes.end()) return it->second;
 
     if (type == NodeType::PARAMTYPEDTYPE) {
@@ -577,12 +585,13 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
         // This handles the case where captureParamExpr creates a node before build() runs
         // with a different AST pointer but the same logical identity
         if (AstParamTypeDType* const ptdp = VN_CAST(nodep, ParamTypeDType)) {
-            DepNode* existingp = findByNameAndOwner(ptdp->name(), ownerModp, type);
+            DepNode* existingp = findByNameAndOwner(ptdp->name(), ownerModp, type, cellPath);
             if (existingp) {
                 // Register this AST pointer to map to the existing node
-                s_nodes[nodep] = existingp;
+                s_nodes[key] = existingp;
                 UINFO(5, "DEPGRAPH: PARAMTYPEDTYPE '" << ptdp->name()
-                          << "' reusing existing node in " << ownerModp->name() << endl);
+                          << "' reusing existing node in " << ownerModp->name()
+                          << " cellPath='" << cellPath << "'" << endl);
                 return existingp;
             }
         }
@@ -592,6 +601,7 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     depNodep->nodep = nodep;
     depNodep->nodeType = type;
     depNodep->ownerModp = ownerModp;
+    depNodep->cellPath = cellPath;
 
     // Capture initial width from AST during build phase
     // This is the only time we read from AST - resolution uses only DepNode state
@@ -645,11 +655,12 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
         break;
     }
 
-    s_nodes[nodep] = depNodep;
+    s_nodes[key] = depNodep;
     s_allNodes.push_back(depNodep);
 
     UINFO(9, "DEPGRAPH: created " << nodeTypeName(type) << " node '" << nodeName(depNodep)
               << "' owner=" << nodeOwnerName(depNodep)
+              << " cellPath='" << cellPath << "'"
               << " initialWidth=" << depNodep->initialWidth << endl);
 
     // For REFDTYPE nodes, look up cellName from the registry
@@ -674,11 +685,12 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
 }
 
 V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findByNameAndOwner(
-    const string& name, AstNodeModule* ownerModp, NodeType type) {
-    // Search for an existing node with the given name, owner, and type
+    const string& name, AstNodeModule* ownerModp, NodeType type, const string& cellPath) {
+    // Search for an existing node with the given name, owner, type, and cellPath
     for (DepNode* const nodep : s_allNodes) {
         if (!nodep || nodep->nodeType != type) continue;
         if (nodep->ownerModp != ownerModp) continue;
+        if (nodep->cellPath != cellPath) continue;
         if (nodeName(nodep) == name) return nodep;
     }
     return nullptr;
@@ -825,8 +837,13 @@ private:
         if (AstVar* const varp = nodep->varp()) {
             AstNodeModule* const varOwnerp = V3LinkDotDepGraph::findOwnerModule(varp);
             V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(varp);
+            // Use cellPath from m_depNode if variable is in the same module, else empty
+            // (cross-module refs to parent use parent's context which is determined by cell hierarchy)
+            const string& cellPath = (m_depNode && varOwnerp == m_depNode->ownerModp)
+                                         ? m_depNode->cellPath
+                                         : "";
             V3LinkDotDepGraph::DepNode* const targetp
-                = V3LinkDotDepGraph::findOrCreateNode(varp, type, varOwnerp);
+                = V3LinkDotDepGraph::findOrCreateNode(varp, type, varOwnerp, cellPath);
             V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         }
     }
@@ -900,9 +917,11 @@ private:
         if (!ownerp && isDetached && m_depNode && m_depNode->ownerModp) {
             ownerp = m_depNode->ownerModp;
         }
+        // Use cellPath from m_depNode for per-cell-context
+        const string& cellPath = m_depNode ? m_depNode->cellPath : "";
         // Null owner means compilation unit - that's valid, don't skip
         V3LinkDotDepGraph::DepNode* const targetp
-            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp);
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, ownerp, cellPath);
         // Skip edge if parent is PARAMTYPE and this REFDTYPE points back to the same PARAMTYPE
         // (would create a cycle). But if the REFDTYPE points to a DIFFERENT PARAMTYPE (e.g., in
         // a parent module), we DO need the edge to ensure proper resolution order.
@@ -914,7 +933,7 @@ private:
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
             V3LinkDotDepGraph::DepNode* const tdNodep
                 = V3LinkDotDepGraph::findOrCreateNode(
-                    tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                    tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, cellPath);
             V3LinkDotDepGraph::addEdge(targetp, tdNodep);
             UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> typedef '"
                       << tdp->name() << "' in "
@@ -943,7 +962,7 @@ private:
             } else {
                 V3LinkDotDepGraph::DepNode* const ptNodep
                     = V3LinkDotDepGraph::findOrCreateNode(
-                        targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp);
+                        targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp, cellPath);
                 // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
                 const bool isSelfRef = (m_depNode && m_depNode->nodep == targetPtdp);
                 if (!isSelfRef) {
@@ -962,10 +981,12 @@ private:
         // The ATTROF node will have its own dependencies on the source type
         AstNodeModule* ownerp = V3LinkDotDepGraph::findOwnerModule(nodep);
         if (!ownerp && m_depNode && m_depNode->ownerModp) ownerp = m_depNode->ownerModp;
+        // Use cellPath from m_depNode for per-cell-context
+        const string& cellPath = m_depNode ? m_depNode->cellPath : "";
         if (ownerp) {
             V3LinkDotDepGraph::DepNode* const attrNodep
                 = V3LinkDotDepGraph::findOrCreateNode(
-                    nodep, V3LinkDotDepGraph::NodeType::ATTROF, ownerp);
+                    nodep, V3LinkDotDepGraph::NodeType::ATTROF, ownerp, cellPath);
             V3LinkDotDepGraph::addEdge(m_depNode, attrNodep);
             UINFO(5, "DEPGRAPH: expr depends on ATTROF '" << nodep->attrType().ascii()
                       << "' in " << ownerp->name() << endl);
@@ -976,7 +997,7 @@ private:
                 if (!rdpOwnerp) rdpOwnerp = ownerp;
                 V3LinkDotDepGraph::DepNode* const rdpNodep
                     = V3LinkDotDepGraph::findOrCreateNode(
-                        rdp, V3LinkDotDepGraph::NodeType::REFDTYPE, rdpOwnerp);
+                        rdp, V3LinkDotDepGraph::NodeType::REFDTYPE, rdpOwnerp, cellPath);
                 V3LinkDotDepGraph::addEdge(attrNodep, rdpNodep);
                 UINFO(5, "DEPGRAPH: ATTROF '" << nodep->attrType().ascii()
                           << "' depends on REFDTYPE '" << rdp->name()
@@ -988,10 +1009,10 @@ private:
                     if (!tdOwnerp) tdOwnerp = rdpOwnerp;
                     V3LinkDotDepGraph::DepNode* tdNodep
                         = V3LinkDotDepGraph::findByNameAndOwner(
-                            tdp->name(), tdOwnerp, V3LinkDotDepGraph::NodeType::TYPEDEF);
+                            tdp->name(), tdOwnerp, V3LinkDotDepGraph::NodeType::TYPEDEF, cellPath);
                     if (!tdNodep) {
                         tdNodep = V3LinkDotDepGraph::findOrCreateNode(
-                            tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp);
+                            tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, cellPath);
                     }
                     V3LinkDotDepGraph::addEdge(rdpNodep, tdNodep);
                     UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
@@ -1008,11 +1029,11 @@ private:
                     // than the one that was already added to the DepGraph
                     V3LinkDotDepGraph::DepNode* ptdNodep
                         = V3LinkDotDepGraph::findByNameAndOwner(
-                            ptdp->name(), ptdOwnerp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE);
+                            ptdp->name(), ptdOwnerp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, cellPath);
                     if (!ptdNodep) {
                         // No existing node found, create one
                         ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
-                            ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                            ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp, cellPath);
                     } else {
                         UINFO(5, "DEPGRAPH: ATTROF using existing PARAMTYPEDTYPE node '"
                                   << ptdp->name() << "' in " << ptdOwnerp->name()
@@ -1046,6 +1067,7 @@ void V3LinkDotDepGraph::collectExpressionDeps(AstNode* exprp, DepNode* depNode,
 class DepGraphBuildVisitor final : public VNVisitorConst {
 private:
     AstNodeModule* m_modp = nullptr;  // Current module/interface
+    string m_cellPath;                // Current hierarchical cell path (e.g., "t.u_sub.u_inner")
     std::unordered_map<string, AstVar*> m_varsByName;  // Vars in current module
 
     void rebuildVarMap() {
@@ -1057,16 +1079,22 @@ private:
     }
 
     void visit(AstNodeModule* nodep) override {
-        // NEW ARCHITECTURE: Visit ALL modules including templates.
-        // DepGraph runs BEFORE V3Param creates specializations, so we must capture
-        // template module contents (typedefs, localparams, $bits expressions) to
-        // resolve the dependency chain. V3Param will then see resolved constants.
+        // NEW ARCHITECTURE: Template modules are visited in cell context (with cellPath).
+        // Skip template modules in top-level iteration - they'll be visited when we
+        // encounter the Cell that instantiates them, giving us the correct cellPath.
+        // Only visit non-template modules (like top module) at the top level.
         if (nodep->dead()) return;
+        if (m_cellPath.empty() && isTemplateModule(nodep)) {
+            UINFO(9, "DEPGRAPH: skipping template module " << nodep->name()
+                      << " in top-level iteration (will visit in cell context)" << endl);
+            return;
+        }
 
         VL_RESTORER(m_modp);
         m_modp = nodep;
         rebuildVarMap();
-        UINFO(9, "DEPGRAPH: visiting module " << nodep->name() << endl);
+        UINFO(9, "DEPGRAPH: visiting module " << nodep->name()
+                  << " cellPath='" << m_cellPath << "'" << endl);
 
         iterateChildrenConst(nodep);
     }
@@ -1078,7 +1106,7 @@ private:
 
         V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(nodep);
         V3LinkDotDepGraph::DepNode* const depNodep
-            = V3LinkDotDepGraph::findOrCreateNode(nodep, type, m_modp);
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, type, m_modp, m_cellPath);
 
         // If this is a specialized clone, inherit captured expression from original
         if (!depNodep->initialValuep) {
@@ -1254,7 +1282,7 @@ private:
         if (!m_modp) return;
 
         V3LinkDotDepGraph::DepNode* const depNodep
-            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::TYPEDEF, m_modp);
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::TYPEDEF, m_modp, m_cellPath);
 
         if (nodep->name() == "type_id") {
             AstRefDType* const childRefp = VN_CAST(nodep->subDTypep(), RefDType);
@@ -1325,7 +1353,7 @@ private:
                     ? V3LinkDotDepGraph::NodeType::UNIONDTYPE
                     : V3LinkDotDepGraph::NodeType::STRUCTDTYPE;
                 V3LinkDotDepGraph::DepNode* const uspNodep
-                    = V3LinkDotDepGraph::findOrCreateNode(usp, nodeType, m_modp);
+                    = V3LinkDotDepGraph::findOrCreateNode(usp, nodeType, m_modp, m_cellPath);
                 // Typedef depends on the struct/union
                 V3LinkDotDepGraph::addEdge(depNodep, uspNodep);
                 // Track member type dependencies (RefDType, PackArrayDType, etc.)
@@ -1732,8 +1760,16 @@ private:
         AstNodeModule* const childModp = nodep->modp();
         if (!childModp) return;
 
+        // Build the cellPath for this instantiation context
+        // e.g., if we're in "t" visiting cell "u_sub", cellPath becomes "t.u_sub"
+        const string parentCellPath = m_cellPath;
+        const string childCellPath = parentCellPath.empty()
+                                         ? (m_modp->name() + "." + nodep->name())
+                                         : (parentCellPath + "." + nodep->name());
+
         UINFO(9, "DEPGRAPH: visit Cell '" << nodep->name() << "' in " << m_modp->name()
-                  << " childModp=" << childModp->name() << endl);
+                  << " childModp=" << childModp->name()
+                  << " cellPath='" << childCellPath << "'" << endl);
 
         // Process parameter pins (paramsp) - these contain parameter overrides like #($bits(var))
         // This is CRITICAL: we must capture these BEFORE V3Param processes them
@@ -1743,13 +1779,15 @@ private:
             if (!childVarp->isGParam()) continue;
 
             UINFO(9, "DEPGRAPH: Cell '" << nodep->name() << "' param pin '" << pinp->name()
-                      << "' -> " << childVarp->name() << " in " << childModp->name() << endl);
+                      << "' -> " << childVarp->name() << " in " << childModp->name()
+                      << " cellPath='" << childCellPath << "'" << endl);
 
-            // Create node for child parameter (the GPARAM being overridden)
+            // Create node for child parameter (the GPARAM being overridden) with cellPath context
             V3LinkDotDepGraph::NodeType childType = V3LinkDotDepGraph::classifyVar(childVarp);
             V3LinkDotDepGraph::DepNode* const childNodep
-                = V3LinkDotDepGraph::findOrCreateNode(childVarp, childType, childModp);
+                = V3LinkDotDepGraph::findOrCreateNode(childVarp, childType, childModp, childCellPath);
             childNodep->cellp = nodep;
+            childNodep->pinp = pinp;  // Track the pin for FinalizeAST to update
 
             // The child param depends on the pin expression (which may reference parent params/lparams)
             // This creates the cross-module dependency edge
@@ -1766,7 +1804,8 @@ private:
                 if (AstConst* const constp = VN_CAST(exprp, Const)) {
                     childNodep->initialWidth = constp->width();
                     UINFO(5, "DEPGRAPH: Cell override const width=" << constp->width()
-                              << " for param '" << childVarp->name() << "'" << endl);
+                              << " for param '" << childVarp->name() << "'"
+                              << " cellPath='" << childCellPath << "'" << endl);
                 }
                 UINFO(9, "DEPGRAPH: Captured override expr for " << childVarp->name() << endl);
             }
@@ -1778,16 +1817,30 @@ private:
             AstVar* const childVarp = pinp->modVarp();
             if (!childVarp->isGParam()) continue;
 
-            // Create node for child parameter
+            // Create node for child parameter with cellPath context
             V3LinkDotDepGraph::NodeType childType = V3LinkDotDepGraph::classifyVar(childVarp);
             V3LinkDotDepGraph::DepNode* const childNodep
-                = V3LinkDotDepGraph::findOrCreateNode(childVarp, childType, childModp);
+                = V3LinkDotDepGraph::findOrCreateNode(childVarp, childType, childModp, childCellPath);
             childNodep->cellp = nodep;
+            childNodep->pinp = pinp;
 
             // The child param depends on the pin expression (which may reference parent params/lparams)
             if (AstNode* const exprp = pinp->exprp()) {
                 V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp);
             }
+        }
+
+        // Now visit the child module's contents in this cell's context
+        // This creates per-cell-context nodes for typedefs, structs, localparams, etc.
+        {
+            VL_RESTORER(m_modp);
+            VL_RESTORER(m_cellPath);
+            m_modp = childModp;
+            m_cellPath = childCellPath;
+            rebuildVarMap();
+            UINFO(9, "DEPGRAPH: entering child module " << childModp->name()
+                      << " with cellPath='" << m_cellPath << "'" << endl);
+            iterateChildrenConst(childModp);
         }
 
         iterateChildrenConst(nodep);
@@ -1798,7 +1851,7 @@ private:
 
         // findOrCreateNode handles registry lookup for cellName
         V3LinkDotDepGraph::DepNode* const depNodep
-            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp);
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp, m_cellPath);
 
         // If the REFDTYPE is a child of a PARAMTYPEDTYPE, try to get the full dotpath from
         // the PARAMTYPE's cell association (which has the complete path like "cca_io.tlb_io")
@@ -2195,14 +2248,14 @@ private:
 
         // Create ATTROF node in the graph
         V3LinkDotDepGraph::DepNode* const depNodep
-            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::ATTROF, m_modp);
+            = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::ATTROF, m_modp, m_cellPath);
 
         // Add dependency on the fromp (typically a RefDType for $bits(type))
         if (AstRefDType* const rdp = VN_CAST(nodep->fromp(), RefDType)) {
             AstNodeModule* rdpOwnerp = V3LinkDotDepGraph::findOwnerModule(rdp);
             if (!rdpOwnerp) rdpOwnerp = m_modp;
             V3LinkDotDepGraph::DepNode* const rdpNodep = V3LinkDotDepGraph::findOrCreateNode(
-                rdp, V3LinkDotDepGraph::NodeType::REFDTYPE, rdpOwnerp);
+                rdp, V3LinkDotDepGraph::NodeType::REFDTYPE, rdpOwnerp, m_cellPath);
             V3LinkDotDepGraph::addEdge(depNodep, rdpNodep);
             UINFO(5, "DEPGRAPH: ATTROF '" << nodep->attrType().ascii()
                       << "' depends on REFDTYPE '" << rdp->name()
@@ -2213,7 +2266,7 @@ private:
                 AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
                 if (!ptdOwnerp) ptdOwnerp = rdpOwnerp;
                 V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
-                    ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp);
+                    ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp, m_cellPath);
                 V3LinkDotDepGraph::addEdge(rdpNodep, ptdNodep);
                 UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
                           << "' depends on PARAMTYPEDTYPE '" << ptdp->name()
@@ -2231,7 +2284,7 @@ private:
 
         // Add function/task to dependency graph to track return type dependencies
         V3LinkDotDepGraph::DepNode* const depNodep = V3LinkDotDepGraph::findOrCreateNode(
-            nodep, V3LinkDotDepGraph::NodeType::FUNC, m_modp);
+            nodep, V3LinkDotDepGraph::NodeType::FUNC, m_modp, m_cellPath);
 
         // If function has a return type, add dependency edge
         if (nodep->isFunction() && nodep->fvarp()) {
@@ -2357,8 +2410,23 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
     for (DepNode* const depp : nodep->dependsOn) {
         if (!depp || !depp->resolved) continue;
 
-        // Propagate resolvedWidth
-        if (depp->resolvedWidth > 0 && nodep->resolvedWidth <= 0) {
+        // For STRUCTDTYPE/UNIONDTYPE, compute width from parameter VALUE, not bit width
+        // The struct width = sum of member widths, where members may use parameter values
+        if ((nodep->nodeType == NodeType::STRUCTDTYPE || nodep->nodeType == NodeType::UNIONDTYPE)
+            && (depp->nodeType == NodeType::GPARAM || depp->nodeType == NodeType::LPARAM)
+            && depp->resolvedValuep) {
+            if (AstConst* const constp = VN_CAST(depp->resolvedValuep, Const)) {
+                // The parameter value IS the struct member width
+                const int paramValue = constp->num().toSInt();
+                if (paramValue > 0 && nodep->resolvedWidth <= 0) {
+                    nodep->resolvedWidth = paramValue;
+                    UINFO(5, "DEPGRAPH: STRUCTDTYPE uses param VALUE " << paramValue
+                              << " from '" << nodeName(depp) << "' as width" << endl);
+                }
+            }
+        }
+        // For other nodes, propagate resolvedWidth normally
+        else if (depp->resolvedWidth > 0 && nodep->resolvedWidth <= 0) {
             nodep->resolvedWidth = depp->resolvedWidth;
             UINFO(5, "DEPGRAPH: propagate resolvedWidth " << depp->resolvedWidth
                       << " from '" << nodeName(depp) << "' to '" << nodeName(nodep) << "'" << endl);
