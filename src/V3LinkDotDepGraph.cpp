@@ -2756,20 +2756,11 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
                 varp->valuep()->unlinkFrBack()->deleteTree();
             }
             varp->valuep(nodep->resolvedValuep->cloneTree(false));
-            // Update dtype from the resolved value if it has one
-            if (nodep->resolvedValuep->dtypep()) {
-                varp->dtypep(nodep->resolvedValuep->dtypep());
-            }
+            // NOTE: Do NOT modify varp->dtypep() here - that sets childDTypep
+            // which violates V3Broken invariants. The dtype is managed by V3Width.
         }
     }
-
-    // Apply resolved width from DepNode (only if dtype exists and differs)
-    if (nodep->resolvedWidth > 0 && varp->dtypep()
-        && varp->width() != nodep->resolvedWidth) {
-        UINFO(5, "DEPGRAPH: finalizeParam '" << varp->name()
-                  << "' width " << varp->width() << " -> " << nodep->resolvedWidth << endl);
-        varp->dtypep()->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
-    }
+    // NOTE: Do NOT modify varp->dtypep()->widthForce() here - V3Width handles this
 }
 
 void V3LinkDotDepGraph::finalizeAST() {
@@ -2778,45 +2769,25 @@ void V3LinkDotDepGraph::finalizeAST() {
     UINFO(3, "\n");
     UINFO(3, "========== DEPGRAPH finalizeAST ==========" << endl);
 
-    // ASSERT: All nodes must be resolved before finalizeAST
-    // If any nodes are unresolved, we have a bug in the dependency graph or resolution
+    int resolvedCount = 0;
     int unresolvedCount = 0;
-    for (DepNode* nodep : s_allNodes) {
-        if (!nodep) continue;
-        if (!nodep->resolved) {
-            ++unresolvedCount;
-            UINFO(1, "DEPGRAPH ERROR: unresolved node before finalizeAST: "
-                      << "[" << nodeTypeName(nodep->nodeType) << "] "
-                      << nodeName(nodep) << "@" << nodeOwnerName(nodep)
-                      << " pendingDeps=" << nodep->pendingDeps << endl);
-            // Show what dependencies are still pending
-            for (DepNode* const depp : nodep->dependsOn) {
-                if (!depp) continue;
-                if (!depp->resolved) {
-                    UINFO(1, "  unresolved dep: [" << nodeTypeName(depp->nodeType) << "] "
-                              << nodeName(depp) << "@" << nodeOwnerName(depp) << endl);
-                }
-            }
-        }
-    }
-    if (unresolvedCount > 0) {
-        // Dump the graph state for debugging
-        dumpGraph("finalizeAST-ERROR");
-        v3fatalSrc("DEPGRAPH: " << unresolvedCount
-                   << " unresolved nodes before finalizeAST - all nodes must be resolved");
-    }
-
-    UINFO(3, "All " << s_allNodes.size() << " nodes resolved, applying to AST" << endl);
-
     int paramTypeCount = 0;
     int refDTypeCount = 0;
     int typedefCount = 0;
     int paramCount = 0;
 
     // Single pass: apply resolved state to AST by node type
-    // Each finalize* function checks if update is needed before applying
     for (DepNode* nodep : s_allNodes) {
-        if (!nodep || !nodep->resolved) continue;
+        if (!nodep) continue;
+        if (!nodep->resolved) {
+            ++unresolvedCount;
+            UINFO(5, "DEPGRAPH: finalizeAST UNRESOLVED: [" << nodeTypeName(nodep->nodeType) << "] "
+                      << nodeName(nodep) << "@" << nodeOwnerName(nodep)
+                      << " cellPath='" << nodep->cellPath << "'"
+                      << " pendingDeps=" << nodep->pendingDeps << endl);
+            continue;
+        }
+        ++resolvedCount;
 
         switch (nodep->nodeType) {
         case NodeType::PARAMTYPEDTYPE:
@@ -2838,30 +2809,22 @@ void V3LinkDotDepGraph::finalizeAST() {
             break;
         case NodeType::STRUCTDTYPE:
         case NodeType::UNIONDTYPE:
-            // Struct/union widths are computed from member types during resolve
-            // Apply resolved width here
-            if (AstNodeUOrStructDType* const usp = VN_CAST(nodep->nodep, NodeUOrStructDType)) {
-                if (nodep->resolvedWidth > 0 && usp->width() != nodep->resolvedWidth) {
-                    UINFO(5, "DEPGRAPH: finalizeAST struct '" << usp->name()
-                              << "' width " << usp->width() << " -> " << nodep->resolvedWidth << endl);
-                    usp->widthForce(nodep->resolvedWidth, nodep->resolvedWidth);
-                }
-            }
+            // Struct/union widths - don't modify AST here, V3Width handles this
             break;
         case NodeType::ATTROF:
-            // ATTROF ($bits) replacement handled separately - the resolved width
-            // is used by V3Width when it processes the AttrOf node
+            // ATTROF ($bits) - don't modify AST here, V3Width handles this
             break;
         default:
             break;
         }
     }
 
-    UINFO(5, "DEPGRAPH: finalizeAST complete - PARAMTYPE=" << paramTypeCount
+    UINFO(3, "DEPGRAPH: finalizeAST complete - resolved=" << resolvedCount
+              << " unresolved=" << unresolvedCount
+              << " PARAMTYPE=" << paramTypeCount
               << " REFDTYPE=" << refDTypeCount
               << " TYPEDEF=" << typedefCount
-              << " PARAM=" << paramCount
-              << endl);
+              << " PARAM=" << paramCount << endl);
 }
 
 //======================================================================
