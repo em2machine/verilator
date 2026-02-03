@@ -2996,8 +2996,11 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                       << "' to '" << nodeName(nodep) << "'" << endl);
         }
 
-        // Propagate resolvedValuep for value parameters
-        if (depp->resolvedValuep && !nodep->resolvedValuep) {
+        // Propagate resolvedValuep only to nodes that should have values
+        // (GPARAM, LPARAM, ATTROF) - NOT to type nodes (TYPEDEF, STRUCTDTYPE, REFDTYPE, etc.)
+        if (depp->resolvedValuep && !nodep->resolvedValuep
+            && (nodep->nodeType == NodeType::GPARAM || nodep->nodeType == NodeType::LPARAM
+                || nodep->nodeType == NodeType::ATTROF)) {
             nodep->resolvedValuep = depp->resolvedValuep;
             UINFO(5, "DEPGRAPH: propagate resolvedValuep from '" << nodeName(depp)
                       << "' to '" << nodeName(nodep) << "'" << endl);
@@ -3011,68 +3014,104 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
     if (nodep->nodeType == NodeType::TYPEDEF) {
         AstTypedef* const tdp = VN_CAST(nodep->nodep, Typedef);
         if (tdp && tdp->subDTypep()) {
-            // 1. Clone the typedef's subDTypep - get self-contained copy of entire type tree
-            AstNodeDType* const cloneDTypep = tdp->subDTypep()->cloneTree(false);
-
-            // 2. Build substitution map from resolved dependencies
-            ParamSubstVisitor substVisitor;
+            // Check if direct dependency is a STRUCTDTYPE/UNIONDTYPE with resolved width
+            // If so, use that width directly - the struct execution already computed it
+            bool usedStructWidth = false;
             for (DepNode* const depp : nodep->dependsOn) {
                 if (!depp || !depp->resolved) continue;
-
-                // Add parameter values (GPARAM, LPARAM)
-                if ((depp->nodeType == NodeType::GPARAM || depp->nodeType == NodeType::LPARAM)
-                    && depp->resolvedValuep) {
-                    const string paramName = nodeName(depp);
-                    AstNode* valuep = depp->resolvedValuep;
-
-                    // If it's a PATTERN, we need to process it through V3Width
-                    // to convert it to ConsPackUOrStruct
-                    if (AstPattern* const patp = VN_CAST(valuep, Pattern)) {
-                        // Get the dtype from the parameter variable
-                        AstVar* const varp = VN_CAST(depp->nodep, Var);
-                        if (varp && varp->dtypep()) {
-                            // Clone the pattern and set its dtype
-                            AstPattern* const clonePatp = patp->cloneTree(false);
-                            clonePatp->dtypep(varp->dtypep());
-                            // Process through V3Width to convert PATTERN -> ConsPackUOrStruct
-                            V3Width::widthParamsEdit(clonePatp);
-                            V3Const::constifyParamsEdit(clonePatp);
-                            // Use the processed value
-                            valuep = clonePatp;
-                            UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
-                                      << "' processed PATTERN for param " << paramName
-                                      << " -> " << valuep->typeName() << endl);
-                        }
+                if ((depp->nodeType == NodeType::STRUCTDTYPE || depp->nodeType == NodeType::UNIONDTYPE)
+                    && depp->resolvedWidth > 0) {
+                    // Use the struct's resolved width and type directly
+                    nodep->resolvedWidth = depp->resolvedWidth;
+                    if (depp->resolvedTypep) {
+                        nodep->resolvedTypep = depp->resolvedTypep;
+                    } else {
+                        nodep->resolvedTypep = tdp->subDTypep()->cloneTree(false);
+                        nodep->resolvedTypep->widthForce(depp->resolvedWidth, depp->resolvedWidth);
                     }
-
-                    substVisitor.addParam(paramName, valuep);
                     UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
-                              << "' adding param substitution: " << paramName << endl);
-                }
-
-                // Add typedef types
-                if (depp->nodeType == NodeType::TYPEDEF && depp->resolvedTypep) {
-                    const string typedefName = nodeName(depp);
-                    substVisitor.addTypedef(typedefName, depp->resolvedTypep);
-                    UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
-                              << "' adding typedef substitution: " << typedefName << endl);
+                              << "' using STRUCTDTYPE resolved width=" << nodep->resolvedWidth << endl);
+                    usedStructWidth = true;
+                    break;
                 }
             }
 
-            // 3. Run substitution on the cloned type tree
-            substVisitor.substitute(cloneDTypep);
+            if (!usedStructWidth) {
+                // 1. Clone the typedef's subDTypep - get self-contained copy of entire type tree
+                AstNodeDType* const cloneDTypep = tdp->subDTypep()->cloneTree(false);
 
-            // 4. Call V3Width and V3Const to evaluate the parameterized expressions
-            // This computes widths and folds constants
-            V3Width::widthParamsEdit(cloneDTypep);
-            V3Const::constifyParamsEdit(cloneDTypep);
+                // 2. Build substitution map from resolved dependencies
+                // We need to collect from TRANSITIVE dependencies, not just direct ones,
+                // because struct members reference typedefs through REFDTYPE nodes
+                ParamSubstVisitor substVisitor;
+                std::set<DepNode*> visited;
+                std::function<void(DepNode*)> collectSubstitutions = [&](DepNode* depp) {
+                    if (!depp || !depp->resolved || visited.count(depp)) return;
+                    visited.insert(depp);
 
-            // 5. Store results in DepNode
-            nodep->resolvedTypep = cloneDTypep;
-            nodep->resolvedWidth = cloneDTypep->width();
+                    // Add parameter values (GPARAM, LPARAM)
+                    if ((depp->nodeType == NodeType::GPARAM || depp->nodeType == NodeType::LPARAM)
+                        && depp->resolvedValuep) {
+                        const string paramName = nodeName(depp);
+                        AstNode* valuep = depp->resolvedValuep;
 
-            UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
-                      << "' built type with width=" << nodep->resolvedWidth << endl);
+                        // If it's a PATTERN, we need to process it through V3Width
+                        // to convert it to ConsPackUOrStruct
+                        if (AstPattern* const patp = VN_CAST(valuep, Pattern)) {
+                            // Get the dtype from the parameter variable
+                            AstVar* const varp = VN_CAST(depp->nodep, Var);
+                            if (varp && varp->dtypep()) {
+                                // Clone the pattern and set its dtype
+                                AstPattern* const clonePatp = patp->cloneTree(false);
+                                clonePatp->dtypep(varp->dtypep());
+                                // Process through V3Width to convert PATTERN -> ConsPackUOrStruct
+                                V3Width::widthParamsEdit(clonePatp);
+                                V3Const::constifyParamsEdit(clonePatp);
+                                // Use the processed value
+                                valuep = clonePatp;
+                                UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
+                                          << "' processed PATTERN for param " << paramName
+                                          << " -> " << valuep->typeName() << endl);
+                            }
+                        }
+
+                        substVisitor.addParam(paramName, valuep);
+                        UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
+                                  << "' adding param substitution: " << paramName << endl);
+                    }
+
+                    // Add typedef types
+                    if (depp->nodeType == NodeType::TYPEDEF && depp->resolvedTypep) {
+                        const string typedefName = nodeName(depp);
+                        substVisitor.addTypedef(typedefName, depp->resolvedTypep);
+                        UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
+                                  << "' adding typedef substitution: " << typedefName << endl);
+                    }
+
+                    // Recurse into transitive dependencies
+                    for (DepNode* const transDepp : depp->dependsOn) {
+                        collectSubstitutions(transDepp);
+                    }
+                };
+                for (DepNode* const depp : nodep->dependsOn) {
+                    collectSubstitutions(depp);
+                }
+
+                // 3. Run substitution on the cloned type tree
+                substVisitor.substitute(cloneDTypep);
+
+                // 4. Call V3Width and V3Const to evaluate the parameterized expressions
+                // This computes widths and folds constants
+                V3Width::widthParamsEdit(cloneDTypep);
+                V3Const::constifyParamsEdit(cloneDTypep);
+
+                // 5. Store results in DepNode
+                nodep->resolvedTypep = cloneDTypep;
+                nodep->resolvedWidth = cloneDTypep->width();
+
+                UINFO(5, "DEPGRAPH: TYPEDEF '" << tdp->name()
+                          << "' built type with width=" << nodep->resolvedWidth << endl);
+            }
         }
     }
 
