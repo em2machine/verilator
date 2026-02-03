@@ -371,8 +371,9 @@ void V3LinkDotDepGraph::dumpGraphDepsTree(const char* stageName) {
 
     UINFO(3, "DEPGRAPH: Boundary nodes (no dependencies - ready to execute):" << endl);
     for (DepNode* rootp : rootNodes) {
+        const string cellQualifier = rootp->cellPath.empty() ? "" : ("[" + rootp->cellPath + "]");
         UINFO(3, "DEPGRAPH:   [" << nodeTypeName(rootp->nodeType) << "] "
-                  << nodeName(rootp) << "@" << nodeOwnerName(rootp) << endl);
+                  << nodeName(rootp) << "@" << nodeOwnerName(rootp) << cellQualifier << endl);
     }
     UINFO(3, "DEPGRAPH: \n");
 
