@@ -157,10 +157,10 @@ static void process() {
         // Convert parseref's to varrefs, and other directly post parsing fixups
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
-        // Disable V3LinkDotIfaceCapture BEFORE linkDotPrimary (DepGraph replaces it).
-        // DepGraph is now the permanent default; IfaceCapture is slated for removal.
-        // This must happen before the primary pass to prevent IfaceCapture from running at all
-        V3LinkDotIfaceCapture::enable(false);
+        // Enable both DepGraph (for value resolution) and IfaceCapture (for AST pointer fixup)
+        // DepGraph resolves parameter values in dependency order
+        // IfaceCapture remaps typedef pointers when modules are cloned
+        V3LinkDotIfaceCapture::enable(true);
         V3LinkDotDepGraph::enable(true);
 
         // Cross-link dotted hierarchical references

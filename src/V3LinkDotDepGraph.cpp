@@ -535,6 +535,44 @@ static AstNodeModule* findConnectedIfaceModpFromPort(AstNodeModule* modp,
     return nullptr;
 }
 
+// Find connected interface cell name and parent cellPath for an interface port
+// Returns true if found, with connectedCellName and parentCellPath set
+static bool findConnectedIfaceCellPath(AstNodeModule* modp, const string& portName,
+                                       const string& currentCellPath,
+                                       string& connectedCellName, string& parentCellPath) {
+    if (!modp || portName.empty() || currentCellPath.empty()) return false;
+    // Get parent cellPath by removing last component
+    const size_t lastDot = currentCellPath.rfind('.');
+    if (lastDot == string::npos) return false;
+    parentCellPath = currentCellPath.substr(0, lastDot);
+    const string cellInstanceName = currentCellPath.substr(lastDot + 1);
+
+    AstNetlist* const rootp = v3Global.rootp();
+    if (!rootp) return false;
+    for (AstNodeModule* topmodp = rootp->modulesp(); topmodp; topmodp = VN_AS(topmodp->nextp(), NodeModule)) {
+        for (AstNode* stmtp = topmodp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            AstCell* const cellp = VN_CAST(stmtp, Cell);
+            if (!cellp || cellp->modp() != modp) continue;
+            if (cellp->name() != cellInstanceName) continue;
+            for (AstPin* pinp = cellp->pinsp(); pinp; pinp = VN_CAST(pinp->nextp(), Pin)) {
+                AstVar* const modVarp = pinp->modVarp();
+                if (!modVarp || modVarp->name() != portName) continue;
+                AstNode* exprp = pinp->exprp();
+                if (!exprp) continue;
+                while (AstNodePreSel* const preSelp = VN_CAST(exprp, NodePreSel)) exprp = preSelp->fromp();
+                if (AstVarRef* const varRefp = VN_CAST(exprp, VarRef)) {
+                    connectedCellName = varRefp->name();
+                    // Strip __Viftop suffix if present
+                    const size_t viftopPos = connectedCellName.find("__Viftop");
+                    if (viftopPos != string::npos) connectedCellName = connectedCellName.substr(0, viftopPos);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     switch (type) {
     case NodeType::GPARAM: return "GPARAM";
@@ -1070,73 +1108,68 @@ private:
         if (!isSelfRef) V3LinkDotDepGraph::addEdge(m_depNode, targetp);
         if (AstTypedef* const tdp = nodep->typedefp()) {
             AstNodeModule* const tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
-            // If typedef is in an interface and we're in a cell context, compute interface cellPath
+            // If typedef is in an interface, compute interface cellPath from dotted reference
             string tdCellPath = cellPath;
-            if (!cellPath.empty() && tdOwnerp && VN_IS(tdOwnerp, Iface) && m_depNode && m_depNode->ownerModp) {
-                // Find the connected interface instance from the parent module
-                const size_t lastDot = cellPath.rfind('.');
-                if (lastDot != string::npos) {
-                    const string parentPath = cellPath.substr(0, lastDot);
-                    const string cellInstanceName = cellPath.substr(lastDot + 1);
-                    // Find parent module
-                    const size_t parentLastDot = parentPath.rfind('.');
-                    const string parentModName = parentLastDot != string::npos
-                                                     ? parentPath.substr(parentLastDot + 1)
-                                                     : parentPath;
-                    AstNodeModule* parentModp = nullptr;
-                    for (const auto& pair : V3LinkDotDepGraph::s_nodes) {
-                        if (pair.second->ownerModp && pair.second->ownerModp->name() == parentModName) {
-                            parentModp = pair.second->ownerModp;
-                            break;
-                        }
-                    }
-                    if (parentModp) {
-                        // Find the cell and its interface port connection
-                        for (AstNode* stmtp = parentModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (!cellPath.empty() && tdOwnerp && VN_IS(tdOwnerp, Iface)) {
+                // Check if targetp has a cellName from dotted access (e.g., "sif" from "sif.data_t")
+                if (!targetp->cellName.empty()) {
+                    tdCellPath = cellPath + "." + targetp->cellName;
+                    UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF using interface cellPath '"
+                              << tdCellPath << "' from cellName '" << targetp->cellName << "'" << endl);
+                } else {
+                    // Try to find interface cell/port in current module that matches the typedef owner
+                    if (m_depNode && m_depNode->ownerModp) {
+                        bool found = false;
+                        // First, look for interface instances (cells)
+                        for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp && !found; stmtp = stmtp->nextp()) {
                             if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                                if (cellp->name() == cellInstanceName && cellp->modp() == m_depNode->ownerModp) {
-                                    // Look at pins to find interface connections
-                                    for (AstPin* pinp = cellp->pinsp(); pinp;
-                                         pinp = VN_AS(pinp->nextp(), Pin)) {
-                                        if (AstVarRef* const vrp = VN_CAST(pinp->exprp(), VarRef)) {
-                                            if (AstVar* const connVarp = vrp->varp()) {
-                                                AstIfaceRefDType* ifaceRefp = VN_CAST(connVarp->dtypep(), IfaceRefDType);
-                                                if (!ifaceRefp && connVarp->dtypep())
-                                                    ifaceRefp = VN_CAST(connVarp->dtypep()->skipRefp(), IfaceRefDType);
-                                                if (!ifaceRefp && connVarp->subDTypep())
-                                                    ifaceRefp = VN_CAST(connVarp->subDTypep(), IfaceRefDType);
-                                                if (!ifaceRefp && connVarp->childDTypep())
-                                                    ifaceRefp = VN_CAST(connVarp->childDTypep(), IfaceRefDType);
-                                                if (ifaceRefp) {
-                                                    AstNodeModule* connIfaceModp = nullptr;
-                                                    if (ifaceRefp->cellp() && ifaceRefp->cellp()->modp())
-                                                        connIfaceModp = ifaceRefp->cellp()->modp();
-                                                    else if (ifaceRefp->ifacep())
-                                                        connIfaceModp = ifaceRefp->ifacep();
-                                                    if (connIfaceModp) {
-                                                        string connBase = connIfaceModp->name();
-                                                        const size_t sp = connBase.find("__");
-                                                        if (sp != string::npos) connBase = connBase.substr(0, sp);
-                                                        string tdBase = tdOwnerp->name();
-                                                        const size_t tp = tdBase.find("__");
-                                                        if (tp != string::npos) tdBase = tdBase.substr(0, tp);
-                                                        if (connBase == tdBase) {
-                                                            string ifaceName = vrp->name();
-                                                            const size_t viftopPos = ifaceName.find("__Viftop");
-                                                            if (viftopPos != string::npos)
-                                                                ifaceName = ifaceName.substr(0, viftopPos);
-                                                            tdCellPath = parentPath + "." + ifaceName;
-                                                            UINFO(5, "DEPGRAPH: DepExprVisitor REFDTYPE->TYPEDEF using interface cellPath '"
-                                                                      << tdCellPath << "' for typedef '"
-                                                                      << tdp->name() << "'" << endl);
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                                    string cellModBase = cellp->modp()->name();
+                                    const size_t sp = cellModBase.find("__");
+                                    if (sp != string::npos) cellModBase = cellModBase.substr(0, sp);
+                                    string tdOwnerBase = tdOwnerp->name();
+                                    const size_t tp = tdOwnerBase.find("__");
+                                    if (tp != string::npos) tdOwnerBase = tdOwnerBase.substr(0, tp);
+                                    if (cellModBase == tdOwnerBase) {
+                                        tdCellPath = cellPath + "." + cellp->name();
+                                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF using interface cellPath '"
+                                                  << tdCellPath << "' from cell '" << cellp->name() << "'" << endl);
+                                        found = true;
+                                    }
+                                }
+                            }
+                        }
+                        // If not found, look for interface ports and trace through connection
+                        if (!found) {
+                            for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp && !found; stmtp = stmtp->nextp()) {
+                                if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                                    if (!varp->isIfaceRef()) continue;
+                                    AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                                    if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                                    if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
+                                    if (!ifaceRefp) continue;
+                                    AstNodeModule* ifaceModp = nullptr;
+                                    if (ifaceRefp->ifacep()) ifaceModp = ifaceRefp->ifacep();
+                                    else if (ifaceRefp->cellp() && ifaceRefp->cellp()->modp()) ifaceModp = ifaceRefp->cellp()->modp();
+                                    if (!ifaceModp) continue;
+                                    string ifaceModBase = ifaceModp->name();
+                                    const size_t sp = ifaceModBase.find("__");
+                                    if (sp != string::npos) ifaceModBase = ifaceModBase.substr(0, sp);
+                                    string tdOwnerBase = tdOwnerp->name();
+                                    const size_t tp = tdOwnerBase.find("__");
+                                    if (tp != string::npos) tdOwnerBase = tdOwnerBase.substr(0, tp);
+                                    if (ifaceModBase == tdOwnerBase) {
+                                        // Found matching interface port - trace through connection
+                                        string connectedCellName, parentCellPath;
+                                        if (findConnectedIfaceCellPath(m_depNode->ownerModp, varp->name(),
+                                                                       cellPath, connectedCellName, parentCellPath)) {
+                                            tdCellPath = parentCellPath + "." + connectedCellName;
+                                            UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF using interface cellPath '"
+                                                      << tdCellPath << "' from port '" << varp->name()
+                                                      << "' connected to '" << connectedCellName << "'" << endl);
+                                            found = true;
                                         }
                                     }
-                                    break;
                                 }
                             }
                         }
@@ -3272,12 +3305,11 @@ static void finalizeParamType(V3LinkDotDepGraph::DepNode* nodep) {
               << " resolvedTypep=" << nodep->resolvedTypep
               << endl);
 
-    // Apply resolved type from DepNode - only if different
-    if (nodep->resolvedTypep && ptdp->dtypep() != nodep->resolvedTypep) {
-        UINFO(5, "DEPGRAPH: finalizeParamType '" << ptdp->name()
-                  << "' updating dtypep" << endl);
-        ptdp->dtypep(nodep->resolvedTypep);
-    }
+    // Option B (Moderate): Do NOT replace dtypep with our built type.
+    // We only force widths here. V3Param will rebuild the types from
+    // the parameter constants we've already set.
+    // The resolvedTypep is kept in DepNode for internal use (e.g., propagating
+    // widths to downstream nodes) but not inserted into the AST.
 
     // Apply resolved width from DepNode - only if different
     if (nodep->resolvedWidth > 0 && ptdp->width() != nodep->resolvedWidth) {
@@ -3297,21 +3329,11 @@ static void finalizeRefDType(V3LinkDotDepGraph::DepNode* nodep) {
               << " resolvedTypedefp=" << nodep->resolvedTypedefp
               << endl);
 
-    // Apply resolved type from DepNode - only if different
-    if (nodep->resolvedTypep && rdp->refDTypep() != nodep->resolvedTypep) {
-        UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
-                  << "' updating refDTypep" << endl);
-        rdp->refDTypep(nodep->resolvedTypep);
-        rdp->typedefp(nullptr);
-    }
-
-    // Apply resolved typedef from DepNode - only if different
-    if (nodep->resolvedTypedefp && rdp->typedefp() != nodep->resolvedTypedefp) {
-        UINFO(5, "DEPGRAPH: finalizeRefDType '" << rdp->name()
-                  << "' updating typedefp" << endl);
-        rdp->typedefp(nodep->resolvedTypedefp);
-        rdp->refDTypep(nullptr);
-    }
+    // Option B (Moderate): Do NOT replace refDTypep/typedefp with our built type.
+    // We only force widths here. V3Param will rebuild the types from
+    // the parameter constants we've already set.
+    // The resolvedTypep is kept in DepNode for internal use (e.g., propagating
+    // widths to downstream nodes) but not inserted into the AST.
 
     // Apply resolved owner module from DepNode
     if (nodep->resolvedOwnerModp && rdp->classOrPackagep() != nodep->resolvedOwnerModp) {
@@ -3450,6 +3472,24 @@ void V3LinkDotDepGraph::finalizeAST() {
               << " REFDTYPE=" << refDTypeCount
               << " TYPEDEF=" << typedefCount
               << " PARAM=" << paramCount << endl);
+
+    // Clean up cloned nodes that were created during resolution
+    // These are stored in resolvedTypep but not attached to the AST
+    // V3Broken will fail if we leave dangling pointers to these nodes
+    int deletedCount = 0;
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep) continue;
+        if (nodep->resolvedTypep) {
+            // Only delete if it's a cloned node (not the original AST node)
+            // Check if it has no backp (not attached to AST)
+            if (!nodep->resolvedTypep->backp()) {
+                VL_DO_DANGLING(nodep->resolvedTypep->deleteTree(), nodep->resolvedTypep);
+                ++deletedCount;
+            }
+            nodep->resolvedTypep = nullptr;
+        }
+    }
+    UINFO(3, "DEPGRAPH: cleaned up " << deletedCount << " cloned type nodes" << endl);
 }
 
 //======================================================================
