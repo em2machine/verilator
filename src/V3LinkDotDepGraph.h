@@ -160,6 +160,14 @@ public:
     // Call this after resolve() completes
     static void finalizeAST();
 
+    // Apply resolved LPARAM values to a cloned module for a specific cell context
+    // Called by V3Param after cloning a module for a cell
+    // srcModp: the template module that was cloned
+    // newModp: the cloned module
+    // cellPath: the hierarchical path to the cell (e.g., "t.u_sub8")
+    static void applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
+                                     const std::string& cellPath);
+
     // Register cell association for a node (called from linkdot during primary pass)
     // This captures which cell a PARAMTYPEDTYPE references through
     // typedefName is the name of the typedef being referenced (e.g., "a_t" in "types.a_t")

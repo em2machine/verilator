@@ -1316,9 +1316,21 @@ private:
                                   << "' (via var '" << varp->name() << "') depends on REFDTYPE '"
                                   << rdp->name() << "' in " << rdpOwnerp->name() << endl);
 
+                        // Add edge from REFDTYPE to TYPEDEF if applicable
+                        if (AstTypedef* const tdp = rdp->typedefp()) {
+                            AstNodeModule* tdOwnerp = V3LinkDotDepGraph::findOwnerModule(tdp);
+                            if (!tdOwnerp) tdOwnerp = rdpOwnerp;
+                            V3LinkDotDepGraph::DepNode* tdNodep
+                                = V3LinkDotDepGraph::findOrCreateNode(
+                                    tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, cellPath);
+                            V3LinkDotDepGraph::addEdge(rdpNodep, tdNodep);
+                            UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
+                                      << "' (from ATTROF var) depends on TYPEDEF '"
+                                      << tdp->name() << "' in " << tdOwnerp->name() << endl);
+                        }
                         // Add edge from REFDTYPE to PARAMTYPE if applicable
                         // This ensures the dependency chain is complete
-                        if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
+                        else if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
                             AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
                             if (!ptdOwnerp) ptdOwnerp = rdpOwnerp;
                             V3LinkDotDepGraph::DepNode* ptdNodep
@@ -2200,6 +2212,28 @@ private:
                               << childPtdp->name() << " using parentCellPath='" << parentCellPath << "'" << endl);
                     V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath);
                 }
+
+                // For type parameter pins, capture the override type's width as initial state
+                // This handles cases like #(logic) where the type is a simple basic type
+                // with no dependencies - it's a boundary condition
+                // exprp() can be an AstNodeDType for type parameters
+                if (AstNodeDType* const dtypep = VN_CAST(pinp->exprp(), NodeDType)) {
+                    int width = dtypep->width();
+                    if (width <= 0) {
+                        // Try to get width from basic type keyword
+                        if (AstBasicDType* const bdtp = VN_CAST(dtypep, BasicDType)) {
+                            if (bdtp->keyword() == VBasicDTypeKwd::LOGIC
+                                || bdtp->keyword() == VBasicDTypeKwd::BIT) {
+                                width = 1;
+                            }
+                        }
+                    }
+                    if (width > 0 && childNodep->initialWidth <= 0) {
+                        childNodep->initialWidth = width;
+                        UINFO(5, "DEPGRAPH: type param pin '" << pinp->name()
+                                  << "' captured width=" << width << " from exprp dtype" << endl);
+                    }
+                }
             }
         }
 
@@ -2963,6 +2997,86 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         return;
     }
 
+    // Initialize resolved state from initial state (boundary conditions)
+    // This is important for nodes with no dependencies (roots of the graph)
+    // For boundary nodes (no dependsOn), the "input edge" is the AST node itself
+    // We read from the AST during execution, not just from cached initialWidth
+    if (nodep->dependsOn.empty()) {
+        // Boundary node - read current state from AST (the "input edge")
+        switch (nodep->nodeType) {
+        case NodeType::PARAMTYPEDTYPE: {
+            AstParamTypeDType* const ptdp = VN_CAST(nodep->nodep, ParamTypeDType);
+            if (ptdp) {
+                int width = 0;
+                // Try dtypep first (the resolved type)
+                if (ptdp->dtypep()) {
+                    width = ptdp->dtypep()->width();
+                    UINFO(5, "DEPGRAPH: PARAMTYPE '" << ptdp->name()
+                              << "' dtypep=" << ptdp->dtypep()->prettyTypeName()
+                              << " width=" << width << endl);
+                }
+                // Then try subDTypep (the default type)
+                if (width <= 0 && ptdp->subDTypep()) {
+                    width = ptdp->subDTypep()->width();
+                    UINFO(5, "DEPGRAPH: PARAMTYPE '" << ptdp->name()
+                              << "' subDTypep=" << ptdp->subDTypep()->prettyTypeName()
+                              << " width=" << width << endl);
+                    // For basic types like 'logic', width might be 0 but we know it's 1
+                    if (width <= 0) {
+                        if (AstBasicDType* const bdtp = VN_CAST(ptdp->subDTypep(), BasicDType)) {
+                            // Basic types have known widths even if not set
+                            if (bdtp->keyword() == VBasicDTypeKwd::LOGIC
+                                || bdtp->keyword() == VBasicDTypeKwd::BIT) {
+                                width = 1;  // Single-bit basic type
+                                UINFO(5, "DEPGRAPH: PARAMTYPE '" << ptdp->name()
+                                          << "' using default width=1 for basic type" << endl);
+                            }
+                        }
+                    }
+                }
+                if (width > 0) nodep->resolvedWidth = width;
+            }
+            break;
+        }
+        case NodeType::GPARAM:
+        case NodeType::LPARAM: {
+            // For GPARAMs, the value comes from the pin override (captured in initialValuep)
+            // For LPARAMs with no dependencies, use initialValuep if it's a constant
+            // Do NOT read from varp->valuep() as that's the default, not the override
+            if (nodep->initialWidth > 0 && nodep->resolvedWidth <= 0) {
+                nodep->resolvedWidth = nodep->initialWidth;
+            }
+            if (nodep->initialValuep && !nodep->resolvedValuep) {
+                if (VN_IS(nodep->initialValuep, Const)) {
+                    nodep->resolvedValuep = nodep->initialValuep;
+                }
+            }
+            break;
+        }
+        default:
+            // For other types, use cached initialWidth
+            if (nodep->initialWidth > 0 && nodep->resolvedWidth <= 0) {
+                nodep->resolvedWidth = nodep->initialWidth;
+            }
+            break;
+        }
+    } else if (nodep->initialWidth > 0 && nodep->resolvedWidth <= 0) {
+        // Non-boundary node - use cached initialWidth as fallback
+        nodep->resolvedWidth = nodep->initialWidth;
+    }
+    // Only copy initialValuep for boundary nodes (no dependencies)
+    // Nodes with dependencies should get their value from the dependency chain
+    if (nodep->initialValuep && !nodep->resolvedValuep && nodep->dependsOn.empty()) {
+        // Only use initialValuep if it's a constant - expressions like $bits()
+        // need to be computed from the dependency chain
+        if (VN_IS(nodep->initialValuep, Const)) {
+            nodep->resolvedValuep = nodep->initialValuep;
+        }
+    }
+    // NOTE: Do NOT copy initialTypep to resolvedTypep - initialTypep points to
+    // the original AST node which may be modified/deleted. resolvedTypep should
+    // only be set to cloned nodes created during resolution.
+
     // Read resolved state from parent DepNodes
     for (DepNode* const depp : nodep->dependsOn) {
         if (!depp || !depp->resolved) continue;
@@ -3490,9 +3604,17 @@ void V3LinkDotDepGraph::finalizeAST() {
             ++typedefCount;
             break;
         case NodeType::GPARAM:
-        case NodeType::LPARAM:
+            // GPARAMs can be finalized on template - V3Param will override from pins anyway
             finalizeParam(nodep);
             ++paramCount;
+            break;
+        case NodeType::LPARAM:
+            // LPARAMs with cell-context must be applied per-clone by V3Param
+            // Only finalize template LPARAMs (empty cellPath) here
+            if (nodep->cellPath.empty()) {
+                finalizeParam(nodep);
+                ++paramCount;
+            }
             break;
         case NodeType::STRUCTDTYPE:
         case NodeType::UNIONDTYPE:
@@ -3530,6 +3652,58 @@ void V3LinkDotDepGraph::finalizeAST() {
         }
     }
     UINFO(3, "DEPGRAPH: cleaned up " << deletedCount << " cloned type nodes" << endl);
+}
+
+//======================================================================
+// Apply resolved values to cloned module (called by V3Param after cloning)
+
+void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
+                                              const std::string& cellPath) {
+    if (!s_enabled) return;
+    if (cellPath.empty()) return;
+
+    UINFO(5, "DEPGRAPH: applyResolvedToClone srcMod=" << srcModp->name()
+              << " newMod=" << newModp->name() << " cellPath=" << cellPath << endl);
+
+    // Build a map from var name to cloned var in newModp
+    std::unordered_map<std::string, AstVar*> clonedVarsByName;
+    for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+            clonedVarsByName[varp->name()] = varp;
+        }
+    }
+
+    // Find all DepNodes for this cellPath and apply their resolved values
+    int appliedCount = 0;
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep || !nodep->resolved) continue;
+        if (nodep->cellPath != cellPath) continue;
+        if (nodep->ownerModp != srcModp) continue;
+
+        // Only apply LPARAMs (GPARAMs are handled by V3Param from pins)
+        if (nodep->nodeType == NodeType::LPARAM) {
+            AstVar* const srcVarp = VN_CAST(nodep->nodep, Var);
+            if (!srcVarp) continue;
+
+            // Find the corresponding var in the cloned module
+            const auto it = clonedVarsByName.find(srcVarp->name());
+            if (it == clonedVarsByName.end()) continue;
+            AstVar* const clonedVarp = it->second;
+
+            // Apply resolved value
+            if (nodep->resolvedValuep) {
+                UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
+                          << "' val=" << nodep->resolvedValuep << endl);
+                if (clonedVarp->valuep()) {
+                    clonedVarp->valuep()->unlinkFrBack()->deleteTree();
+                }
+                clonedVarp->valuep(nodep->resolvedValuep->cloneTree(false));
+                ++appliedCount;
+            }
+        }
+    }
+
+    UINFO(5, "DEPGRAPH: applyResolvedToClone applied " << appliedCount << " values" << endl);
 }
 
 //======================================================================

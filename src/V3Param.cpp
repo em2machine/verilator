@@ -945,6 +945,13 @@ class ParamProcessor final {
             }
         }
 
+        // Apply resolved LPARAM values from DepGraph for this cell context
+        // srcModp->someInstanceName() contains the cell path (e.g., "t.u_sub8")
+        if (V3LinkDotDepGraph::enabled()) {
+            V3LinkDotDepGraph::applyResolvedToClone(srcModp, newModp,
+                                                    srcModp->someInstanceName());
+        }
+
         // Restore captured localparam expressions for interfaces/classes
         // After parameters are assigned, restore original expressions.
         // Do NOT constify here - let the normal passes handle ordering.
