@@ -2230,6 +2230,8 @@ class WidthVisitor final : public VNVisitor {
                 // It's directly a type, e.g. "type(int)"
                 typeofDtp = iterateEditMoveDTypep(nodep, typeofDtp);  // Changes typeofp
                 nodep->refDTypep(typeofDtp);
+                UINFO(0, "V3Width: RefDType (typeof) refDTypep set to " << cvtToHex(nodep->refDTypep())
+                          << endl);
             } else {
                 // Type comes from expression's type, e.g. "type(variable)"
                 userIterateAndNext(nodep->typeofp(), WidthVP{SELF, BOTH}.p());
@@ -8724,10 +8726,16 @@ class WidthVisitor final : public VNVisitor {
             UASSERT_OBJ(dtnodep->didWidth(), parentp,
                         "iterateEditMoveDTypep didn't get width resolution of "
                             << dtnodep->prettyTypeName());
-            // Move to under netlist
+            // Move to under netlist (skip during DepGraph execution to prevent
+            // our cloned types from polluting the global type table)
             UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
             dtnodep->unlinkFrBack();
-            v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
+            UINFO(0, "V3Width: ADDING TO TYPE TABLE: " << dtnodep->prettyTypeName()
+                      << " ptr=" << cvtToHex(dtnodep)
+                      << " depGraphExec=" << V3LinkDotDepGraph::isExecuting() << endl);
+            if (!V3LinkDotDepGraph::isExecuting()) {
+                v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
+            }
         }
         if (!dtnodep->didWidth()) {
             UINFO(9, "iterateEditMoveDTypep pointer iterating " << dtnodep);

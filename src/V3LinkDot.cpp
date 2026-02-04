@@ -4067,6 +4067,17 @@ class LinkDotResolveVisitor final : public VNVisitor {
                                           << m_ds.m_dotText << "'\n");
                     }
 
+                    // Register dotpath for dependency graph - needed for interface typedef refs
+                    // e.g., typedef sub_io.data_t data_t; needs to know 'sub_io' is the cell
+                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
+                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
+                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellp->name(), m_modp);
+                        }
+                    } else if (!m_ds.m_dotText.empty()) {
+                        V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
+                    }
+
                     // Register cell association for dependency graph (captures cell path info)
                     // This handles typedefs that reference through interface ports like:
                     //   typedef io.types_mul.a_t a_mul_t;

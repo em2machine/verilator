@@ -105,6 +105,7 @@ private:
     static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
     static int s_iterationCount;             // Number of resolution iterations
     static bool s_enabled;                   // Is the graph active?
+    static bool s_executing;                 // Are we currently in DepGraph execution?
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
 
@@ -155,10 +156,18 @@ public:
     // Returns number of nodes resolved
     static int resolve();
 
+    // Check if DepGraph is currently in execution phase
+    // Used by V3Width to avoid adding cloned types to global type table
+    static bool isExecuting() { return s_executing; }
+
     // Finalize AST after resolution
     // This is the ONLY place that mutates the AST based on DepGraph results
     // Call this after resolve() completes
     static void finalizeAST();
+
+    // Cleanup cloned types after V3Param completes
+    // Call this after V3Param finishes to avoid dangling pointers in type table
+    static void cleanupClonedTypes();
 
     // Apply resolved LPARAM values to a cloned module for a specific cell context
     // Called by V3Param after cloning a module for a cell

@@ -185,6 +185,9 @@ static void process() {
         // No more AstGenCase/AstGenFor/AstGenIf after this
         V3Param::param(v3Global.rootp());
 
+        // Cleanup cloned types from DepGraph resolution after V3Param completes
+        V3LinkDotDepGraph::cleanupClonedTypes();
+
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs
         V3Error::abortIfErrors();
