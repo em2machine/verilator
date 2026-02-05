@@ -4072,78 +4072,21 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
                         AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
                         if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellp->name(), m_modp);
+                            // Use dotText (the identifier text) instead of cellp->name() because
+                            // cellp may be shared between template modules and have wrong name
+                            const string& cellName = m_ds.m_dotText.empty() ? cellp->name() : m_ds.m_dotText;
+                            UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath SITE1 CELL: refp="
+                                              << cvtToHex(refp) << " cellName=" << cellName
+                                              << " cellp=" << cvtToHex(cellp)
+                                              << " cellMod=" << (cellp->modp() ? cellp->modp()->name() : "<null>")
+                                              << " mod=" << (m_modp ? m_modp->name() : "<null>") << "\n");
+                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellName, m_modp);
                         }
                     } else if (!m_ds.m_dotText.empty()) {
+                        UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath SITE1 DOTTEXT: refp="
+                                          << cvtToHex(refp) << " dotText=" << m_ds.m_dotText
+                                          << " mod=" << (m_modp ? m_modp->name() : "<null>") << "\n");
                         V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
-                    }
-
-                    // Register cell association for dependency graph (captures cell path info)
-                    // This handles typedefs that reference through interface ports like:
-                    //   typedef io.types_mul.a_t a_mul_t;
-                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
-                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
-                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            // Find the enclosing PARAMTYPEDTYPE or typedef that will use this
-                            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                                if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
-                                    string assocCellName = cellp->name();
-                                    if (!m_ds.m_dotText.empty()
-                                        && m_ds.m_dotText.find('.') == string::npos) {
-                                        string dotBase = m_ds.m_dotText;
-                                        const size_t bra = dotBase.find("__BRA__");
-                                        if (bra != string::npos) dotBase = dotBase.substr(0, bra);
-                                        if (!dotBase.empty()) assocCellName = dotBase;
-                                    }
-                                    UINFO(5, indent() << "DEPGRAPH: register iface-cell assoc paramtype='"
-                                                      << ptdp->name() << "' cell='"
-                                                      << cellp->name() << "' typedef='"
-                                                      << defp->name() << "' in "
-                                                      << (m_modp ? m_modp->name() : "<null>") << "\n");
-                                    // Pass the typedef name from the reference (defp->name())
-                                    // Also pass the current module (m_modp) as the context module
-                                    V3LinkDotDepGraph::registerCellAssociation(
-                                        ptdp, cellp, defp->name(), m_modp, assocCellName);
-                                    break;
-                                }
-                                if (VN_IS(backp, NodeModule)) break;
-                            }
-                        }
-                    } else if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Var)) {
-                        // Typedef referenced through an interface port (Var), not a cell
-                        AstVar* const varp = VN_AS(m_ds.m_dotSymp->nodep(), Var);
-                        UINFO(5, indent() << "DEPGRAPH: iface-port check var='" << varp->name()
-                                          << "' dtype="
-                                          << (varp->dtypep() ? varp->dtypep()->typeName() : "<null>")
-                                          << " sub="
-                                          << (varp->subDTypep() ? varp->subDTypep()->typeName() : "<null>")
-                                          << " skip="
-                                          << ((varp->dtypep() && varp->dtypep()->skipRefp())
-                                                  ? varp->dtypep()->skipRefp()->typeName()
-                                                  : "<null>")
-                                          << "\n");
-                        auto hasIfaceRef = [](AstNodeDType* dtypep) -> bool {
-                            if (!dtypep) return false;
-                            if (VN_IS(dtypep, IfaceRefDType)) return true;
-                            if (dtypep->subDTypep() && VN_IS(dtypep->subDTypep(), IfaceRefDType)) return true;
-                            if (dtypep->skipRefp() && VN_IS(dtypep->skipRefp(), IfaceRefDType)) return true;
-                            return false;
-                        };
-                        if (hasIfaceRef(varp->dtypep()) || hasIfaceRef(varp->subDTypep())) {
-                            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                                if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
-                                    UINFO(5, indent() << "DEPGRAPH: register iface-port assoc paramtype='"
-                                                      << ptdp->name() << "' port='"
-                                                      << varp->name() << "' typedef='"
-                                                      << defp->name() << "' in "
-                                                      << (m_modp ? m_modp->name() : "<null>") << "\n");
-                                    V3LinkDotDepGraph::registerCellAssociation(
-                                        ptdp, nullptr, defp->name(), m_modp, varp->name());
-                                    break;
-                                }
-                                if (VN_IS(backp, NodeModule)) break;
-                            }
-                        }
                     }
 
                     if (VN_IS(nodep->backp(), SelExtract)) {
@@ -4161,9 +4104,18 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
                         AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
                         if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+                            UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath CELL path: refp="
+                                              << cvtToHex(refp) << " cellName=" << cellp->name()
+                                              << " mod=" << (m_modp ? m_modp->name() : "<null>")
+                                              << " dotText=" << m_ds.m_dotText << "\n");
                             V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellp->name(), m_modp);
                         }
                     } else if (!m_ds.m_dotText.empty()) {
+                        UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath DOTTEXT path: refp="
+                                          << cvtToHex(refp) << " dotText=" << m_ds.m_dotText
+                                          << " mod=" << (m_modp ? m_modp->name() : "<null>")
+                                          << " dotSymp=" << (m_ds.m_dotSymp ? m_ds.m_dotSymp->nodep()->typeName() : "<null>")
+                                          << "\n");
                         V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
                     }
 
@@ -4173,40 +4125,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                         m_modp, nodep,
                         [this](AstVar* v, AstRefDType* r) { return promoteVarToParamType(v, r); },
                         [this]() { return indent(); });
-
-                    // Register cell association for dependency graph when a PARAMTYPEDTYPE
-                    // references another PARAMTYPEDTYPE through a cell (e.g., typedef types.a_t a_t;)
-                    // We need to find the enclosing PARAMTYPEDTYPE in the current module
-                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
-                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
-                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            // Find the enclosing PARAMTYPEDTYPE in the current module
-                            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                                if (AstParamTypeDType* const ptdp = VN_CAST(backp, ParamTypeDType)) {
-                                    auto findOwnerModule = [](AstNode* nodep) -> AstNodeModule* {
-                                        for (AstNode* curp = nodep; curp; curp = curp->backp()) {
-                                            if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
-                                        }
-                                        return nullptr;
-                                    };
-                                    string assocCellName = cellp->name();
-                                    if (m_modp && findOwnerModule(cellp) != m_modp) {
-                                        if (!m_ds.m_dotText.empty()) assocCellName = m_ds.m_dotText;
-                                    }
-                                    UINFO(5, indent() << "DEPGRAPH: register paramtype assoc paramtype='"
-                                                      << ptdp->name() << "' cell='"
-                                                      << assocCellName << "' typedef='"
-                                                      << defp->name() << "' in "
-                                                      << (m_modp ? m_modp->name() : "<null>") << "\n");
-                                    // Register with the enclosing PARAMTYPEDTYPE and current module
-                                    V3LinkDotDepGraph::registerCellAssociation(
-                                        ptdp, cellp, defp->name(), m_modp, assocCellName);
-                                    break;
-                                }
-                                if (VN_IS(backp, NodeModule)) break;
-                            }
-                        }
-                    }
 
                     replaceWithCheckBreak(nodep, refp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);

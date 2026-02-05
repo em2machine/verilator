@@ -177,14 +177,10 @@ public:
     static void applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
                                      const std::string& cellPath);
 
-    // Register cell association for a node (called from linkdot during primary pass)
-    // This captures which cell a PARAMTYPEDTYPE references through
-    // typedefName is the name of the typedef being referenced (e.g., "a_t" in "types.a_t")
-    // contextModp is the module where the typedef reference is made (may differ from PARAMTYPEDTYPE owner)
-    static void registerCellAssociation(AstNode* nodep, AstCell* cellp,
-                                        const string& typedefName,
-                                        AstNodeModule* contextModp = nullptr,
-                                        const string& assocCellName = "");
+    // Register cell association for interface port -> connected interface instance
+    // portPath: hierarchical path to the interface port (e.g., "t.u_subA.io")
+    // ifaceCellPath: hierarchical path to the connected interface instance (e.g., "t.subA_io")
+    static void registerCellAssociation(const std::string& portPath, const std::string& ifaceCellPath);
     // Register transient cell context for RefDType created from dotted datatype references
     static void registerRefDTypeDotPath(AstRefDType* refp, const std::string& cellName,
                                         AstNodeModule* contextModp = nullptr);

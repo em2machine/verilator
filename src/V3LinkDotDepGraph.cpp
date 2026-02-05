@@ -40,21 +40,9 @@ std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
 static std::unordered_map<AstRefDType*, AstTypedef*> s_refDTypeScopedTypedefs;
 static std::unordered_map<AstTypedef*, AstTypedef*> s_typedefScopedTypedefs;
 
-// Map from (module name, paramtype name) to cell name (captured during linkdot primary)
-// We use names instead of pointers because nodes get cloned during V3Param
-struct CellAssocKey {
-    string moduleName;
-    string paramTypeName;
-    bool operator==(const CellAssocKey& o) const {
-        return moduleName == o.moduleName && paramTypeName == o.paramTypeName;
-    }
-};
-struct CellAssocKeyHash {
-    size_t operator()(const CellAssocKey& k) const {
-        return std::hash<string>()(k.moduleName) ^ (std::hash<string>()(k.paramTypeName) << 1);
-    }
-};
-static std::unordered_map<CellAssocKey, string, CellAssocKeyHash> s_cellAssociations{};
+// Map from hierarchical port path to connected interface instance cell path
+// e.g., "t.u_subA.io" -> "t.subA_io"
+static std::unordered_map<string, string> s_cellAssociations{};
 
 //======================================================================
 // Helper methods
@@ -606,6 +594,54 @@ static bool findConnectedIfaceCellPath(AstNodeModule* modp, const string& portNa
     return false;
 }
 
+// Resolve a cellPath (potentially with dots) to a module, traversing interface ports
+static AstNodeModule* resolveCellPathModule(AstNodeModule* modp, const string& cellPath) {
+    if (!modp) return nullptr;
+
+    AstNodeModule* curModp = modp;
+    size_t start = 0;
+    while (start < cellPath.size()) {
+        const size_t dotPos = cellPath.find('.', start);
+        const string seg = (dotPos == string::npos)
+                               ? cellPath.substr(start)
+                               : cellPath.substr(start, dotPos - start);
+        if (seg.empty()) return nullptr;
+
+        AstNodeModule* nextModp = nullptr;
+
+        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
+            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                if (varp->name() != seg) continue;
+                AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
+                if (!ifaceRefp) continue;
+                if (AstNodeModule* const connected = findConnectedIfaceModpFromPort(curModp, seg)) {
+                    nextModp = connected;
+                } else if (ifaceRefp->cellp() && ifaceRefp->cellp()->modp()) {
+                    nextModp = ifaceRefp->cellp()->modp();
+                } else if (ifaceRefp->ifacep()) {
+                    nextModp = ifaceRefp->ifacep();
+                }
+            }
+        }
+
+        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
+            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                if (cellp->name() == seg && cellp->modp()) nextModp = cellp->modp();
+            }
+        }
+
+        if (!nextModp) return nullptr;
+        curModp = nextModp;
+
+        if (dotPos == string::npos) break;
+        start = dotPos + 1;
+    }
+
+    return curModp;
+}
+
 const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     switch (type) {
     case NodeType::GPARAM: return "GPARAM";
@@ -672,7 +708,8 @@ void V3LinkDotDepGraph::resetAll() {
 
 void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
                                                 AstNodeModule* contextModp) {
-    if (!refp || cellName.empty()) return;
+    UASSERT_OBJ(refp, refp, "registerRefDTypeDotPath called with null refdtype");
+    UASSERT_OBJ(!cellName.empty(), refp, "registerRefDTypeDotPath called with empty cellName for '" << refp->name() << "'");
     auto it = s_refDTypeDotPathRegistry.find(refp);
     if (it != s_refDTypeDotPathRegistry.end()) {
         UASSERT_OBJ(it->second == cellName, refp,
@@ -692,51 +729,27 @@ void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string&
 }
 
 void V3LinkDotDepGraph::registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp) {
-    if (!refp || !tdp) return;
+    UASSERT_OBJ(refp, refp, "registerRefDTypeScopedTypedef called with null refdtype");
+    UASSERT_OBJ(tdp, refp, "registerRefDTypeScopedTypedef called with null typedef for '" << refp->name() << "'");
     s_refDTypeScopedTypedefs[refp] = tdp;
     UINFO(5, "DEPGRAPH: registered refdtype scoped typedef '" << refp->name()
               << "' -> '" << tdp->name() << "'" << endl);
 }
 
 void V3LinkDotDepGraph::registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp) {
-    if (!typedefp || !scopedp) return;
+    UASSERT_OBJ(typedefp, typedefp, "registerTypedefScopedTypedef called with null typedef");
+    UASSERT_OBJ(scopedp, typedefp, "registerTypedefScopedTypedef called with null scoped typedef for '" << typedefp->name() << "'");
     s_typedefScopedTypedefs[typedefp] = scopedp;
     UINFO(5, "DEPGRAPH: registered typedef scoped typedef '" << typedefp->name()
               << "' -> '" << scopedp->name() << "'" << endl);
 }
 
-void V3LinkDotDepGraph::registerCellAssociation(AstNode* nodep, AstCell* cellp,
-                                                const string& typedefName,
-                                                AstNodeModule* contextModp,
-                                                const string& assocCellName) {
-    UINFO(5, "DEPGRAPH: register assoc request typedef='" << typedefName
-              << "' assocCell='" << assocCellName
-              << "' context=" << (contextModp ? contextModp->name() : "<null>") << "\n");
-    // Use contextModp if provided, otherwise find owner from node
-    AstNodeModule* const ownerModp = contextModp ? contextModp : findOwnerModule(nodep);
-    if (!ownerModp) return;
-
-    // Get the paramtype name
-    string paramTypeName;
-    if (AstParamTypeDType* const ptdp = VN_CAST(nodep, ParamTypeDType)) {
-        paramTypeName = ptdp->name();
-    } else {
-        return;  // Only handle PARAMTYPEDTYPEs for now
-    }
-
-    // Store as "cellName:typedefName"
-    // The typedefName is passed from the caller who knows the actual typedef being referenced
-    CellAssocKey key{ownerModp->name(), paramTypeName};
-    string assocName = assocCellName;
-    if (assocName.empty() && cellp) assocName = cellp->name();
-    const size_t bra = assocName.find("__BRA__");
-    if (bra != string::npos) assocName = assocName.substr(0, bra);
-    if (assocName.empty()) return;
-    string newAssoc = assocName + ":" + typedefName;
-    s_cellAssociations[key] = newAssoc;
-    UINFO(5, "DEPGRAPH: registered cell association for " << ownerModp->name()
-              << "::" << paramTypeName << " -> cell '" << assocName
-              << "' typedef '" << typedefName << "'" << endl);
+void V3LinkDotDepGraph::registerCellAssociation(const string& portPath, const string& ifaceCellPath) {
+    UINFO(5, "DEPGRAPH: register cell assoc portPath='" << portPath
+              << "' -> ifaceCellPath='" << ifaceCellPath << "'" << endl);
+    UASSERT(!portPath.empty(), "registerCellAssociation called with empty portPath");
+    UASSERT(!ifaceCellPath.empty(), "registerCellAssociation called with empty ifaceCellPath");
+    s_cellAssociations[portPath] = ifaceCellPath;
 }
 
 const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::find(AstNode* nodep, const string& cellPath) {
@@ -931,104 +944,6 @@ void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
     }
 }
 
-void V3LinkDotDepGraph::forEach(const std::function<void(const DepNode&)>& fn) {
-    for (const DepNode* nodep : s_allNodes) fn(*nodep);
-}
-
-//======================================================================
-// Helper to recursively search for typedef/paramtype in nested interface cells
-
-// Search for a typedef or paramtype named 'typedefName' in a cell named 'cellName'
-// within the given module, recursively searching nested interface cells up to maxDepth
-static void findTypedefInHierarchy(AstNodeModule* modp, const string& cellName,
-                                   const string& typedefName, int maxDepth,
-                                   AstTypedef*& targetTdp, AstParamTypeDType*& targetPtdp,
-                                   AstNodeModule*& targetModp) {
-    if (!modp || maxDepth <= 0 || targetTdp || targetPtdp) return;
-
-    // Search cells in this module
-    for (AstNode* stmtp = modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
-        if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-            if (cellp->name() == cellName && cellp->modp()) {
-                // Found the cell - look for typedef/paramtype in cell's module
-                for (AstNode* childStmtp = cellp->modp()->stmtsp(); childStmtp; childStmtp = childStmtp->nextp()) {
-                    if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
-                        if (tdp->name() == typedefName) {
-                            targetTdp = tdp;
-                            targetModp = cellp->modp();
-                            UINFO(5, "DEPGRAPH: found typedef '" << typedefName
-                                      << "' in cell '" << cellName << "' at depth "
-                                      << maxDepth << " in " << cellp->modp()->name() << endl);
-                            return;
-                        }
-                    } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
-                        if (ptdp->name() == typedefName) {
-                            targetPtdp = ptdp;
-                            targetModp = cellp->modp();
-                            UINFO(5, "DEPGRAPH: found paramtype '" << typedefName
-                                      << "' in cell '" << cellName << "' at depth "
-                                      << maxDepth << " in " << cellp->modp()->name() << endl);
-                            return;
-                        }
-                    }
-                }
-            }
-            // Recursively search in interface cells
-            if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                findTypedefInHierarchy(cellp->modp(), cellName, typedefName, maxDepth - 1,
-                                       targetTdp, targetPtdp, targetModp);
-            }
-        }
-    }
-}
-
-static AstNodeModule* resolveCellPathModule(AstNodeModule* modp, const string& cellPath) {
-    if (!modp) return nullptr;
-
-    AstNodeModule* curModp = modp;
-    size_t start = 0;
-    while (start < cellPath.size()) {
-        const size_t dotPos = cellPath.find('.', start);
-        const string seg = (dotPos == string::npos)
-                               ? cellPath.substr(start)
-                               : cellPath.substr(start, dotPos - start);
-        if (seg.empty()) return nullptr;
-
-        AstNodeModule* nextModp = nullptr;
-
-        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
-            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                if (varp->name() != seg) continue;
-                AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
-                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
-                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
-                if (!ifaceRefp) continue;
-                if (AstNodeModule* const connected = findConnectedIfaceModpFromPort(curModp, seg)) {
-                    nextModp = connected;
-                } else if (ifaceRefp->cellp() && ifaceRefp->cellp()->modp()) {
-                    nextModp = ifaceRefp->cellp()->modp();
-                } else if (ifaceRefp->ifacep()) {
-                    nextModp = ifaceRefp->ifacep();
-                }
-            }
-        }
-
-        for (AstNode* stmtp = curModp->stmtsp(); stmtp && !nextModp; stmtp = stmtp->nextp()) {
-            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                if (cellp->name() == seg && cellp->modp()) nextModp = cellp->modp();
-            }
-        }
-
-        if (!nextModp) return nullptr;
-        curModp = nextModp;
-
-        if (dotPos == string::npos) break;
-        start = dotPos + 1;
-    }
-
-    return curModp;
-}
-
 //======================================================================
 // Graph building
 
@@ -1151,26 +1066,38 @@ private:
                       << " targetp->cellName='" << targetp->cellName << "'"
                       << " ownerp=" << (ownerp ? ownerp->name() : "<null>") << endl);
             if (tdOwnerp && VN_IS(tdOwnerp, Iface)) {
-                // Check if targetp has a cellName from dotted access (e.g., "sif" from "sif.data_t")
+                // Check if targetp has a cellName from dotted access (e.g., "io" from "io.data_t")
                 if (!targetp->cellName.empty()) {
-                    // The cellName is the interface cell that a port is connected to.
-                    // This cell exists in the PARENT module, not the current module.
-                    // For cellPath='t.u_sub' with cellName='sub_io', the interface cell
-                    // is in module 't', so we need parent cellPath 't' + '.' + 'sub_io' = 't.sub_io'
-                    if (cellPath.empty() && ownerp) {
-                        // Top module case: use owner module name as base
-                        tdCellPath = ownerp->name() + "." + targetp->cellName;
-                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF top module case: tdCellPath='" << tdCellPath << "'" << endl);
-                    } else {
-                        // Nested module case: use parent cellPath (remove last component)
-                        const size_t lastDot = cellPath.rfind('.');
-                        string parentCellPath = (lastDot != string::npos) ? cellPath.substr(0, lastDot) : cellPath;
-                        tdCellPath = parentCellPath + "." + targetp->cellName;
-                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF nested case: cellPath='" << cellPath
-                                  << "' parentCellPath='" << parentCellPath << "'" << endl);
+                    // The cellName is the interface PORT name (e.g., "io").
+                    // We need to find which interface INSTANCE is connected to this port.
+                    // Use m_depNode->cellPath for the current cell context (e.g., "t.u_subA")
+                    // Build portPath: cellContext + "." + portName = "t.u_subA.io"
+                    // Look up in s_cellAssociations to get the connected interface instance path
+
+                    string cellContext;
+                    if (m_depNode && !m_depNode->cellPath.empty()) {
+                        cellContext = m_depNode->cellPath;
+                    } else if (!cellPath.empty()) {
+                        cellContext = cellPath;
+                    } else if (ownerp) {
+                        cellContext = ownerp->name();
                     }
-                    UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF using interface cellPath '"
-                              << tdCellPath << "' from cellName '" << targetp->cellName << "'" << endl);
+
+                    const string portPath = cellContext + "." + targetp->cellName;
+                    UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF looking up portPath='" << portPath << "'" << endl);
+
+                    // Look up the connected interface instance cellPath
+                    const auto assocIt = s_cellAssociations.find(portPath);
+                    if (assocIt != s_cellAssociations.end()) {
+                        tdCellPath = assocIt->second;
+                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF found cell association: portPath='"
+                                  << portPath << "' -> ifaceCellPath='" << tdCellPath << "'" << endl);
+                    } else {
+                        // Fallback: use cellContext + cellName directly
+                        tdCellPath = cellContext + "." + targetp->cellName;
+                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF no cell association for portPath='"
+                                  << portPath << "', using fallback tdCellPath='" << tdCellPath << "'" << endl);
+                    }
                 } else if (!cellPath.empty()) {
                     // Try to find interface cell/port in current module that matches the typedef owner
                     if (m_depNode && m_depNode->ownerModp) {
@@ -1231,9 +1158,40 @@ private:
                     }
                 }
             }
-            V3LinkDotDepGraph::DepNode* const tdNodep
-                = V3LinkDotDepGraph::findOrCreateNode(
+            // For modules with interface port references, find the correct instantiated typedef
+            // The tdCellPath was already computed above from targetp->cellName (the resolved
+            // interface instance name like 'subA_io'). We use findByNameAndOwner to find an
+            // existing TYPEDEF node at that cellPath, or fall back to findOrCreateNode.
+            V3LinkDotDepGraph::DepNode* tdNodep = nullptr;
+
+            // If the typedef is in an interface and we have a cellName (dotted reference),
+            // look for the instantiated typedef at the computed tdCellPath
+            const bool isIfaceRef = (tdOwnerp && VN_IS(tdOwnerp, Iface)
+                                     && !targetp->cellName.empty());
+
+            if (isIfaceRef) {
+                // tdCellPath was computed above as the full path to the interface instance
+                // e.g., "t.subA_io" for typedef io.data_t in subA connected to subA_io
+                UINFO(5, "DEPGRAPH: Looking for interface typedef at tdCellPath='" << tdCellPath << "'" << endl);
+
+                // First try to find an existing TYPEDEF node at this cellPath
+                tdNodep = V3LinkDotDepGraph::findByNameAndOwner(
+                    tdp->name(), tdOwnerp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdCellPath);
+
+                if (!tdNodep) {
+                    // Node doesn't exist yet, create it
+                    tdNodep = V3LinkDotDepGraph::findOrCreateNode(
+                        tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, tdCellPath);
+                }
+                UINFO(5, "DEPGRAPH: Found/created interface typedef node at '" << tdCellPath << "'" << endl);
+            } else {
+                // For non-interface-typedef refs, create/find the node normally
+                tdNodep = V3LinkDotDepGraph::findOrCreateNode(
                     tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, tdCellPath);
+            }
+
+            UASSERT(tdNodep, "tdNodep is null for refdtype '" << nodep->name() << "'");
+
             V3LinkDotDepGraph::addEdge(targetp, tdNodep);
             UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> typedef '"
                       << tdp->name() << "' in "
@@ -1418,6 +1376,110 @@ void V3LinkDotDepGraph::collectExpressionDeps(AstNode* exprp, DepNode* depNode,
     if (!exprp || !depNode) return;
     DepExprVisitor{exprp, depNode, cellPathOverride};
 }
+
+//======================================================================
+// CellAssocDiscoveryVisitor - Discovers and registers interface port ->
+// interface instance associations BEFORE the main DepGraph build.
+// This ensures s_cellAssociations is fully populated for lookups during
+// DepGraphBuildVisitor::visit(AstRefDType*).
+
+class CellAssocDiscoveryVisitor final : public VNVisitorConst {
+private:
+    AstNodeModule* m_modp = nullptr;  // Current module
+    string m_cellPath;                // Current hierarchical cell path
+
+    void visit(AstNodeModule* nodep) override {
+        if (nodep->dead()) return;
+        if (m_cellPath.empty()) {
+            // At top-level, only process top module and packages
+            const bool isTop = nodep->isTop();
+            const bool isPackage = VN_IS(nodep, Package);
+            if (!isTop && !isPackage) return;
+        }
+
+        VL_RESTORER(m_modp);
+        m_modp = nodep;
+        iterateChildrenConst(nodep);
+    }
+
+    void visit(AstCell* nodep) override {
+        if (!m_modp) return;
+        AstNodeModule* const childModp = nodep->modp();
+        if (!childModp) return;
+
+        // Build the cellPath for this instantiation
+        const string parentCellPath = m_cellPath;
+        const string childCellPath = parentCellPath.empty()
+                                         ? (m_modp->name() + "." + nodep->name())
+                                         : (parentCellPath + "." + nodep->name());
+
+        // Process port pins (pinsp) - these contain interface port connections
+        for (AstPin* pinp = nodep->pinsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+            if (!pinp->modVarp()) continue;
+            AstVar* const childVarp = pinp->modVarp();
+
+            // Check if this is an interface port (not a regular port)
+            // Interface ports have isIfaceRef() or have IfaceRefDType
+            bool isIfacePort = childVarp->isIfaceRef();
+            if (!isIfacePort) {
+                AstIfaceRefDType* ifaceRefp = findIfaceRefDType(childVarp->dtypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(childVarp->subDTypep());
+                if (!ifaceRefp) ifaceRefp = findIfaceRefDType(childVarp->childDTypep());
+                isIfacePort = (ifaceRefp != nullptr);
+            }
+
+            if (!isIfacePort) continue;
+
+            // Get the port name (the interface port in the child module)
+            const string& portName = childVarp->name();
+
+            // Find the connected interface instance from the parent module
+            if (AstNode* exprp = pinp->exprp()) {
+                // Strip through NodePreSel if present
+                while (AstNodePreSel* const preSelp = VN_CAST(exprp, NodePreSel)) {
+                    exprp = preSelp->fromp();
+                }
+
+                if (AstVarRef* const vrp = VN_CAST(exprp, VarRef)) {
+                    // The connected interface instance name
+                    string ifaceName = vrp->name();
+                    // Strip __Viftop suffix if present (Verilator internal naming)
+                    const size_t viftopPos = ifaceName.find("__Viftop");
+                    if (viftopPos != string::npos) {
+                        ifaceName = ifaceName.substr(0, viftopPos);
+                    }
+
+                    // Build the hierarchical port path and interface cell path
+                    // portPath: "t.u_subA.io" (cellPath + "." + portName)
+                    // ifaceCellPath: "t.subA_io" (parentCellPath + "." + ifaceName, or m_modp->name() + "." + ifaceName at top)
+                    const string portPath = childCellPath + "." + portName;
+                    const string ifaceCellPath = parentCellPath.empty()
+                                                     ? (m_modp->name() + "." + ifaceName)
+                                                     : (parentCellPath + "." + ifaceName);
+
+                    // Register the association
+                    V3LinkDotDepGraph::registerCellAssociation(portPath, ifaceCellPath);
+                }
+            }
+        }
+
+        // Recursively visit the child module's contents
+        {
+            VL_RESTORER(m_modp);
+            VL_RESTORER(m_cellPath);
+            m_modp = childModp;
+            m_cellPath = childCellPath;
+            iterateChildrenConst(childModp);
+        }
+
+        iterateChildrenConst(nodep);
+    }
+
+    void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
+
+public:
+    explicit CellAssocDiscoveryVisitor(AstNetlist* netlistp) { iterateConst(netlistp); }
+};
 
 // Visitor to build the dependency graph from the AST
 class DepGraphBuildVisitor final : public VNVisitorConst {
@@ -1808,376 +1870,6 @@ private:
             }
         }
 
-        // Check for cell association registered during linkdot primary pass
-        // The key uses the base module name (without specialization suffix) and paramtype name
-        // For specialized modules like "sc__Cz1_Iz2", we need to check the original "sc" module
-        string baseModName = m_modp->name();
-        // Strip specialization suffix (everything after "__")
-        const size_t suffixPos = baseModName.find("__");
-        if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
-
-        CellAssocKey key{baseModName, nodep->name()};
-        auto it = s_cellAssociations.find(key);
-        UINFO(5, "DEPGRAPH: lookup assoc key " << baseModName << "::" << nodep->name()
-                  << (it != s_cellAssociations.end() ? " hit" : " miss") << "\n");
-        if (it != s_cellAssociations.end()) {
-            // Value is "cellName:typedefName"
-            depNodep->cellName = it->second;
-            UINFO(5, "DEPGRAPH: paramtype '" << nodep->name()
-                      << "' in " << m_modp->name() << " (base=" << baseModName
-                      << ") has registered cell:typedef '" << it->second << "'" << endl);
-
-            // Parse cellName:typedefName and find the typedef node to add dependency edge
-            // This ensures the PARAMTYPEDTYPE is resolved AFTER the typedef it references
-            string cellName, typedefName;
-            const size_t colonPos = it->second.find(':');
-            if (colonPos != string::npos) {
-                cellName = it->second.substr(0, colonPos);
-                typedefName = it->second.substr(colonPos + 1);
-            }
-
-            AstNodeModule* const dottedModp =
-                cellName.find('.') != string::npos ? resolveCellPathModule(m_modp, cellName) : nullptr;
-
-            // Find the typedef or PARAMTYPEDTYPE in a cell with this name
-            // We need to find the specialized interface's typedef or PARAMTYPEDTYPE
-            // Search: 1) direct cells in this module, 2) cells in interfaces this module references
-            if (!typedefName.empty()) {
-                AstTypedef* targetTdp = nullptr;
-                AstParamTypeDType* targetPtdp = nullptr;
-                AstNodeModule* targetModp = nullptr;
-
-                if (dottedModp) {
-                    for (AstNode* childStmtp = dottedModp->stmtsp(); childStmtp;
-                         childStmtp = childStmtp->nextp()) {
-                        if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
-                            if (tdp->name() == typedefName) {
-                                targetTdp = tdp;
-                                targetModp = dottedModp;
-                                break;
-                            }
-                        } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
-                            if (ptdp->name() == typedefName) {
-                                targetPtdp = ptdp;
-                                targetModp = dottedModp;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // First, search for cells directly in this module
-                for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
-                    if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                        if (cellp->name() == cellName && cellp->modp()) {
-                            // Found the cell - look for typedef or PARAMTYPEDTYPE in cell's module
-                            for (AstNode* childStmtp = cellp->modp()->stmtsp(); childStmtp;
-                                 childStmtp = childStmtp->nextp()) {
-                                if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
-                                    if (tdp->name() == typedefName) {
-                                        targetTdp = tdp;
-                                        targetModp = cellp->modp();
-                                        break;
-                                    }
-                                } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
-                                    if (ptdp->name() == typedefName) {
-                                        targetPtdp = ptdp;
-                                        targetModp = cellp->modp();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If not found, search cells in interfaces this module references (via cells)
-                if (!targetTdp && !targetPtdp) {
-                    bool portNameMatch = false;
-                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !portNameMatch; stmtp = stmtp->nextp()) {
-                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                            AstIfaceRefDType* ifaceRefp = VN_CAST(varp->dtypep(), IfaceRefDType);
-                            if (!ifaceRefp && varp->dtypep()) {
-                                ifaceRefp = VN_CAST(varp->dtypep()->skipRefp(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->subDTypep()) {
-                                ifaceRefp = VN_CAST(varp->subDTypep()->skipRefp(), IfaceRefDType);
-                            }
-                            if (!ifaceRefp && varp->isIfaceRef()) {
-                                if (varp->childDTypep()) {
-                                    ifaceRefp = VN_CAST(varp->childDTypep(), IfaceRefDType);
-                                }
-                            }
-                            if (ifaceRefp && varp->name() == cellName) portNameMatch = true;
-                        }
-                    }
-                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
-                        if (AstCell* const ifaceCellp = VN_CAST(stmtp, Cell)) {
-                            if (ifaceCellp->modp() && VN_IS(ifaceCellp->modp(), Iface)) {
-                                // Search cells inside this interface
-                                for (AstNode* ifaceStmtp = ifaceCellp->modp()->stmtsp();
-                                     ifaceStmtp && !targetTdp && !targetPtdp; ifaceStmtp = ifaceStmtp->nextp()) {
-                                    if (AstCell* const cellp = VN_CAST(ifaceStmtp, Cell)) {
-                                        if (cellp->name() == cellName && cellp->modp()) {
-                                            for (AstNode* childStmtp = cellp->modp()->stmtsp();
-                                                 childStmtp; childStmtp = childStmtp->nextp()) {
-                                                if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
-                                                    if (tdp->name() == typedefName) {
-                                                        targetTdp = tdp;
-                                                        targetModp = cellp->modp();
-                                                        break;
-                                                    }
-                                                } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
-                                                    if (ptdp->name() == typedefName) {
-                                                        targetPtdp = ptdp;
-                                                        targetModp = cellp->modp();
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If not found, search interface PORTS (VAR with IFACEREF type)
-                // This handles modules that take interfaces as ports rather than instantiating them
-                if (!targetTdp && !targetPtdp) {
-                    UINFO(9, "DEPGRAPH: searching iface ports in " << m_modp->name()
-                              << " for cell '" << cellName << "' typedef '" << typedefName << "'" << endl);
-                    bool portNameMatch = false;
-                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !portNameMatch; stmtp = stmtp->nextp()) {
-                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                            AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
-                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
-                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
-                            if (ifaceRefp && varp->name() == cellName) portNameMatch = true;
-                        }
-                    }
-                    for (AstNode* stmtp = m_modp->stmtsp(); stmtp && !targetTdp && !targetPtdp; stmtp = stmtp->nextp()) {
-                        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
-                            // Try to get IfaceRefDType - may be direct, via skipRefp, or via subDTypep
-                            AstIfaceRefDType* ifaceRefp = findIfaceRefDType(varp->dtypep());
-                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->subDTypep());
-                            if (!ifaceRefp) ifaceRefp = findIfaceRefDType(varp->childDTypep());
-                            if (ifaceRefp) {
-                                if (portNameMatch && varp->name() != cellName) continue;
-                                UINFO(9, "DEPGRAPH: checking iface port '" << varp->name()
-                                          << "' cellp=" << ifaceRefp->cellp()
-                                          << " ifacep=" << ifaceRefp->ifacep() << endl);
-                            }
-                            // For interface ports, use ifacep() which points to the interface module
-                            // For interface cells, use cellp()->modp()
-                            AstNodeModule* ifaceModp = nullptr;
-                            if (ifaceRefp && ifaceRefp->cellp() && ifaceRefp->cellp()->modp()
-                                && VN_IS(ifaceRefp->cellp()->modp(), Iface)) {
-                                ifaceModp = ifaceRefp->cellp()->modp();
-                            } else if (ifaceRefp && ifaceRefp->ifacep()) {
-                                ifaceModp = ifaceRefp->ifacep();
-                            }
-                            if (ifaceModp && varp->name() == cellName) {
-                                if (AstNodeModule* const connectedIfaceModp
-                                    = findConnectedIfaceModpFromPort(m_modp, cellName)) {
-                                    ifaceModp = connectedIfaceModp;
-                                    UINFO(5, "DEPGRAPH: resolved iface port '" << cellName
-                                              << "' to connected interface " << ifaceModp->name()
-                                              << " for typedef '" << typedefName << "' in "
-                                              << m_modp->name() << endl);
-                                }
-                            }
-                            if (ifaceModp) {
-                                // First, look directly in the interface module for the typedef/paramtype
-                                for (AstNode* ifaceStmtp = ifaceModp->stmtsp();
-                                     ifaceStmtp && !targetTdp && !targetPtdp; ifaceStmtp = ifaceStmtp->nextp()) {
-                                    if (AstTypedef* const tdp = VN_CAST(ifaceStmtp, Typedef)) {
-                                        if (tdp->name() == typedefName) {
-                                            targetTdp = tdp;
-                                            targetModp = ifaceModp;
-                                            UINFO(5, "DEPGRAPH: found typedef '" << typedefName
-                                                      << "' via iface port '" << varp->name()
-                                                      << "' in " << ifaceModp->name() << endl);
-                                            break;
-                                        }
-                                    } else if (AstParamTypeDType* const ptdp = VN_CAST(ifaceStmtp, ParamTypeDType)) {
-                                        if (ptdp->name() == typedefName) {
-                                            targetPtdp = ptdp;
-                                            targetModp = ifaceModp;
-                                            UINFO(5, "DEPGRAPH: found paramtype '" << typedefName
-                                                      << "' via iface port '" << varp->name()
-                                                      << "' in " << ifaceModp->name() << endl);
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                // If not found, search cells inside this interface
-                                for (AstNode* ifaceStmtp = ifaceModp->stmtsp();
-                                     ifaceStmtp && !targetTdp && !targetPtdp; ifaceStmtp = ifaceStmtp->nextp()) {
-                                    if (AstCell* const cellp = VN_CAST(ifaceStmtp, Cell)) {
-                                        if (cellp->name() == cellName && cellp->modp()) {
-                                            for (AstNode* childStmtp = cellp->modp()->stmtsp();
-                                                 childStmtp; childStmtp = childStmtp->nextp()) {
-                                                if (AstTypedef* const tdp = VN_CAST(childStmtp, Typedef)) {
-                                                    if (tdp->name() == typedefName) {
-                                                        targetTdp = tdp;
-                                                        targetModp = cellp->modp();
-                                                        UINFO(5, "DEPGRAPH: found typedef '" << typedefName
-                                                                  << "' via iface port '" << varp->name()
-                                                                  << "' cell '" << cellName
-                                                                  << "' in " << cellp->modp()->name() << endl);
-                                                        break;
-                                                    }
-                                                } else if (AstParamTypeDType* const ptdp = VN_CAST(childStmtp, ParamTypeDType)) {
-                                                    if (ptdp->name() == typedefName) {
-                                                        targetPtdp = ptdp;
-                                                        targetModp = cellp->modp();
-                                                        UINFO(5, "DEPGRAPH: found paramtype '" << typedefName
-                                                                  << "' via iface port '" << varp->name()
-                                                                  << "' cell '" << cellName
-                                                                  << "' in " << cellp->modp()->name() << endl);
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // If still not found, recursively search nested interface cells
-                // This handles deeply nested paths like sc_io.types.a_if0.a_t
-                if (!targetTdp && !targetPtdp) {
-                    findTypedefInHierarchy(m_modp, cellName, typedefName, 5,
-                                           targetTdp, targetPtdp, targetModp);
-                }
-
-                // If still not found, search all existing graph nodes for the typedef or paramtype
-                // This handles cases where the typedef is in a deeply nested interface
-                if (!targetTdp && !targetPtdp) {
-                    for (auto& pair : V3LinkDotDepGraph::s_nodes) {
-                        if (pair.second->nodeType == V3LinkDotDepGraph::NodeType::TYPEDEF
-                            && pair.second->nodep) {
-                            AstTypedef* const tdp = VN_CAST(pair.second->nodep, Typedef);
-                            if (tdp && tdp->name() == typedefName) {
-                                targetTdp = tdp;
-                                targetModp = pair.second->ownerModp;
-                                UINFO(9, "DEPGRAPH: found typedef '" << typedefName
-                                          << "' via graph search in " << (targetModp ? targetModp->name() : "<null>") << endl);
-                                break;
-                            }
-                        } else if (pair.second->nodeType == V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE
-                                   && pair.second->nodep) {
-                            AstParamTypeDType* const ptdp = VN_CAST(pair.second->nodep, ParamTypeDType);
-                            if (ptdp && ptdp->name() == typedefName) {
-                                // Only match paramtypes owned by the current module to avoid
-                                // cross-module name collisions (e.g., class-local T vs module T).
-                                if (pair.second->ownerModp != m_modp) continue;
-                                targetPtdp = ptdp;
-                                targetModp = pair.second->ownerModp;
-                                UINFO(9, "DEPGRAPH: found paramtype '" << typedefName
-                                          << "' via graph search in " << (targetModp ? targetModp->name() : "<null>") << endl);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // Add dependency edge to the found typedef or paramtype
-                // Compute the interface's cellPath from the module's cellPath
-                // If m_cellPath is "t.u_sub" and cellName is "io", we need to find what
-                // interface instance "io" is connected to in the parent module.
-                // We need to look at the cell's pin connections to find the connected interface.
-                string ifaceCellPath;
-                if (!m_cellPath.empty()) {
-                    // Extract parent cellPath (e.g., "t.u_sub" -> "t")
-                    const size_t lastDot = m_cellPath.rfind('.');
-                    if (lastDot != string::npos) {
-                        const string parentPath = m_cellPath.substr(0, lastDot);
-                        const string cellInstanceName = m_cellPath.substr(lastDot + 1);
-                        // Find the parent module by walking up from current module
-                        // The parent module name is the last component of parentPath
-                        const size_t parentLastDot = parentPath.rfind('.');
-                        const string parentModName = parentLastDot != string::npos
-                                                         ? parentPath.substr(parentLastDot + 1)
-                                                         : parentPath;
-                        // Find the parent module and the cell that instantiates m_modp
-                        AstNodeModule* parentModp = nullptr;
-                        for (const auto& pair : V3LinkDotDepGraph::s_nodes) {
-                            if (pair.second->ownerModp && pair.second->ownerModp->name() == parentModName) {
-                                parentModp = pair.second->ownerModp;
-                                break;
-                            }
-                        }
-                        if (parentModp) {
-                            // Search for the cell in the parent module
-                            for (AstNode* stmtp = parentModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                                if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-                                    if (cellp->name() == cellInstanceName && cellp->modp() == m_modp) {
-                                        // Found the cell - look at its pins for interface connections
-                                        for (AstPin* pinp = cellp->pinsp(); pinp;
-                                             pinp = VN_AS(pinp->nextp(), Pin)) {
-                                            if (pinp->name() == cellName) {
-                                                // Found the pin - get the connected expression
-                                                if (AstVarRef* const vrp = VN_CAST(pinp->exprp(), VarRef)) {
-                                                    // The connected interface instance name
-                                                    // Strip __Viftop suffix if present (Verilator internal naming)
-                                                    string ifaceName = vrp->name();
-                                                    const size_t viftopPos = ifaceName.find("__Viftop");
-                                                    if (viftopPos != string::npos) {
-                                                        ifaceName = ifaceName.substr(0, viftopPos);
-                                                    }
-                                                    ifaceCellPath = parentPath + "." + ifaceName;
-                                                    UINFO(5, "DEPGRAPH: found interface connection: port '"
-                                                              << cellName << "' -> '" << ifaceName
-                                                              << "' ifaceCellPath=" << ifaceCellPath << endl);
-                                                }
-                                                break;
-                                            }
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Note: We don't add a direct edge from PARAMTYPE to TYPEDEF here.
-                // The edge will be added via collectExpressionDeps on subDTypep() below,
-                // which processes the REFDTYPE and adds REFDTYPE->TYPEDEF edge.
-                // This avoids redundant edges that could cause double-counting during resolution.
-                if (targetTdp && targetModp) {
-                    UINFO(5, "DEPGRAPH: paramtype '" << nodep->name()
-                              << "' found interface typedef '" << typedefName
-                              << "' in " << targetModp->name()
-                              << " ifaceCellPath=" << ifaceCellPath
-                              << " (edge added via REFDTYPE)" << endl);
-                } else if (targetPtdp && targetModp) {
-                    // For PARAMTYPE->PARAMTYPE, we do need the direct edge
-                    V3LinkDotDepGraph::DepNode* const ptdNodep
-                        = V3LinkDotDepGraph::findOrCreateNode(
-                            targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, targetModp, ifaceCellPath);
-                    V3LinkDotDepGraph::addEdge(depNodep, ptdNodep);
-                    UINFO(5, "DEPGRAPH: added edge from paramtype '"
-                              << nodep->name() << "' to paramtype '"
-                              << typedefName << "' in " << targetModp->name()
-                              << " ifaceCellPath=" << ifaceCellPath << endl);
-                }
-            }
-        } else {
-            UINFO(9, "DEPGRAPH: paramtype '" << nodep->name()
-                      << "' in " << m_modp->name() << " (base=" << baseModName
-                      << ") has NO registered cell (map size=" << s_cellAssociations.size() << ")" << endl);
-        }
-
         // NOTE: Dependencies from subDTypep are already collected at the top of this function
         // with the correct cellPath override. Do NOT call collectExpressionDeps again here
         // as it would create template nodes without cellPath context.
@@ -2332,35 +2024,6 @@ private:
         // findOrCreateNode handles registry lookup for cellName
         V3LinkDotDepGraph::DepNode* const depNodep
             = V3LinkDotDepGraph::findOrCreateNode(nodep, V3LinkDotDepGraph::NodeType::REFDTYPE, m_modp, m_cellPath);
-
-        // If the REFDTYPE is a child of a PARAMTYPEDTYPE, try to get the full dotpath from
-        // the PARAMTYPE's cell association (which has the complete path like "cca_io.tlb_io")
-        if (depNodep->cellName.empty() || depNodep->cellName.find('.') == string::npos) {
-            for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                if (AstParamTypeDType* const parentPtdp = VN_CAST(backp, ParamTypeDType)) {
-                    string baseModName = m_modp->name();
-                    const size_t suffixPos = baseModName.find("__");
-                    if (suffixPos != string::npos) baseModName = baseModName.substr(0, suffixPos);
-                    CellAssocKey key{baseModName, parentPtdp->name()};
-                    auto assocIt = s_cellAssociations.find(key);
-                    if (assocIt != s_cellAssociations.end()) {
-                        const size_t colonPos = assocIt->second.find(':');
-                        if (colonPos != string::npos) {
-                            const string fullCellPath = assocIt->second.substr(0, colonPos);
-                            if (!fullCellPath.empty() && fullCellPath.find('.') != string::npos) {
-                                depNodep->cellName = fullCellPath;
-                                UINFO(5, "DEPGRAPH: refdtype '" << nodep->name()
-                                          << "' inherited full dotpath '" << fullCellPath
-                                          << "' from parent paramtype '" << parentPtdp->name()
-                                          << "'" << endl);
-                            }
-                        }
-                    }
-                    break;
-                }
-                if (VN_IS(backp, NodeModule)) break;
-            }
-        }
 
         // If this RefDType points to a typedef, add edge
         if (AstTypedef* const tdp = nodep->typedefp()) {
@@ -2995,6 +2658,18 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
                   << " existing nodes - old architecture remnant?" << endl);
     }
 
+    // PHASE 1: Discover and register cell associations for interface ports
+    // This populates s_cellAssociations with mappings like "t.u_subA.io" -> "t.subA_io"
+    // These associations are then used during DepGraphBuildVisitor::visit(AstRefDType*)
+    // to correctly resolve typedefs that reference interface types through ports.
+    UINFO(3, "DEPGRAPH: Phase 1 - Cell Association Discovery" << endl);
+    CellAssocDiscoveryVisitor{netlistp};
+    UINFO(3, "DEPGRAPH: Discovered " << s_cellAssociations.size() << " cell associations" << endl);
+
+    // PHASE 2: Build the dependency graph
+    // Now that s_cellAssociations is populated, DepGraphBuildVisitor can correctly
+    // create dependency edges for REFDTYPE nodes that reference interface typedefs.
+    UINFO(3, "DEPGRAPH: Phase 2 - Graph Build" << endl);
     DepGraphBuildVisitor{netlistp};
 
     for (AstNodeModule* modp = netlistp->modulesp(); modp;
