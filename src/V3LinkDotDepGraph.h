@@ -24,6 +24,8 @@
 
 #include "V3Ast.h"
 
+class VSymEnt;  // Forward declaration for unified registration function
+
 #include <cstddef>
 #include <functional>
 #include <set>
@@ -184,6 +186,27 @@ public:
     // Register transient cell context for RefDType created from dotted datatype references
     static void registerRefDTypeDotPath(AstRefDType* refp, const std::string& cellName,
                                         AstNodeModule* contextModp = nullptr);
+
+    // Unified registration for interface typedef context - handles both DepGraph and IfaceCapture
+    // This eliminates duplicate cell checks and consolidates registration logic.
+    // Parameters:
+    //   refp: The RefDType being registered
+    //   stageLabel: "typedef" or "paramtype" for debug output
+    //   dotPos: Current dot position state
+    //   dotIsFinal: Whether this is the final segment of a dotted reference
+    //   dotText: The dotted text (e.g., "io" from "io.data_t")
+    //   dotSymp: Symbol entry for the dotted reference
+    //   curSymp: Current symbol table entry
+    //   modp: Current module context
+    //   nodep: Original AST node being processed
+    //   promoteVarCb: Callback for promoting vars to param types (for IfaceCapture)
+    //   indentFn: Callback for debug indentation
+    static void registerIfaceTypedefContext(
+        AstRefDType* refp, const char* stageLabel, int dotPos, bool dotIsFinal,
+        const std::string& dotText, VSymEnt* dotSymp, VSymEnt* curSymp,
+        AstNodeModule* modp, AstNode* nodep,
+        const std::function<bool(AstVar*, AstRefDType*)>& promoteVarCb,
+        const std::function<std::string()>& indentFn);
     static void registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp);
     static void registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp);
 

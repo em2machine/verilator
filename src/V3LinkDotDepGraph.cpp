@@ -19,6 +19,8 @@
 #include "V3Ast.h"
 #include "V3Const.h"
 #include "V3Global.h"
+#include "V3LinkDotIfaceCapture.h"
+#include "V3SymTable.h"
 #include "V3Width.h"
 
 #include <algorithm>
@@ -750,6 +752,49 @@ void V3LinkDotDepGraph::registerCellAssociation(const string& portPath, const st
     UASSERT(!portPath.empty(), "registerCellAssociation called with empty portPath");
     UASSERT(!ifaceCellPath.empty(), "registerCellAssociation called with empty ifaceCellPath");
     s_cellAssociations[portPath] = ifaceCellPath;
+}
+
+void V3LinkDotDepGraph::registerIfaceTypedefContext(
+    AstRefDType* refp, const char* stageLabel, int dotPos, bool dotIsFinal,
+    const std::string& dotText, VSymEnt* dotSymp, VSymEnt* curSymp,
+    AstNodeModule* modp, AstNode* nodep,
+    const std::function<bool(AstVar*, AstRefDType*)>& promoteVarCb,
+    const std::function<std::string()>& indentFn) {
+
+    if (!refp) return;
+
+    // Single check: is this an interface cell reference?
+    AstCell* ifaceCellp = nullptr;
+    if (dotSymp && VN_IS(dotSymp->nodep(), Cell)) {
+        AstCell* const cellp = VN_AS(dotSymp->nodep(), Cell);
+        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
+            ifaceCellp = cellp;
+        }
+    }
+
+    // Determine the cell name for DepGraph registration
+    // Use dotText (the identifier text) instead of cellp->name() because
+    // cellp may be shared between template modules and have wrong name
+    string cellName;
+    if (ifaceCellp) {
+        cellName = dotText.empty() ? ifaceCellp->name() : dotText;
+    } else if (!dotText.empty()) {
+        cellName = dotText;
+    }
+
+    // Register with DepGraph if we have a cell name
+    if (enabled() && !cellName.empty()) {
+        UINFO(5, indentFn() << "DEPGRAPH: registerIfaceTypedefContext " << stageLabel
+                            << ": refp=" << cvtToHex(refp) << " cellName=" << cellName
+                            << " ifaceCellp=" << (ifaceCellp ? cvtToHex(ifaceCellp) : "<null>")
+                            << " mod=" << (modp ? modp->name() : "<null>") << "\n");
+        registerRefDTypeDotPath(refp, cellName, modp);
+    }
+
+    // Register with IfaceCapture (it has its own enabled check internally)
+    V3LinkDotIfaceCapture::captureTypedefContext(
+        refp, stageLabel, dotPos, dotIsFinal, dotText, dotSymp, curSymp,
+        modp, nodep, promoteVarCb, indentFn);
 }
 
 const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::find(AstNode* nodep, const string& cellPath) {

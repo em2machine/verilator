@@ -4053,41 +4053,13 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (m_ds.m_dotPos == DP_NONE) checkDeclOrder(nodep, defp);
                     refp->typedefp(defp);
 
-                    V3LinkDotIfaceCapture::captureTypedefContext(
+                    // Unified registration for both DepGraph and IfaceCapture
+                    V3LinkDotDepGraph::registerIfaceTypedefContext(
                         refp, "typedef", static_cast<int>(m_ds.m_dotPos),
                         m_ds.m_dotPos == DP_FINAL, m_ds.m_dotText, m_ds.m_dotSymp, m_curSymp,
                         m_modp, nodep,
                         [this](AstVar* v, AstRefDType* r) { return promoteVarToParamType(v, r); },
                         [this]() { return indent(); });
-
-                    if (m_ds.m_dotSymp) {
-                        UINFO(5, indent() << "DEPGRAPH: typedef dotSymp type="
-                                          << m_ds.m_dotSymp->nodep()->typeName() << " name='"
-                                          << m_ds.m_dotSymp->nodep()->name() << "' dotText='"
-                                          << m_ds.m_dotText << "'\n");
-                    }
-
-                    // Register dotpath for dependency graph - needed for interface typedef refs
-                    // e.g., typedef sub_io.data_t data_t; needs to know 'sub_io' is the cell
-                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
-                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
-                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            // Use dotText (the identifier text) instead of cellp->name() because
-                            // cellp may be shared between template modules and have wrong name
-                            const string& cellName = m_ds.m_dotText.empty() ? cellp->name() : m_ds.m_dotText;
-                            UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath SITE1 CELL: refp="
-                                              << cvtToHex(refp) << " cellName=" << cellName
-                                              << " cellp=" << cvtToHex(cellp)
-                                              << " cellMod=" << (cellp->modp() ? cellp->modp()->name() : "<null>")
-                                              << " mod=" << (m_modp ? m_modp->name() : "<null>") << "\n");
-                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellName, m_modp);
-                        }
-                    } else if (!m_ds.m_dotText.empty()) {
-                        UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath SITE1 DOTTEXT: refp="
-                                          << cvtToHex(refp) << " dotText=" << m_ds.m_dotText
-                                          << " mod=" << (m_modp ? m_modp->name() : "<null>") << "\n");
-                        V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
-                    }
 
                     if (VN_IS(nodep->backp(), SelExtract)) {
                         m_packedArrayDtp = refp;
@@ -4101,25 +4073,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
                 if (ok) {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
-                    if (m_ds.m_dotSymp && VN_IS(m_ds.m_dotSymp->nodep(), Cell)) {
-                        AstCell* const cellp = VN_AS(m_ds.m_dotSymp->nodep(), Cell);
-                        if (cellp->modp() && VN_IS(cellp->modp(), Iface)) {
-                            UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath CELL path: refp="
-                                              << cvtToHex(refp) << " cellName=" << cellp->name()
-                                              << " mod=" << (m_modp ? m_modp->name() : "<null>")
-                                              << " dotText=" << m_ds.m_dotText << "\n");
-                            V3LinkDotDepGraph::registerRefDTypeDotPath(refp, cellp->name(), m_modp);
-                        }
-                    } else if (!m_ds.m_dotText.empty()) {
-                        UINFO(5, indent() << "DEPGRAPH: registerRefDTypeDotPath DOTTEXT path: refp="
-                                          << cvtToHex(refp) << " dotText=" << m_ds.m_dotText
-                                          << " mod=" << (m_modp ? m_modp->name() : "<null>")
-                                          << " dotSymp=" << (m_ds.m_dotSymp ? m_ds.m_dotSymp->nodep()->typeName() : "<null>")
-                                          << "\n");
-                        V3LinkDotDepGraph::registerRefDTypeDotPath(refp, m_ds.m_dotText, m_modp);
-                    }
 
-                    V3LinkDotIfaceCapture::captureTypedefContext(
+                    // Unified registration for both DepGraph and IfaceCapture
+                    V3LinkDotDepGraph::registerIfaceTypedefContext(
                         refp, "paramtype", static_cast<int>(m_ds.m_dotPos),
                         m_ds.m_dotPos == DP_FINAL, m_ds.m_dotText, m_ds.m_dotSymp, m_curSymp,
                         m_modp, nodep,
