@@ -24,6 +24,7 @@
 #include "V3Width.h"
 
 #include <algorithm>
+#include <iomanip>
 #include <map>
 #include <sstream>
 
@@ -339,24 +340,46 @@ void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
 }
 
 // Helper for dumpGraphDepsTree - recursively print dependency tree
+// visited: tracks current path for cycle detection (cleared when backtracking)
+// printedLines: maps nodes to the line number where they were first printed
+// lineNum: current line number counter (passed by reference to track across calls)
 static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& prefix,
-                             bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
+                             bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited,
+                             std::map<V3LinkDotDepGraph::DepNode*, int>& printedLines,
+                             int& lineNum) {
     if (!nodep) return;
+
+    // Check if this node was already printed in another branch (converging paths)
+    const auto it = printedLines.find(nodep);
+    const bool alreadyPrinted = (it != printedLines.end());
+    string convergeAnnotation;
+    if (alreadyPrinted) {
+        convergeAnnotation = " (see line #" + std::to_string(it->second) + ")";
+    }
+
+    // Record current line number for this node
+    const int thisLine = ++lineNum;
 
     // Print this node with cellPath qualifier if present
     const string connector = isLast ? "└── " : "├── ";
     const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
-    UINFO(3, "DEPGRAPH: " << prefix << connector
+    UINFO(3, "DEPGRAPH: " << std::setw(4) << thisLine << ": " << prefix << connector
               << "[" << nodeTypeName(nodep->nodeType) << "] "
               << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
               << cellQualifier
               << " (pending=" << nodep->pendingDeps
               << " resolved=" << (nodep->resolved ? "Y" : "N")
-              << " width=" << nodep->resolvedWidth << ")" << endl);
+              << " width=" << nodep->resolvedWidth << ")"
+              << convergeAnnotation << endl);
 
-    // Check for cycles
+    // If already printed, don't repeat the subtree
+    if (alreadyPrinted) return;
+
+    // Check for cycles (node in current path)
     if (visited.count(nodep)) {
-        UINFO(3, "DEPGRAPH: " << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+        ++lineNum;
+        UINFO(3, "DEPGRAPH: " << std::setw(4) << lineNum << ": "
+                  << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
         return;
     }
     visited.insert(nodep);
@@ -365,10 +388,11 @@ static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& pr
     const string childPrefix = prefix + (isLast ? "    " : "│   ");
     std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependsOn.begin(), nodep->dependsOn.end());
     for (size_t i = 0; i < deps.size(); ++i) {
-        dumpDepsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited);
+        dumpDepsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited, printedLines, lineNum);
     }
 
     visited.erase(nodep);
+    printedLines[nodep] = thisLine;  // Record line number where this node was printed
 }
 
 void V3LinkDotDepGraph::dumpGraphDepsTree(const char* stageName) {
@@ -401,12 +425,14 @@ void V3LinkDotDepGraph::dumpGraphDepsTree(const char* stageName) {
 
     // Now print the tree from each leaf node (nodes with no dependents)
     UINFO(3, "DEPGRAPH: Dependency chains (leaf -> ... -> root):" << endl);
+    std::map<DepNode*, int> printedLines;  // Track nodes and their line numbers
+    int lineNum = 0;
     for (DepNode* nodep : s_allNodes) {
         if (!nodep) continue;
         // Leaf nodes have no dependents (nothing depends on them)
         if (nodep->dependents.empty() && !nodep->dependsOn.empty()) {
             std::set<DepNode*> visited;
-            dumpDepsTreeNode(nodep, "", true, visited);
+            dumpDepsTreeNode(nodep, "", true, visited, printedLines, lineNum);
             UINFO(3, "DEPGRAPH: \n");
         }
     }
@@ -446,25 +472,47 @@ static string formatResolvedValue(V3LinkDotDepGraph::DepNode* nodep) {
 }
 
 // Helper for dumpGraphDependentsTree - recursively print dependents tree (reverse direction)
+// visited: tracks current path for cycle detection (cleared when backtracking)
+// printedLines: maps nodes to the line number where they were first printed
+// lineNum: current line number counter (passed by reference to track across calls)
 static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& prefix,
-                                   bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited) {
+                                   bool isLast, std::set<V3LinkDotDepGraph::DepNode*>& visited,
+                                   std::map<V3LinkDotDepGraph::DepNode*, int>& printedLines,
+                                   int& lineNum) {
     if (!nodep) return;
+
+    // Check if this node was already printed in another branch (converging paths)
+    const auto it = printedLines.find(nodep);
+    const bool alreadyPrinted = (it != printedLines.end());
+    string convergeAnnotation;
+    if (alreadyPrinted) {
+        convergeAnnotation = " (see line #" + std::to_string(it->second) + ")";
+    }
+
+    // Record current line number for this node
+    const int thisLine = ++lineNum;
 
     // Print this node with cellPath qualifier if present
     const string connector = isLast ? "└── " : "├── ";
     const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
     const string resolvedInfo = formatResolvedValue(nodep);
-    UINFO(3, "DEPGRAPH: " << prefix << connector
+    UINFO(3, "DEPGRAPH: " << std::setw(4) << thisLine << ": " << prefix << connector
               << "[" << nodeTypeName(nodep->nodeType) << "] "
               << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
               << cellQualifier
               << " (pending=" << nodep->pendingDeps
               << " resolved=" << (nodep->resolved ? "Y" : "N")
-              << resolvedInfo << ")" << endl);
+              << resolvedInfo << ")"
+              << convergeAnnotation << endl);
 
-    // Check for cycles
+    // If already printed, don't repeat the subtree
+    if (alreadyPrinted) return;
+
+    // Check for cycles (node in current path)
     if (visited.count(nodep)) {
-        UINFO(3, "DEPGRAPH: " << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+        ++lineNum;
+        UINFO(3, "DEPGRAPH: " << std::setw(4) << lineNum << ": "
+                  << prefix << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
         return;
     }
     visited.insert(nodep);
@@ -473,10 +521,11 @@ static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const stri
     const string childPrefix = prefix + (isLast ? "    " : "│   ");
     std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependents.begin(), nodep->dependents.end());
     for (size_t i = 0; i < deps.size(); ++i) {
-        dumpDependentsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited);
+        dumpDependentsTreeNode(deps[i], childPrefix, i == deps.size() - 1, visited, printedLines, lineNum);
     }
 
     visited.erase(nodep);
+    printedLines[nodep] = thisLine;  // Record line number where this node was printed
 }
 
 void V3LinkDotDepGraph::dumpGraphDependentsTree(const char* stageName) {
@@ -506,12 +555,14 @@ void V3LinkDotDepGraph::dumpGraphDependentsTree(const char* stageName) {
 
     // Print the tree from each root node (nodes with no dependencies - boundary conditions)
     UINFO(3, "DEPGRAPH: Execution chains (root -> ... -> leaf):" << endl);
+    std::map<DepNode*, int> printedLines;  // Track nodes and their line numbers
+    int lineNum = 0;
     for (DepNode* nodep : s_allNodes) {
         if (!nodep) continue;
         // Root nodes have no dependencies (boundary conditions)
         if (nodep->dependsOn.empty() && !nodep->dependents.empty()) {
             std::set<DepNode*> visited;
-            dumpDependentsTreeNode(nodep, "", true, visited);
+            dumpDependentsTreeNode(nodep, "", true, visited, printedLines, lineNum);
             UINFO(3, "DEPGRAPH: \n");
         }
     }
