@@ -718,6 +718,20 @@ V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
 }
 
 //======================================================================
+// Helper to normalize cellNames by stripping __BRA__??__KET__ placeholder
+// This is needed because interface arrays like subA_io[0] are registered
+// with __BRA__??__KET__ before the index is resolved, but all array elements
+// share the same type definition, so we use the base cell name for lookup.
+
+static string normalizeCellName(const string& cellName) {
+    const size_t pos = cellName.find("__BRA__??__KET__");
+    if (pos != string::npos) {
+        return cellName.substr(0, pos);
+    }
+    return cellName;
+}
+
+//======================================================================
 // Graph management
 
 void V3LinkDotDepGraph::reset() {
@@ -1199,8 +1213,16 @@ private:
                         cellContext = ownerp->name();
                     }
 
-                    const string portPath = cellContext + "." + targetp->cellName;
-                    UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF looking up portPath='" << portPath << "'" << endl);
+                    // Normalize cellName by stripping __BRA__??__KET__ placeholder.
+                    // Interface arrays like subA_io[0] are registered with __BRA__??__KET__
+                    // before the index is resolved, but all array elements share the same
+                    // type definition, so we use the base cell name for lookup.
+                    const string normalizedCellName = normalizeCellName(targetp->cellName);
+                    const string portPath = cellContext.empty()
+                        ? normalizedCellName
+                        : cellContext + "." + normalizedCellName;
+                    UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF looking up portPath='" << portPath << "'"
+                              << " (original cellName='" << targetp->cellName << "')" << endl);
 
                     // Look up the connected interface instance cellPath
                     const auto assocIt = s_cellAssociations.find(portPath);
@@ -1209,8 +1231,10 @@ private:
                         UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF found cell association: portPath='"
                                   << portPath << "' -> ifaceCellPath='" << tdCellPath << "'" << endl);
                     } else {
-                        // Fallback: use cellContext + cellName directly
-                        tdCellPath = cellContext + "." + targetp->cellName;
+                        // Fallback: use cellContext + normalizedCellName directly
+                        tdCellPath = cellContext.empty()
+                            ? normalizedCellName
+                            : cellContext + "." + normalizedCellName;
                         UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF no cell association for portPath='"
                                   << portPath << "', using fallback tdCellPath='" << tdCellPath << "'" << endl);
                     }
@@ -1324,13 +1348,20 @@ private:
             bool usedCellAssociation = false;
             if (!targetp->cellName.empty() && ptOwnerp && VN_IS(ptOwnerp, Iface)) {
                 // Build portPath: currentCellPath + "." + cellName
+                // Normalize cellName to strip __BRA__??__KET__ placeholder for interface arrays
+                const string normalizedCellName = normalizeCellName(targetp->cellName);
                 string cellContext;
                 if (m_depNode && !m_depNode->cellPath.empty()) {
                     cellContext = m_depNode->cellPath;
                 } else if (!cellPath.empty()) {
                     cellContext = cellPath;
+                } else if (ownerp) {
+                    // Use owner module name when cellContext is empty (e.g., top module)
+                    cellContext = ownerp->name();
                 }
-                const string portPath = cellContext + "." + targetp->cellName;
+                const string portPath = cellContext.empty()
+                    ? normalizedCellName
+                    : cellContext + "." + normalizedCellName;
                 UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE looking up portPath='" << portPath << "'" << endl);
 
                 // Look up the connected interface instance cellPath
@@ -1341,16 +1372,20 @@ private:
                     UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE found cell association: portPath='"
                               << portPath << "' -> ifaceCellPath='" << ptCellPath << "'" << endl);
                 } else {
-                    // Fallback: use cellContext + cellName directly
-                    ptCellPath = cellContext + "." + targetp->cellName;
+                    // Fallback: use cellContext + normalizedCellName directly
+                    ptCellPath = cellContext.empty()
+                        ? normalizedCellName
+                        : cellContext + "." + normalizedCellName;
                     UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE no cell association for portPath='"
                               << portPath << "', using fallback ptCellPath='" << ptCellPath << "'" << endl);
                 }
             }
 
-            // Only retarget to current module's PARAMTYPE if we didn't use cell association
-            // When cell association is used, we want to connect to the interface's PARAMTYPE
-            if (!usedCellAssociation && m_depNode && m_depNode->ownerModp) {
+            // Only retarget to current module's PARAMTYPE if:
+            // 1. We didn't use cell association AND
+            // 2. There's no cellName (not a dotted access like subA_io.data_t)
+            // When we have a cellName, we want to connect to the interface's PARAMTYPE
+            if (!usedCellAssociation && targetp->cellName.empty() && m_depNode && m_depNode->ownerModp) {
                 const bool isTemplateOwner = isTemplateModule(ptOwnerp);
                 if (!ptOwnerp || isTemplateOwner) {
                     for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp;
