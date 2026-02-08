@@ -23,6 +23,7 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 V3LinkDotIfaceCapture::CapturedMap V3LinkDotIfaceCapture::s_map{};
 V3LinkDotIfaceCapture::LocalparamMap V3LinkDotIfaceCapture::s_localparamMap{};
+V3LinkDotIfaceCapture::CrossIfaceMap V3LinkDotIfaceCapture::s_crossIfaceMap{};
 bool V3LinkDotIfaceCapture::s_enabled = true;
 bool V3LinkDotIfaceCapture::s_explicitlyDisabled = false;
 
@@ -237,9 +238,16 @@ void V3LinkDotIfaceCapture::forEach(const std::function<void(const CapturedIface
 void V3LinkDotIfaceCapture::forEachOwned(
     const AstNodeModule* ownerModp, const std::function<void(const CapturedIfaceTypedef&)>& fn) {
     if (!ownerModp || !fn) return;
+    UINFO(0, "forEachOwned: checking entries for ownerModp=" << ownerModp->name()
+              << " map size=" << s_map.size() << endl);
     forEachImpl(
         [ownerModp](const CapturedIfaceTypedef& e) {
-            return e.ownerModp == ownerModp || e.typedefOwnerModp == ownerModp;
+            const bool matches = e.ownerModp == ownerModp || e.typedefOwnerModp == ownerModp;
+            UINFO(0, "forEachOwned filter: entry refp=" << e.refp
+                      << " e.ownerModp=" << (e.ownerModp ? e.ownerModp->name() : "<null>")
+                      << " e.typedefOwnerModp=" << (e.typedefOwnerModp ? e.typedefOwnerModp->name() : "<null>")
+                      << " matches=" << matches << endl);
+            return matches;
         },
         fn);
 }
@@ -348,16 +356,74 @@ void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, AstCell* cellp,
                                           AstVar* ifacePortVarp) {
     if (!refp) return;
     if (!paramTypeOwnerModp && paramTypep) paramTypeOwnerModp = findOwnerModule(paramTypep);
+    UINFO(9, "addParamType: refp=" << refp
+              << " ownerModp=" << (ownerModp ? ownerModp->name() : "<null>")
+              << " paramTypep=" << paramTypep
+              << " paramTypeOwnerModp=" << (paramTypeOwnerModp ? paramTypeOwnerModp->name() : "<null>")
+              << endl);
+    // Dump the PARAMTYPEDTYPE's subDTypep chain to see what's there at capture time
+    if (paramTypep) {
+        UINFO(9, "addParamType: paramTypep subDTypep chain:" << endl);
+        paramTypep->foreach([&](AstRefDType* innerRefp) {
+            UINFO(9, "  inner RefDType: " << innerRefp
+                      << " refDTypep=" << innerRefp->refDTypep()
+                      << (innerRefp->refDTypep() ? " refDTypep->name=" : "")
+                      << (innerRefp->refDTypep() ? innerRefp->refDTypep()->prettyTypeName() : "")
+                      << endl);
+        });
+    }
     s_map[refp] = CapturedIfaceTypedef{
         CaptureType::IFACE, refp, cellp, nullptr, ownerModp, nullptr,
         paramTypep, paramTypeOwnerModp, nullptr, ifacePortVarp};
+
+    // Also capture REFDTYPEs inside the PARAMTYPEDTYPE's subDTypep chain.
+    // These REFDTYPEs may have refDTypep pointing to nodes in a nested interface
+    // that will be cloned separately. We need to track them so we can update
+    // their refDTypep when the nested interface is cloned.
+    if (paramTypep) {
+        paramTypep->foreach([&](AstRefDType* innerRefp) {
+            if (innerRefp == refp) return;  // Skip the outer RefDType we already captured
+            if (!innerRefp->refDTypep()) return;  // Skip if no refDTypep
+
+            // Check if refDTypep is in a different interface (nested interface)
+            AstNodeModule* const refOwnerModp = findOwnerModule(innerRefp->refDTypep());
+            if (refOwnerModp && VN_IS(refOwnerModp, Iface) && refOwnerModp != paramTypeOwnerModp) {
+                // This REFDTYPE has refDTypep pointing to a node in a different interface
+                // Capture it so we can update it when that interface is cloned
+                if (s_map.find(innerRefp) == s_map.end()) {
+                    UINFO(9, "addParamType: also capturing inner RefDType " << innerRefp
+                              << " refDTypep owner=" << refOwnerModp->name() << endl);
+                    // Find the cell for the nested interface
+                    AstCell* nestedCellp = nullptr;
+                    for (AstNode* stmtp = paramTypeOwnerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                        if (AstCell* const cp = VN_CAST(stmtp, Cell)) {
+                            if (cp->modp() == refOwnerModp) {
+                                nestedCellp = cp;
+                                break;
+                            }
+                        }
+                    }
+                    s_map[innerRefp] = CapturedIfaceTypedef{
+                        CaptureType::IFACE, innerRefp, nestedCellp, nullptr, paramTypeOwnerModp,
+                        innerRefp->typedefp(), nullptr, refOwnerModp, nullptr, nullptr};
+                }
+            }
+        });
+    }
 }
 
 bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
                                               AstParamTypeDType* newParamTypep) {
+    UINFO(9, "replaceParamType called: refp=" << refp
+              << " newParamTypep=" << (newParamTypep ? newParamTypep->name() : "<null>") << endl);
     if (!refp || !newParamTypep) return false;
     auto it = s_map.find(refp);
-    if (it == s_map.end()) return false;
+    if (it == s_map.end()) {
+        UINFO(9, "replaceParamType: entry not found for refp=" << refp << endl);
+        return false;
+    }
+    UINFO(9, "replaceParamType: found entry, pendingClonep="
+              << it->second.pendingClonep << endl);
     it->second.paramTypep = newParamTypep;
     it->second.typedefOwnerModp = findOwnerModule(newParamTypep);
     // Update the RefDType's refDTypep
@@ -372,4 +438,346 @@ bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
                   << " -> " << newParamTypep << endl);
     }
     return true;
+}
+
+void V3LinkDotIfaceCapture::addCrossIfaceRefDType(AstRefDType* refp, AstNodeModule* ownerModp,
+                                                   AstNodeDType* targetDTypep,
+                                                   AstNodeModule* targetModp) {
+    if (!refp || !targetDTypep || !targetModp) {
+        UINFO(9, "addCrossIfaceRefDType: skipping due to null arg"
+                  << " refp=" << cvtToHex(refp)
+                  << " targetDTypep=" << cvtToHex(targetDTypep)
+                  << " targetModp=" << cvtToHex(targetModp) << endl);
+        return;
+    }
+    if (s_crossIfaceMap.find(refp) != s_crossIfaceMap.end()) {
+        UINFO(9, "addCrossIfaceRefDType: already captured refp=" << refp << endl);
+        return;  // Already captured
+    }
+    UINFO(5, "CROSS-IFACE-CAPTURE: refp=" << refp
+              << " in " << (ownerModp ? ownerModp->name() : "<null>")
+              << " -> targetDTypep=" << targetDTypep
+              << " in " << targetModp->name()
+              << " (crossIfaceMap size now " << (s_crossIfaceMap.size() + 1) << ")" << endl);
+    s_crossIfaceMap[refp] = CrossIfaceRefDType{refp, ownerModp, targetDTypep, targetModp};
+}
+
+void V3LinkDotIfaceCapture::fixupCrossIfaceRefs(AstNodeModule* clonedModp,
+                                                 AstNodeModule* templateModp) {
+    if (!clonedModp || !templateModp) {
+        UINFO(9, "fixupCrossIfaceRefs: skipping due to null arg"
+                  << " clonedModp=" << cvtToHex(clonedModp)
+                  << " templateModp=" << cvtToHex(templateModp) << endl);
+        return;
+    }
+    UINFO(5, "CROSS-IFACE-FIXUP: clonedModp=" << clonedModp->name()
+              << " templateModp=" << templateModp->name()
+              << " crossIfaceMap size=" << s_crossIfaceMap.size() << endl);
+
+    // Helper lambda to fix cross-interface refs in a node tree
+    auto fixCrossIfaceRefsInTree = [&](AstNode* rootp, const char* location) {
+        int fixed = 0;
+        rootp->foreach([&](AstRefDType* refp) {
+            if (!refp->refDTypep()) return;
+            AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+            if (targetModp == templateModp) {
+                // This REFDTYPE has refDTypep pointing to the template interface
+                // Check if there's a cloned version
+                AstNodeDType* const clonedDTypep = refp->refDTypep()->clonep();
+                if (clonedDTypep) {
+                    UINFO(9, "CROSS-IFACE-FIXUP (" << location << "): fixing refp=" << refp
+                              << " old refDTypep=" << refp->refDTypep()
+                              << " new refDTypep=" << clonedDTypep << endl);
+                    refp->refDTypep(clonedDTypep);
+                    if (refp->dtypep() && findOwnerModule(refp->dtypep()) == templateModp) {
+                        AstNodeDType* const clonedDtypep = refp->dtypep()->clonep();
+                        if (clonedDtypep) refp->dtypep(clonedDtypep);
+                    }
+                    ++fixed;
+                }
+            }
+        });
+        return fixed;
+    };
+
+    // Walk all types in the type table
+    if (v3Global.rootp() && v3Global.rootp()->typeTablep()) {
+        int typeTableFixed = 0;
+        for (AstNode* nodep = v3Global.rootp()->typeTablep()->typesp(); nodep;
+             nodep = nodep->nextp()) {
+            typeTableFixed += fixCrossIfaceRefsInTree(nodep, "type table");
+        }
+        if (typeTableFixed > 0) {
+            UINFO(5, "CROSS-IFACE-FIXUP: fixed " << typeTableFixed
+                      << " refs in type table for " << templateModp->name() << endl);
+        }
+    }
+
+    // Walk all modules to fix cross-interface refs
+    if (v3Global.rootp()) {
+        int moduleFixed = 0;
+        int moduleChecked = 0;
+        int refsChecked = 0;
+        for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+            if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+                // Only fix cloned modules (name contains "__")
+                if (modp->name().find("__") != string::npos) {
+                    ++moduleChecked;
+                    // Count refs and check why they're not being fixed
+                    modp->foreach([&](AstRefDType* refp) {
+                        ++refsChecked;
+                        if (!refp->refDTypep()) return;
+                        AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+                        if (targetModp == templateModp) {
+                            AstNodeDType* const clonedDTypep = refp->refDTypep()->clonep();
+                            UINFO(5, "CROSS-IFACE-FIXUP (module " << modp->name()
+                                      << "): found ref to template, refp=" << refp
+                                      << " refDTypep=" << refp->refDTypep()
+                                      << " clonep()=" << clonedDTypep << endl);
+                        }
+                    });
+                    moduleFixed += fixCrossIfaceRefsInTree(modp, modp->name().c_str());
+                }
+            }
+        }
+        UINFO(5, "CROSS-IFACE-FIXUP: checked " << moduleChecked << " modules, "
+                  << refsChecked << " refs, fixed " << moduleFixed
+                  << " for " << templateModp->name() << endl);
+    }
+
+    // Find all entries where targetModp matches templateModp and fix them up
+    int fixedCount = 0;
+    int skippedCount = 0;
+    for (auto& kv : s_crossIfaceMap) {
+        const AstRefDType* const mapKey = kv.first;
+        CrossIfaceRefDType& entry = kv.second;
+        UINFO(9, "fixupCrossIfaceRefs: checking entry mapKey=" << cvtToHex(mapKey)
+                  << " entry.refp=" << cvtToHex(entry.refp)
+                  << " same=" << (mapKey == entry.refp)
+                  << " targetModp=" << (entry.targetModp ? entry.targetModp->name() : "<null>")
+                  << endl);
+        if (entry.targetModp != templateModp) {
+            ++skippedCount;
+            continue;
+        }
+
+        UINFO(9, "fixupCrossIfaceRefs: processing entry refp=" << entry.refp
+                  << " ownerModp=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
+                  << " targetDTypep=" << entry.targetDTypep
+                  << " targetModp=" << entry.targetModp->name() << endl);
+
+        // The target dtype should have a clonep() pointing to the cloned version
+        AstNodeDType* const clonedTargetDTypep = entry.targetDTypep->clonep();
+        if (clonedTargetDTypep) {
+            UINFO(5, "CROSS-IFACE-FIXUP: SUCCESS via clonep() refp=" << entry.refp
+                      << " old refDTypep=" << entry.refp->refDTypep()
+                      << " old dtypep=" << entry.refp->dtypep()
+                      << " new refDTypep=" << clonedTargetDTypep << endl);
+            // Fix the original REFDTYPE
+            entry.refp->refDTypep(clonedTargetDTypep);
+            if (entry.refp->dtypep() == entry.targetDTypep) {
+                entry.refp->dtypep(clonedTargetDTypep);
+                UINFO(5, "CROSS-IFACE-FIXUP: also updated dtypep" << endl);
+            }
+            // Also fix any clones of the REFDTYPE that were created during V3Width processing
+            // These clones may have been created by iterateEditMoveDTypep
+            for (AstRefDType* clonedRefp = entry.refp->clonep(); clonedRefp;
+                 clonedRefp = clonedRefp->clonep()) {
+                if (clonedRefp->refDTypep() == entry.targetDTypep) {
+                    UINFO(5, "CROSS-IFACE-FIXUP: also fixing clone " << clonedRefp << endl);
+                    clonedRefp->refDTypep(clonedTargetDTypep);
+                }
+                if (clonedRefp->dtypep() == entry.targetDTypep) {
+                    clonedRefp->dtypep(clonedTargetDTypep);
+                }
+            }
+            ++fixedCount;
+        } else {
+            // clonep() is null - the target wasn't cloned in this operation
+            // This can happen if the cloning order is different
+            // Try to find the cloned dtype by name in the cloned module
+            const string& targetName = entry.targetDTypep->prettyName();
+            UINFO(9, "fixupCrossIfaceRefs: clonep() is null, searching by name '"
+                      << targetName << "' in " << clonedModp->name() << endl);
+            bool found = false;
+            for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstNodeDType* const dtp = VN_CAST(stmtp, NodeDType)) {
+                    UINFO(9, "  checking dtype: " << dtp->prettyName() << endl);
+                    if (dtp->prettyName() == targetName) {
+                        UINFO(5, "CROSS-IFACE-FIXUP: SUCCESS via name lookup refp=" << entry.refp
+                                  << " old refDTypep=" << entry.refp->refDTypep()
+                                  << " old dtypep=" << entry.refp->dtypep()
+                                  << " new refDTypep=" << dtp << endl);
+                        entry.refp->refDTypep(dtp);
+                        // Also update dtypep if it points to the same template dtype
+                        if (entry.refp->dtypep() == entry.targetDTypep) {
+                            entry.refp->dtypep(dtp);
+                            UINFO(5, "CROSS-IFACE-FIXUP: also updated dtypep" << endl);
+                        }
+                        ++fixedCount;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                UINFO(5, "CROSS-IFACE-FIXUP: FAILED to find cloned dtype for refp=" << entry.refp
+                          << " targetName=" << targetName
+                          << " in " << clonedModp->name() << endl);
+            }
+        }
+    }
+    UINFO(5, "CROSS-IFACE-FIXUP: done for " << templateModp->name()
+              << " fixed=" << fixedCount << " skipped=" << skippedCount << endl);
+}
+
+void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
+    if (!s_enabled) return;
+
+    UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs" << endl);
+
+    // Build a map of template modules to their cloned versions
+    // Template modules are those marked dead() or without "__" in name
+    // Cloned modules have "__" in their name
+    std::map<AstNodeModule*, AstNodeModule*> templateToCloneMap;
+    std::set<AstNodeModule*> templateModules;
+
+    if (!v3Global.rootp()) return;
+
+    // First pass: identify template modules/interfaces (dead or no "__" in name)
+    // Include both interfaces AND modules since cross-module type refs can also break
+    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+        if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+            if (modp->dead() || modp->name().find("__") == string::npos) {
+                // Include interfaces and modules (but not packages which don't get cloned)
+                if (VN_IS(modp, Iface) || VN_IS(modp, Module)) {
+                    templateModules.insert(modp);
+                    UINFO(9, "finalizeIfaceCapture: template "
+                              << (VN_IS(modp, Iface) ? "interface" : "module")
+                              << " " << modp->name() << endl);
+                }
+            }
+        }
+    }
+
+    // Second pass: for each cloned module, find its template
+    // The template name is the part before "__"
+    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+        if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+            if (!modp->dead() && modp->name().find("__") != string::npos) {
+                // Extract template name (part before "__")
+                const string& name = modp->name();
+                const size_t pos = name.find("__");
+                if (pos != string::npos) {
+                    const string templateName = name.substr(0, pos);
+                    // Find the template module
+                    for (AstNodeModule* tmplp : templateModules) {
+                        if (tmplp->name() == templateName) {
+                            templateToCloneMap[tmplp] = modp;
+                            UINFO(9, "finalizeIfaceCapture: " << templateName
+                                      << " -> " << modp->name() << endl);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper lambda to fix a refDTypep if it points to a template module
+    auto fixRefDType = [&](AstRefDType* refp, const char* location) -> bool {
+        if (!refp->refDTypep()) return false;
+
+        AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+
+        // Debug: log what we're checking
+        UINFO(9, "finalizeIfaceCapture: checking refp=" << refp
+                  << " refDTypep=" << refp->refDTypep()
+                  << " targetModp=" << (targetModp ? targetModp->name() : "<null>")
+                  << " dead=" << (targetModp ? targetModp->dead() : false) << endl);
+
+        if (!targetModp) return false;
+
+        // Check if target is a template module (dead or in our template set)
+        auto it = templateToCloneMap.find(targetModp);
+        if (it == templateToCloneMap.end()) {
+            // Also check if targetModp is dead but not in our map
+            if (targetModp->dead()) {
+                UINFO(5, "finalizeIfaceCapture: WARNING - refp=" << refp
+                          << " points to dead module " << targetModp->name()
+                          << " but no clone mapping found" << endl);
+            }
+            return false;
+        }
+
+        AstNodeModule* const clonedModp = it->second;
+
+        // Try to find the cloned dtype using clonep()
+        AstNodeDType* clonedDTypep = refp->refDTypep()->clonep();
+        if (clonedDTypep) {
+            UINFO(5, "finalizeCapture (" << location << "): fixing via clonep() refp=" << refp
+                      << " old=" << refp->refDTypep()
+                      << " new=" << clonedDTypep << endl);
+            refp->refDTypep(clonedDTypep);
+            // Also fix dtypep if it points to the same template
+            if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
+                if (AstNodeDType* const clonedDtypep = refp->dtypep()->clonep()) {
+                    refp->dtypep(clonedDtypep);
+                }
+            }
+            return true;
+        }
+
+        // Fallback: search by name in the cloned module
+        const string& targetName = refp->refDTypep()->prettyName();
+        for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstNodeDType* const dtp = VN_CAST(stmtp, NodeDType)) {
+                if (dtp->prettyName() == targetName) {
+                    UINFO(5, "finalizeCapture (" << location << "): fixing via name lookup refp="
+                              << refp << " old=" << refp->refDTypep()
+                              << " new=" << dtp << endl);
+                    refp->refDTypep(dtp);
+                    if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
+                        refp->dtypep(dtp);
+                    }
+                    return true;
+                }
+            }
+        }
+
+        UINFO(5, "finalizeCapture (" << location << "): FAILED to fix refp=" << refp
+                  << " target=" << refp->refDTypep()
+                  << " in template " << targetModp->name() << endl);
+        return false;
+    };
+
+    int typeTableFixed = 0;
+    int moduleFixed = 0;
+
+    // Walk the type table
+    if (v3Global.rootp()->typeTablep()) {
+        for (AstNode* nodep = v3Global.rootp()->typeTablep()->typesp(); nodep;
+             nodep = nodep->nextp()) {
+            nodep->foreach([&](AstRefDType* refp) {
+                if (fixRefDType(refp, "type table")) ++typeTableFixed;
+            });
+        }
+    }
+
+    // Walk all cloned modules
+    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+        if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+            if (!modp->dead() && modp->name().find("__") != string::npos) {
+                modp->foreach([&](AstRefDType* refp) {
+                    if (fixRefDType(refp, modp->name().c_str())) ++moduleFixed;
+                });
+            }
+        }
+    }
+
+    UINFO(4, "finalizeIfaceCapture: fixed " << typeTableFixed << " in type table, "
+              << moduleFixed << " in modules" << endl);
+
+    // Clear the maps as we're done with capture
+    s_crossIfaceMap.clear();
 }

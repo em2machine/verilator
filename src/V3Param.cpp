@@ -898,6 +898,16 @@ class ParamProcessor final {
         CloneMap* const clonemapp = &(iter->second.m_cloneMap);
         UINFO(4, "     De-parameterize to new: " << newModp);
 
+        // Fix up cross-interface refDTypep pointers that were captured by V3Width.
+        // These are REFDTYPEs in already-cloned interfaces that have refDTypep pointing
+        // to dtypes in this template interface (srcModp). Now that we've cloned srcModp
+        // to newModp, we can update those refDTypep pointers to point to the cloned dtypes.
+        if (V3LinkDotIfaceCapture::enabled() && VN_IS(srcModp, Iface)) {
+            UINFO(5, "V3Param: calling fixupCrossIfaceRefs for cloned interface "
+                      << newModp->name() << " from template " << srcModp->name() << endl);
+            V3LinkDotIfaceCapture::fixupCrossIfaceRefs(newModp, srcModp);
+        }
+
         // Grab all I/O so we can remap our pins later
         // Note we allow multiple users of a parameterized model,
         // thus we need to stash this info.

@@ -1316,7 +1316,41 @@ private:
         } else if (AstParamTypeDType* const ptdp = VN_CAST(nodep->refDTypep(), ParamTypeDType)) {
             AstParamTypeDType* targetPtdp = ptdp;
             AstNodeModule* ptOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
-            if (m_depNode && m_depNode->ownerModp) {
+
+            // Compute the cellPath for the PARAMTYPE target
+            // If this REFDTYPE has a cellName (from dotted access like io.data_t),
+            // use cell association to find the correct cellPath for the interface
+            string ptCellPath = cellPath;
+            bool usedCellAssociation = false;
+            if (!targetp->cellName.empty() && ptOwnerp && VN_IS(ptOwnerp, Iface)) {
+                // Build portPath: currentCellPath + "." + cellName
+                string cellContext;
+                if (m_depNode && !m_depNode->cellPath.empty()) {
+                    cellContext = m_depNode->cellPath;
+                } else if (!cellPath.empty()) {
+                    cellContext = cellPath;
+                }
+                const string portPath = cellContext + "." + targetp->cellName;
+                UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE looking up portPath='" << portPath << "'" << endl);
+
+                // Look up the connected interface instance cellPath
+                const auto assocIt = s_cellAssociations.find(portPath);
+                if (assocIt != s_cellAssociations.end()) {
+                    ptCellPath = assocIt->second;
+                    usedCellAssociation = true;
+                    UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE found cell association: portPath='"
+                              << portPath << "' -> ifaceCellPath='" << ptCellPath << "'" << endl);
+                } else {
+                    // Fallback: use cellContext + cellName directly
+                    ptCellPath = cellContext + "." + targetp->cellName;
+                    UINFO(5, "DEPGRAPH: REFDTYPE->PARAMTYPE no cell association for portPath='"
+                              << portPath << "', using fallback ptCellPath='" << ptCellPath << "'" << endl);
+                }
+            }
+
+            // Only retarget to current module's PARAMTYPE if we didn't use cell association
+            // When cell association is used, we want to connect to the interface's PARAMTYPE
+            if (!usedCellAssociation && m_depNode && m_depNode->ownerModp) {
                 const bool isTemplateOwner = isTemplateModule(ptOwnerp);
                 if (!ptOwnerp || isTemplateOwner) {
                     for (AstNode* stmtp = m_depNode->ownerModp->stmtsp(); stmtp;
@@ -1337,11 +1371,11 @@ private:
             } else {
                 UINFO(5, "DEPGRAPH: refdtype '" << nodep->name() << "' -> paramtype '"
                           << targetPtdp->name() << "' in " << ptOwnerp->name()
-                          << " using cellPath='" << cellPath << "'"
+                          << " using ptCellPath='" << ptCellPath << "'"
                           << " m_cellPathOverride='" << m_cellPathOverride << "'" << endl);
                 V3LinkDotDepGraph::DepNode* const ptNodep
                     = V3LinkDotDepGraph::findOrCreateNode(
-                        targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp, cellPath);
+                        targetPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptOwnerp, ptCellPath);
                 // Skip edge if REFDTYPE is child of the PARAMTYPE (would create cycle)
                 const bool isSelfRef = (m_depNode && m_depNode->nodep == targetPtdp);
                 if (!isSelfRef) {
@@ -2819,6 +2853,47 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
 }
 
 //======================================================================
+// Resolution - helper to sanitize cloned dtype trees
+
+// After cloneTree(), cross-links like refDTypep, typedefp, classOrPackagep still point
+// to nodes in the original/template tree. When V3Width processes the clone, it may
+// follow these links and modify the template tree, causing broken pointers when
+// the template is later deleted by V3Dead.
+//
+// This helper walks the cloned tree and clears any cross-links that point outside
+// the clone. The ParamSubstVisitor will later set refDTypep to our resolved types.
+static void sanitizeClonedDType(AstNodeDType* cloneDTypep) {
+    if (!cloneDTypep) return;
+
+    // Walk all nodes in the cloned tree
+    cloneDTypep->foreach([](AstNode* nodep) {
+        // Clear RefDType cross-links
+        if (AstRefDType* const rdp = VN_CAST(nodep, RefDType)) {
+            // Clear typedefp - it points to template typedef
+            if (rdp->typedefp()) {
+                UINFO(9, "DEPGRAPH: sanitize clearing typedefp on RefDType '"
+                          << rdp->name() << "'" << endl);
+                rdp->typedefp(nullptr);
+            }
+            // Clear classOrPackagep - it points to template module/package
+            if (rdp->classOrPackagep()) {
+                UINFO(9, "DEPGRAPH: sanitize clearing classOrPackagep on RefDType '"
+                          << rdp->name() << "'" << endl);
+                rdp->classOrPackagep(nullptr);
+            }
+            // Clear refDTypep - it points to template tree nodes (ParamTypeDType, etc.)
+            // ParamSubstVisitor will set it to our resolved type later
+            if (rdp->refDTypep()) {
+                UINFO(9, "DEPGRAPH: sanitize clearing refDTypep on RefDType '"
+                          << rdp->name() << "' was pointing to "
+                          << rdp->refDTypep()->prettyTypeName() << endl);
+                rdp->refDTypep(nullptr);
+            }
+        }
+    });
+}
+
+//======================================================================
 // Resolution - helper to clone, substitute, and width a parameterized dtype
 
 // Helper to clone a dtype, substitute resolved params/typedefs from dependencies,
@@ -2834,6 +2909,10 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
 
     // 1. Clone the dtype - get self-contained copy of entire type tree
     AstNodeDType* const cloneDTypep = dtypep->cloneTree(false);
+
+    // 2. Sanitize the clone - clear cross-links that point to template tree
+    // This prevents V3Width from following pointers back to the template and modifying it
+    sanitizeClonedDType(cloneDTypep);
 
     // Debug: Check if clone RefDType is same object as original
     if (AstStructDType* const origSdtp = VN_CAST(dtypep, StructDType)) {
@@ -2979,6 +3058,11 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
     }
 
     V3Width::widthParamsEdit(cloneDTypep);
+
+    // 3. Sanitize AGAIN after V3Width - V3Width may have set refDTypep to template nodes
+    // This is critical because V3Width follows type chains and may set refDTypep
+    // to BasicDType nodes that exist in the template tree
+    sanitizeClonedDType(cloneDTypep);
 
     // Debug: Check original struct after V3Width
     if (AstStructDType* const origSdtp = VN_CAST(dtypep, StructDType)) {

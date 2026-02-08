@@ -192,6 +192,10 @@ static void process() {
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs
         V3Error::abortIfErrors();
 
+        // Fix any remaining cross-interface refs created during V3Width::widthParamsEdit
+        // that weren't captured earlier. Must run before V3Dead deletes template modules.
+        V3LinkDotIfaceCapture::finalizeIfaceCapture();
+
         // Remove any modules that were parameterized and are no longer referenced.
         V3Dead::deadifyModules(v3Global.rootp());
 
