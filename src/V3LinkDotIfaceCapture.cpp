@@ -686,69 +686,122 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
 
     // Helper lambda to fix a refDTypep if it points to a template module
     auto fixRefDType = [&](AstRefDType* refp, const char* location) -> bool {
-        if (!refp->refDTypep()) return false;
+        bool fixed = false;
 
-        AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+        // Fix refDTypep if it points to a template module
+        if (refp->refDTypep()) {
+            AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
 
-        // Debug: log what we're checking
-        UINFO(9, "finalizeIfaceCapture: checking refp=" << refp
-                  << " refDTypep=" << refp->refDTypep()
-                  << " targetModp=" << (targetModp ? targetModp->name() : "<null>")
-                  << " dead=" << (targetModp ? targetModp->dead() : false) << endl);
+            // Debug: log what we're checking
+            UINFO(9, "finalizeIfaceCapture: checking refp=" << refp
+                      << " refDTypep=" << refp->refDTypep()
+                      << " targetModp=" << (targetModp ? targetModp->name() : "<null>")
+                      << " dead=" << (targetModp ? targetModp->dead() : false) << endl);
 
-        if (!targetModp) return false;
+            if (targetModp) {
+                // Check if target is a template module (dead or in our template set)
+                auto it = templateToCloneMap.find(targetModp);
+                if (it != templateToCloneMap.end()) {
+                    AstNodeModule* const clonedModp = it->second;
 
-        // Check if target is a template module (dead or in our template set)
-        auto it = templateToCloneMap.find(targetModp);
-        if (it == templateToCloneMap.end()) {
-            // Also check if targetModp is dead but not in our map
-            if (targetModp->dead()) {
-                UINFO(5, "finalizeIfaceCapture: WARNING - refp=" << refp
-                          << " points to dead module " << targetModp->name()
-                          << " but no clone mapping found" << endl);
-            }
-            return false;
-        }
-
-        AstNodeModule* const clonedModp = it->second;
-
-        // Try to find the cloned dtype using clonep()
-        AstNodeDType* clonedDTypep = refp->refDTypep()->clonep();
-        if (clonedDTypep) {
-            UINFO(5, "finalizeCapture (" << location << "): fixing via clonep() refp=" << refp
-                      << " old=" << refp->refDTypep()
-                      << " new=" << clonedDTypep << endl);
-            refp->refDTypep(clonedDTypep);
-            // Also fix dtypep if it points to the same template
-            if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
-                if (AstNodeDType* const clonedDtypep = refp->dtypep()->clonep()) {
-                    refp->dtypep(clonedDtypep);
-                }
-            }
-            return true;
-        }
-
-        // Fallback: search by name in the cloned module
-        const string& targetName = refp->refDTypep()->prettyName();
-        for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-            if (AstNodeDType* const dtp = VN_CAST(stmtp, NodeDType)) {
-                if (dtp->prettyName() == targetName) {
-                    UINFO(5, "finalizeCapture (" << location << "): fixing via name lookup refp="
-                              << refp << " old=" << refp->refDTypep()
-                              << " new=" << dtp << endl);
-                    refp->refDTypep(dtp);
-                    if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
-                        refp->dtypep(dtp);
+                    // Try to find the cloned dtype using clonep()
+                    AstNodeDType* clonedDTypep = refp->refDTypep()->clonep();
+                    if (clonedDTypep) {
+                        UINFO(5, "finalizeCapture (" << location << "): fixing refDTypep via clonep() refp=" << refp
+                                  << " old=" << refp->refDTypep()
+                                  << " new=" << clonedDTypep << endl);
+                        refp->refDTypep(clonedDTypep);
+                        // Also fix dtypep if it points to the same template
+                        if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
+                            if (AstNodeDType* const clonedDtypep = refp->dtypep()->clonep()) {
+                                refp->dtypep(clonedDtypep);
+                            }
+                        }
+                        fixed = true;
+                    } else {
+                        // Fallback: search by name in the cloned module
+                        const string& targetName = refp->refDTypep()->prettyName();
+                        for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstNodeDType* const dtp = VN_CAST(stmtp, NodeDType)) {
+                                if (dtp->prettyName() == targetName) {
+                                    UINFO(5, "finalizeCapture (" << location << "): fixing refDTypep via name lookup refp="
+                                              << refp << " old=" << refp->refDTypep()
+                                              << " new=" << dtp << endl);
+                                    refp->refDTypep(dtp);
+                                    if (refp->dtypep() && findOwnerModule(refp->dtypep()) == targetModp) {
+                                        refp->dtypep(dtp);
+                                    }
+                                    fixed = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
-                    return true;
+                } else if (targetModp->dead()) {
+                    UINFO(5, "finalizeIfaceCapture: WARNING - refp=" << refp
+                              << " refDTypep points to dead module " << targetModp->name()
+                              << " but no clone mapping found" << endl);
                 }
             }
         }
 
-        UINFO(5, "finalizeCapture (" << location << "): FAILED to fix refp=" << refp
-                  << " target=" << refp->refDTypep()
-                  << " in template " << targetModp->name() << endl);
-        return false;
+        // Also fix typedefp if it points to a template module
+        // typedefp can point to AstTypedef or AstNodeDType (like BASICDTYPE)
+        if (refp->typedefp()) {
+            AstNodeModule* const typedefModp = findOwnerModule(refp->typedefp());
+
+            UINFO(9, "finalizeIfaceCapture: checking refp=" << refp
+                      << " typedefp=" << refp->typedefp()
+                      << " typedefModp=" << (typedefModp ? typedefModp->name() : "<null>")
+                      << " dead=" << (typedefModp ? typedefModp->dead() : false) << endl);
+
+            if (typedefModp) {
+                auto it = templateToCloneMap.find(typedefModp);
+                if (it != templateToCloneMap.end()) {
+                    AstNodeModule* const clonedModp = it->second;
+
+                    // Try to find the cloned typedef using clonep()
+                    if (AstNode* const clonedp = refp->typedefp()->clonep()) {
+                        if (AstTypedef* const clonedTypedefp = VN_CAST(clonedp, Typedef)) {
+                            UINFO(5, "finalizeCapture (" << location << "): fixing typedefp via clonep() refp=" << refp
+                                      << " old=" << refp->typedefp()
+                                      << " new=" << clonedTypedefp << endl);
+                            refp->typedefp(clonedTypedefp);
+                            fixed = true;
+                        }
+                    } else {
+                        // Fallback: search by name in the cloned module
+                        const string& targetName = refp->typedefp()->name();
+                        for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                            if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                                if (tdp->name() == targetName) {
+                                    UINFO(5, "finalizeCapture (" << location << "): fixing typedefp via name lookup refp="
+                                              << refp << " old=" << refp->typedefp()
+                                              << " new=" << tdp << endl);
+                                    refp->typedefp(tdp);
+                                    fixed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else if (typedefModp->dead()) {
+                    UINFO(5, "finalizeIfaceCapture: WARNING - refp=" << refp
+                              << " typedefp points to dead module " << typedefModp->name()
+                              << " but no clone mapping found" << endl);
+                }
+            }
+        }
+
+        if (!fixed && refp->refDTypep()) {
+            AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+            if (targetModp && templateToCloneMap.count(targetModp)) {
+                UINFO(5, "finalizeCapture (" << location << "): FAILED to fix refp=" << refp
+                          << " target=" << refp->refDTypep()
+                          << " in template " << targetModp->name() << endl);
+            }
+        }
+        return fixed;
     };
 
     int typeTableFixed = 0;
