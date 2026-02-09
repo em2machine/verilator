@@ -43,6 +43,12 @@ std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
 static std::unordered_map<AstRefDType*, AstTypedef*> s_refDTypeScopedTypedefs;
 static std::unordered_map<AstTypedef*, AstTypedef*> s_typedefScopedTypedefs;
 
+// Pool of cloned types created during DepGraph execution.
+// This pool OWNS all cloned types - DepNodes just reference them via resolvedTypep.
+// Multiple DepNodes may share the same resolvedTypep via propagation along dependency chains.
+// Cleanup happens here (once per type) rather than in DepNodes (which would cause double-free).
+static std::vector<AstNodeDType*> s_clonedTypes;
+
 // Map from hierarchical port path to connected interface instance cell path
 // e.g., "t.u_subA.io" -> "t.subA_io"
 static std::unordered_map<string, string> s_cellAssociations{};
@@ -761,6 +767,9 @@ void V3LinkDotDepGraph::reset() {
     // and needed during graph build which occurs later.
     // Note: Do NOT clear s_refDTypeScopedTypedefs here - populated during linkdot primary
     // and needed during graph build which occurs later.
+    // Note: s_clonedTypes should already be empty (cleaned up by cleanupClonedTypes)
+    // but clear it here for safety in case reset() is called without cleanup
+    s_clonedTypes.clear();
     s_iterationCount = 0;
     s_builtModules.clear();
 }
@@ -2945,6 +2954,10 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
     // 1. Clone the dtype - get self-contained copy of entire type tree
     AstNodeDType* const cloneDTypep = dtypep->cloneTree(false);
 
+    // Add to cloned types pool for centralized cleanup
+    // The pool owns this type - DepNodes just reference it via resolvedTypep
+    s_clonedTypes.push_back(cloneDTypep);
+
     // 2. Sanitize the clone - clear cross-links that point to template tree
     // This prevents V3Width from following pointers back to the template and modifying it
     sanitizeClonedDType(cloneDTypep);
@@ -3407,6 +3420,31 @@ int V3LinkDotDepGraph::resolve() {
         if (!nodep || nodep->resolved) continue;
         if (nodep->pendingDeps > 0) continue;
 
+        // Skip template nodes (empty cellPath with interface owner)
+        // Template nodes are just templates - actual work happens on cell-context nodes
+        // This prevents crashes when trying to resolve template TYPEDEFs that have no
+        // valid dependencies (they depend on template params that are never instantiated)
+        if (nodep->cellPath.empty() && nodep->ownerModp && VN_IS(nodep->ownerModp, Iface)) {
+            // Mark as resolved but don't actually process - just propagate initial values
+            nodep->resolved = true;
+            nodep->resolvedIteration = ++s_iterationCount;
+            nodep->resolvedWidth = nodep->initialWidth;
+            if (nodep->initialValuep) nodep->resolvedValuep = nodep->initialValuep;
+            if (nodep->initialTypep) nodep->resolvedTypep = nodep->initialTypep;
+            UINFO(3, "\n");
+            UINFO(3, "DEPGRAPH SKIP-TEMPLATE[" << s_iterationCount << "]: "
+                      << "[" << nodeTypeName(nodep->nodeType) << "] "
+                      << nodeName(nodep) << "@" << nodeOwnerName(nodep)
+                      << " (template interface node)" << endl);
+            // Still wake up dependents
+            for (DepNode* const depNodep : nodep->dependents) {
+                if (!depNodep || depNodep->resolved) continue;
+                if (depNodep->pendingDeps > 0) --depNodep->pendingDeps;
+                if (depNodep->pendingDeps == 0) ready.push_back(depNodep);
+            }
+            continue;
+        }
+
         // === EXECUTION TRACE: Before ===
         UINFO(3, "\n");
         UINFO(3, "DEPGRAPH EXEC[" << (s_iterationCount + 1) << "]: "
@@ -3738,28 +3776,28 @@ void V3LinkDotDepGraph::finalizeAST() {
 void V3LinkDotDepGraph::cleanupClonedTypes() {
     if (!s_enabled) return;
 
-    // Remove cloned types from global type table and delete them
-    // This must be called before V3Param runs to prevent V3Width from finding
-    // our temporary clones in the type table
-    int deletedCount = 0;
+    // Clear resolvedTypep pointers in all DepNodes first
+    // These are just references - the pool owns the actual types
     for (DepNode* nodep : s_allNodes) {
-        if (!nodep) continue;
-        if (nodep->resolvedTypep) {
-            // Only process cloned nodes (not attached to AST)
-            if (!nodep->resolvedTypep->backp()) {
-                // Remove from type table first to prevent dangling pointers
-                AstNodeDType* const typep = nodep->resolvedTypep;
-                if (v3Global.rootp()->typeTablep()) {
-                    // Note: There's no public remove method, but deleteTree will handle it
-                    // The type table will be cleaned up separately
-                }
-                VL_DO_DANGLING(typep->deleteTree(), nodep->resolvedTypep);
-                ++deletedCount;
-            }
-            nodep->resolvedTypep = nullptr;
+        if (nodep) nodep->resolvedTypep = nullptr;
+    }
+
+    // Delete cloned types from the centralized pool
+    // This pool owns all cloned types created during DepGraph execution.
+    // Multiple DepNodes may have shared the same resolvedTypep via propagation,
+    // but each type is only in the pool once, so we delete exactly once.
+    int deletedCount = 0;
+    for (AstNodeDType* typep : s_clonedTypes) {
+        if (!typep) continue;
+        // Only delete if not attached to AST (cloned nodes have no backp)
+        if (!typep->backp()) {
+            VL_DO_DANGLING(typep->deleteTree(), typep);
+            ++deletedCount;
         }
     }
-    UINFO(3, "DEPGRAPH: cleaned up " << deletedCount << " cloned type nodes" << endl);
+    s_clonedTypes.clear();
+
+    UINFO(3, "DEPGRAPH: cleaned up " << deletedCount << " cloned type nodes from pool" << endl);
 }
 
 //======================================================================

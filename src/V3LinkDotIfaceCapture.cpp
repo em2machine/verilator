@@ -314,6 +314,13 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
     UINFO(9, indentFn() << "iface capture typedef owner var=" << enclosingVarp
                         << " name=" << enclosingVarp->prettyName());
 
+    // Do NOT promote interface parent VARs - they have VARREFs pointing to them from interface
+    // port connections. Deleting these VARs would leave dangling VARREFs.
+    if (enclosingVarp->isIfaceParent()) {
+        UINFO(9, indentFn() << "iface capture skipping isIfaceParent var promotion");
+        return;
+    }
+
     if (promoteVarCb && promoteVarCb(enclosingVarp, refp)) return;
     UINFO(9, indentFn() << "iface capture failed to convert owner var name="
                         << enclosingVarp->prettyName());
@@ -645,17 +652,21 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     if (!v3Global.rootp()) return;
 
     // First pass: identify template modules/interfaces (dead or no "__" in name)
-    // Include both interfaces AND modules since cross-module type refs can also break
+    // The top-level module is a special case - it's never a template
     for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
         if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+            // Skip the top-level module - it's never a template
+            if (modp->isTop()) {
+                UINFO(9, "finalizeIfaceCapture: skipping top module " << modp->name() << endl);
+                continue;
+            }
+            // Skip packages - they don't get cloned
+            if (VN_IS(modp, Package)) continue;
             if (modp->dead() || modp->name().find("__") == string::npos) {
-                // Include interfaces and modules (but not packages which don't get cloned)
-                if (VN_IS(modp, Iface) || VN_IS(modp, Module)) {
-                    templateModules.insert(modp);
-                    UINFO(9, "finalizeIfaceCapture: template "
-                              << (VN_IS(modp, Iface) ? "interface" : "module")
-                              << " " << modp->name() << endl);
-                }
+                templateModules.insert(modp);
+                UINFO(9, "finalizeIfaceCapture: template "
+                          << (VN_IS(modp, Iface) ? "interface" : "module")
+                          << " " << modp->name() << endl);
             }
         }
     }
@@ -817,10 +828,12 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
         }
     }
 
-    // Walk all cloned modules
+    // Walk all non-dead modules (both cloned and non-cloned)
+    // Non-cloned modules like 'top' can also contain REFDTYPEs with typedefp
+    // pointing to template interfaces (e.g., in $bits(iface_port[0].type_t) expressions)
     for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
         if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
-            if (!modp->dead() && modp->name().find("__") != string::npos) {
+            if (!modp->dead()) {
                 modp->foreach([&](AstRefDType* refp) {
                     if (fixRefDType(refp, modp->name().c_str())) ++moduleFixed;
                 });
