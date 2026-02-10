@@ -760,10 +760,12 @@ const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
 }
 
 V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
-    if (!varp) return NodeType::GPARAM;
+    UASSERT_OBJ(varp, varp, "classifyVar called with null varp");
     if (varp->isGParam()) return NodeType::GPARAM;
     if (varp->isParam()) return NodeType::LPARAM;
-    return NodeType::GPARAM;
+    // Non-parameter variables should not be classified - caller should check first
+    UASSERT_OBJ(false, varp, "classifyVar called on non-parameter variable '" << varp->name() << "'");
+    return NodeType::GPARAM;  // Unreachable, but needed for compiler
 }
 
 //======================================================================
@@ -1144,6 +1146,13 @@ private:
 
     void visit(AstVarRef* nodep) override {
         if (AstVar* const varp = nodep->varp()) {
+            // Only create dependency nodes for parameters (GPARAM, LPARAM)
+            // Regular variables (logic, wire, etc.) are not part of the dependency graph
+            if (!varp->isGParam() && !varp->isParam()) {
+                UINFO(9, "DEPGRAPH: DepExprVisitor skipping non-param var '" << varp->name()
+                          << "' (not GPARAM/LPARAM)" << endl);
+                return;
+            }
             AstNodeModule* const varOwnerp = V3LinkDotDepGraph::findOwnerModule(varp);
             V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(varp);
             const string cellPath = effectiveCellPath(varOwnerp);
@@ -2740,8 +2749,21 @@ private:
                           << "' (via var '" << varp->name() << "') depends on STRUCTDTYPE in "
                           << m_modp->name() << endl);
                 break;
+            } else if (VN_IS(dtypep, BasicDType) || VN_IS(dtypep, ConstDType)
+                       || VN_IS(dtypep, PackArrayDType) || VN_IS(dtypep, UnpackArrayDType)) {
+                // Known non-parameterized types - no dependency needed
+                // BasicDType: logic [N:0], int, etc.
+                // ConstDType: const wrapper
+                // PackArrayDType/UnpackArrayDType: arrays of basic types
+                UINFO(9, "DEPGRAPH: ATTROF '" << nodep->attrType().ascii()
+                          << "' (via var '" << varp->name() << "') has non-parameterized dtype "
+                          << dtypep->typeName() << " - no dependency needed" << endl);
+                break;
             } else {
-                // Other types - no parameterized dependency
+                // Unknown dtype - warn so we can add handling if needed
+                UINFO(1, "DEPGRAPH: WARNING: ATTROF '" << nodep->attrType().ascii()
+                          << "' (via var '" << varp->name() << "') has unhandled dtype "
+                          << dtypep->typeName() << " in " << m_modp->name() << endl);
                 break;
             }
         }
@@ -3532,20 +3554,46 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
     //   - VARREF to another param
     //   - MemberSel for struct params (cfg.Width)
     //   - Complex expressions ($bits(data_t) * cfg.Width - 2 + $clog2(param_B))
+    //   - PATTERN (struct literal like '{8})
     // We substitute all dependencies and fold to a constant.
     if (nodep->nodeType == NodeType::LPARAM && nodep->initialValuep) {
-        AstConst* const constp = evaluateLparamExpression(
-            nodep->initialValuep, nodep, "LPARAM '" + nodeName(nodep) + "'");
-        if (constp) {
-            nodep->resolvedValuep = constp;
-            nodep->resolvedWidth = constp->width();
-        } else {
-            // Evaluation failed - use initialValuep as fallback
-            // This may happen if dependencies aren't fully resolved yet
-            if (!nodep->resolvedValuep) {
+        // Special case: PATTERN values need dtype set before V3Width can process them
+        if (AstPattern* const patp = VN_CAST(nodep->initialValuep, Pattern)) {
+            AstVar* const varp = VN_CAST(nodep->nodep, Var);
+            if (varp && varp->dtypep()) {
+                // Clone the pattern and set its dtype
+                AstPattern* const clonePatp = patp->cloneTree(false);
+                clonePatp->dtypep(varp->dtypep());
+                // Process through V3Width to convert to ConsPackUOrStruct
+                V3Width::widthParamsEdit(clonePatp);
+                V3Const::constifyParamsEdit(clonePatp);
+                nodep->resolvedValuep = clonePatp;
+                if (clonePatp->dtypep()) {
+                    nodep->resolvedWidth = clonePatp->dtypep()->width();
+                }
+                UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                          << "' processed PATTERN -> " << clonePatp->typeName() << endl);
+            } else {
+                // No dtype available - use as-is (will likely fail later)
                 nodep->resolvedValuep = nodep->initialValuep;
                 UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
-                          << "' using initialValuep as fallback" << endl);
+                          << "' PATTERN has no dtype, using as-is" << endl);
+            }
+        } else {
+            // Not a PATTERN - evaluate as expression
+            AstConst* const constp = evaluateLparamExpression(
+                nodep->initialValuep, nodep, "LPARAM '" + nodeName(nodep) + "'");
+            if (constp) {
+                nodep->resolvedValuep = constp;
+                nodep->resolvedWidth = constp->width();
+            } else {
+                // Evaluation failed - use initialValuep as fallback
+                // This may happen if dependencies aren't fully resolved yet
+                if (!nodep->resolvedValuep) {
+                    nodep->resolvedValuep = nodep->initialValuep;
+                    UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                              << "' using initialValuep as fallback" << endl);
+                }
             }
         }
     } else if (!nodep->resolvedValuep && nodep->initialValuep) {
