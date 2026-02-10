@@ -1162,16 +1162,26 @@ private:
         // Cross-module reference without cellPathOverride.
         // Handle known legitimate cases:
 
-        // Case 1: Target is top module or package - empty cellPath is correct.
+        // Case 1: Target owner is null (compilation unit) - empty cellPath is correct.
+        if (!targetOwnerp) {
+            UINFO(9, "DEPGRAPH: cross-module ref to null owner (compilation unit)"
+                      << " returning empty cellPath" << endl);
+            return "";
+        }
+
+        // Case 2: Target is top module or package - empty cellPath is correct.
         // These are global/shared and don't have per-instance context.
-        if (targetOwnerp && (targetOwnerp->isTop() || VN_IS(targetOwnerp, Package))) {
+        if (targetOwnerp->isTop() || VN_IS(targetOwnerp, Package)) {
             UINFO(9, "DEPGRAPH: cross-module ref to top/package " << targetOwnerp->name()
                       << " returning empty cellPath" << endl);
             return "";
         }
 
-        // Case 2: Target is a parent interface - strip last component to get parent cellPath.
-        if (!m_depNode->cellPath.empty() && targetOwnerp && VN_IS(targetOwnerp, Iface)) {
+        // Case 3: Target is a parent interface in the hierarchy.
+        // Strip the last component of the depNode's cellPath to get the parent context.
+        // This is only safe for interfaces because the parent cellPath directly maps
+        // to the interface instance. For regular modules, the mapping may not hold.
+        if (!m_depNode->cellPath.empty() && VN_IS(targetOwnerp, Iface)) {
             const size_t lastDot = m_depNode->cellPath.rfind('.');
             if (lastDot != string::npos) {
                 const string parentPath = m_depNode->cellPath.substr(0, lastDot);
@@ -1182,20 +1192,15 @@ private:
             }
         }
 
-        // Case 3: Target owner is null (compilation unit) - empty cellPath is correct.
-        if (!targetOwnerp) {
-            UINFO(9, "DEPGRAPH: cross-module ref to null owner (compilation unit)"
-                      << " returning empty cellPath" << endl);
-            return "";
-        }
-
-        // Unhandled cross-module ref - this is a bug in the caller or an unhandled pattern.
-        UASSERT_OBJ(false, m_depNode ? m_depNode->nodep : nullptr,
+        // Unhandled cross-module ref to a non-top, non-package, non-interface module.
+        // This indicates a bug: either the caller should have provided cellPathOverride,
+        // or deps were collected redundantly without the correct context.
+        UASSERT_OBJ(false, m_depNode->nodep,
                      "effectiveCellPath: unhandled cross-module ref"
-                     << " target=" << (targetOwnerp ? targetOwnerp->name() : "<null>")
-                     << " targetType=" << (targetOwnerp ? targetOwnerp->typeName() : "<null>")
-                     << " depNode=" << (m_depNode ? V3LinkDotDepGraph::nodeName(m_depNode) : "<null>")
-                     << " cellPath='" << (m_depNode ? m_depNode->cellPath : "") << "'");
+                     << " target=" << targetOwnerp->name()
+                     << " targetType=" << targetOwnerp->typeName()
+                     << " depNode=" << V3LinkDotDepGraph::nodeName(m_depNode)
+                     << " cellPath='" << m_depNode->cellPath << "'");
         return "";  // Unreachable, but needed for compiler
     }
 
@@ -2010,9 +2015,15 @@ private:
         }
 
         // Collect dependencies from the value expression (prefer captured pre-constify)
-        AstNode* exprp = depNodep->initialValuep ? depNodep->initialValuep : nodep->valuep();
-        if (exprp) {
-            V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp);
+        // IMPORTANT: If the node already has dependencies, they were set by pin processing
+        // in visit(AstCell*) with the correct parentCellPath context. Don't re-collect here
+        // without cellPathOverride — that would create duplicate edges with wrong context
+        // (empty cellPath → template-level nodes instead of cell-context nodes).
+        if (depNodep->dependsOn.empty()) {
+            AstNode* exprp = depNodep->initialValuep ? depNodep->initialValuep : nodep->valuep();
+            if (exprp) {
+                V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp);
+            }
         }
 
         // Also collect dependencies from the dtype (e.g., localparam tm_region_t foo = ...)
