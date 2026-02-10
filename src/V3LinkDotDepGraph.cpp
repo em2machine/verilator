@@ -1213,6 +1213,13 @@ private:
                     }
                 }
             }
+            // Only create dependency nodes for parameters (GPARAM, LPARAM)
+            // Regular variables (logic, wire, etc.) are not part of the dependency graph
+            if (!targetVarp->isGParam() && !targetVarp->isParam()) {
+                UINFO(9, "DEPGRAPH: DepExprVisitor skipping non-param var '" << targetVarp->name()
+                          << "' (not GPARAM/LPARAM)" << endl);
+                return;
+            }
             V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(targetVarp);
             // Use effectiveCellPath for cross-module refs
             const string cellPath = effectiveCellPath(targetModp);
