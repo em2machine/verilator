@@ -88,6 +88,10 @@ class ParamSubstVisitor final : public VNVisitor {
     std::map<string, AstNode*> m_paramValues;
     // Map from typedef name to resolved type
     std::map<string, AstNodeDType*> m_typedefTypes;
+    // Map from ATTROF key (attrType + operand type name) to resolved constant value
+    // This allows us to match cloned ATTROF nodes to their resolved values
+    // Key format: "DIM_BITS:data_t" for $bits(data_t)
+    std::map<string, AstConst*> m_attrOfValues;
 
 public:
     // Add a parameter value substitution
@@ -97,6 +101,14 @@ public:
     // Add a typedef type substitution
     void addTypedef(const string& name, AstNodeDType* typep) {
         if (typep) m_typedefTypes[name] = typep;
+    }
+    // Add an ATTROF ($bits, etc.) value substitution
+    // Key format: "attrType:typeName" (e.g., "DIM_BITS:data_t")
+    void addAttrOf(VAttrType attrType, const string& typeName, AstConst* valuep) {
+        if (!typeName.empty() && valuep) {
+            const string key = VAttrType{attrType}.ascii() + string(":") + typeName;
+            m_attrOfValues[key] = valuep;
+        }
     }
 
     // Run substitution on a cloned dtype tree
@@ -199,6 +211,37 @@ private:
                       << "' width from " << nodep->width()
                       << " to " << nodep->subDTypep()->width() << endl);
             nodep->widthForce(nodep->subDTypep()->width(), nodep->subDTypep()->widthMin());
+        }
+    }
+
+    void visit(AstAttrOf* nodep) override {
+        // Handle $bits(type), $dimensions(type), etc.
+        // If we have a resolved value for this ATTROF, replace the entire
+        // ATTROF node with the constant value.
+        // First, iterate children in case there are nested substitutions
+        iterateChildren(nodep);
+
+        // Build the key: attrType:typeName
+        string typeName;
+        if (nodep->fromp()) {
+            if (AstRefDType* const rdtp = VN_CAST(nodep->fromp(), RefDType)) {
+                typeName = rdtp->name();
+            } else if (AstNodeDType* const dtypep = VN_CAST(nodep->fromp(), NodeDType)) {
+                typeName = dtypep->name();
+            }
+        }
+
+        if (!typeName.empty()) {
+            const string key = nodep->attrType().ascii() + string(":") + typeName;
+            auto it = m_attrOfValues.find(key);
+            if (it != m_attrOfValues.end() && it->second) {
+                AstConst* const newp = it->second->cloneTree(false);
+                UINFO(5, "DEPGRAPH: ParamSubstVisitor replacing AttrOf(" << key
+                          << ") with CONST value=" << newp->num().toUInt() << endl);
+                nodep->replaceWith(newp);
+                VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                return;
+            }
         }
     }
 
@@ -2938,6 +2981,150 @@ static void sanitizeClonedDType(AstNodeDType* cloneDTypep) {
 }
 
 //======================================================================
+// Resolution - helper to evaluate LPARAM expressions
+
+// Helper to evaluate an LPARAM expression by substituting resolved param values
+// from dependencies and folding to a constant.
+// Returns the folded AstConst, or nullptr if evaluation failed.
+// Handles arbitrary expressions like: cfg.Width * cfg.Depth, $bits(data_t) + $bits(data2_t), etc.
+//
+// Algorithm:
+// 1. Collect all dependency nodes that have resolved constant values
+// 2. Clone the expression - cloneTree() sets clonep() on original nodes pointing to clones
+// 3. For each dependency, use clonep() to find the cloned node and replace it with the value
+// 4. Run V3Width and V3Const to fold the expression
+static AstConst* evaluateLparamExpression(AstNode* exprp,
+                                           V3LinkDotDepGraph::DepNode* nodep,
+                                           const string& debugName) {
+    using DepNode = V3LinkDotDepGraph::DepNode;
+
+    if (!exprp || !nodep) return nullptr;
+
+    // Skip if expression is already a constant
+    if (AstConst* const constp = VN_CAST(exprp, Const)) {
+        return constp->cloneTree(false);
+    }
+
+    // Skip if expression is a PATTERN - those are struct params, not expressions to evaluate
+    if (VN_IS(exprp, Pattern)) return nullptr;
+
+    UINFO(5, "DEPGRAPH: " << debugName << " evaluating expression: " << exprp->typeName() << endl);
+
+    // 1. Collect all dependencies with resolved values (including transitive)
+    // We need to collect before cloning so we can use clonep() after
+    std::vector<std::pair<AstNode*, AstNode*>> substitutions;  // (origNodep, resolvedValuep)
+    std::set<DepNode*> visited;
+    std::function<void(DepNode*)> collectDeps = [&](DepNode* depp) {
+        if (!depp || !depp->resolved || visited.count(depp)) return;
+        visited.insert(depp);
+
+        if (depp->resolvedValuep && depp->nodep) {
+            AstNode* valuep = depp->resolvedValuep;
+
+            // For PATTERN values, convert to ConsPackUOrStruct
+            if (AstPattern* const patp = VN_CAST(valuep, Pattern)) {
+                AstVar* const varp = VN_CAST(depp->nodep, Var);
+                if (varp && varp->dtypep()) {
+                    AstPattern* const clonePatp = patp->cloneTree(false);
+                    clonePatp->dtypep(varp->dtypep());
+                    V3Width::widthParamsEdit(clonePatp);
+                    V3Const::constifyParamsEdit(clonePatp);
+                    valuep = clonePatp;
+                    UINFO(5, "DEPGRAPH: " << debugName
+                              << " processed PATTERN for " << V3LinkDotDepGraph::nodeName(depp)
+                              << " -> " << valuep->typeName() << endl);
+                }
+            }
+
+            substitutions.push_back({depp->nodep, valuep});
+            UINFO(5, "DEPGRAPH: " << debugName
+                      << " collected substitution: " << depp->nodep->typeName()
+                      << " -> " << valuep->typeName() << endl);
+        }
+
+        // Recurse into transitive dependencies
+        for (DepNode* const transDepp : depp->dependsOn) {
+            collectDeps(transDepp);
+        }
+    };
+    for (DepNode* const depp : nodep->dependsOn) {
+        collectDeps(depp);
+    }
+
+    // 2. Clone the expression - this sets clonep() on original nodes
+    AstNode* clonedExprp = exprp->cloneTree(false);
+
+    // 3. For each substitution, find the cloned node via clonep() and replace it
+    // We need to wrap in a container first so replaceWith() works
+    FileLine* const fl = exprp->fileline();
+    AstBegin* const wrapperp = new AstBegin{fl, "[LparamEval]", clonedExprp, true /*implied*/};
+
+    for (const auto& subst : substitutions) {
+        AstNode* const origNodep = subst.first;
+        AstNode* const valuep = subst.second;
+
+        // clonep() points from original to its clone (set during cloneTree)
+        AstNode* const clonedNodep = origNodep->clonep();
+        if (clonedNodep) {
+            // Clone the value and replace the cloned node
+            AstNode* const newValuep = valuep->cloneTree(false);
+            UINFO(5, "DEPGRAPH: " << debugName
+                      << " replacing cloned " << clonedNodep->typeName()
+                      << " with " << newValuep->typeName() << endl);
+            clonedNodep->replaceWith(newValuep);
+            VL_DO_DANGLING(clonedNodep->deleteTree(), clonedNodep);
+        }
+    }
+
+    // Also run ParamSubstVisitor for VarRef and MemberSel substitutions
+    // (these are matched by name, not by clonep())
+    ParamSubstVisitor substVisitor;
+    for (const auto& subst : substitutions) {
+        // For VarRef substitutions, we need the parameter name
+        if (AstVar* const varp = VN_CAST(subst.first, Var)) {
+            substVisitor.addParam(varp->name(), subst.second);
+        }
+    }
+    substVisitor.substitute(wrapperp);
+
+    // 4. Extract the (possibly replaced) expression from the wrapper
+    AstNode* resultExprp = wrapperp->stmtsp();
+    if (resultExprp) {
+        resultExprp->unlinkFrBack();
+    }
+
+    // Clean up the wrapper
+    VL_DO_DANGLING(wrapperp->deleteTree(), wrapperp);
+
+    if (!resultExprp) {
+        UINFO(5, "DEPGRAPH: " << debugName << " substitution produced null expression" << endl);
+        return nullptr;
+    }
+
+    UINFO(5, "DEPGRAPH: " << debugName
+              << " after substitution: " << resultExprp->typeName() << endl);
+
+    // 5. Width and fold the expression
+    resultExprp = V3Width::widthParamsEdit(resultExprp);
+    resultExprp = V3Const::constifyEdit(resultExprp);
+
+    UINFO(5, "DEPGRAPH: " << debugName
+              << " after constify: " << resultExprp->typeName() << endl);
+
+    // 6. Check if we got a constant
+    if (AstConst* const constp = VN_CAST(resultExprp, Const)) {
+        UINFO(5, "DEPGRAPH: " << debugName
+                  << " evaluated to const value=" << constp->num().toUInt()
+                  << " width=" << constp->width() << endl);
+        return constp;
+    }
+
+    UINFO(5, "DEPGRAPH: " << debugName
+              << " failed to evaluate to constant, result=" << resultExprp->typeName() << endl);
+    return nullptr;
+}
+
+//======================================================================
 // Resolution - helper to clone, substitute, and width a parameterized dtype
 
 // Helper to clone a dtype, substitute resolved params/typedefs from dependencies,
@@ -3339,8 +3526,30 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                   << " for '" << nodeName(nodep) << "'" << endl);
     }
 
-    // If no dependency provided a value, use the initial value captured during build
-    if (!nodep->resolvedValuep && nodep->initialValuep) {
+    // Special handling for LPARAM nodes - ALWAYS evaluate the expression
+    // The initialValuep is always an expression tree that may contain:
+    //   - Simple CONST (already evaluated)
+    //   - VARREF to another param
+    //   - MemberSel for struct params (cfg.Width)
+    //   - Complex expressions ($bits(data_t) * cfg.Width - 2 + $clog2(param_B))
+    // We substitute all dependencies and fold to a constant.
+    if (nodep->nodeType == NodeType::LPARAM && nodep->initialValuep) {
+        AstConst* const constp = evaluateLparamExpression(
+            nodep->initialValuep, nodep, "LPARAM '" + nodeName(nodep) + "'");
+        if (constp) {
+            nodep->resolvedValuep = constp;
+            nodep->resolvedWidth = constp->width();
+        } else {
+            // Evaluation failed - use initialValuep as fallback
+            // This may happen if dependencies aren't fully resolved yet
+            if (!nodep->resolvedValuep) {
+                nodep->resolvedValuep = nodep->initialValuep;
+                UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                          << "' using initialValuep as fallback" << endl);
+            }
+        }
+    } else if (!nodep->resolvedValuep && nodep->initialValuep) {
+        // For non-LPARAM nodes, use initialValuep if no value was propagated
         nodep->resolvedValuep = nodep->initialValuep;
         UINFO(5, "DEPGRAPH: use initialValuep for '" << nodeName(nodep) << "'" << endl);
     }
