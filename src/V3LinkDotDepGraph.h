@@ -120,7 +120,8 @@ private:
                                      const std::string& cellPath = "");
     static void addEdge(DepNode* from, DepNode* to);
     static void collectExpressionDeps(AstNode* exprp, DepNode* depNode, AstNodeModule* scopeModp,
-                                      const std::string& cellPathOverride = "");
+                                      const std::string& cellPathOverride = "",
+                                      bool hasCellPathOverride = false);
     static NodeType classifyVar(const AstVar* varp);
     static const char* nodeTypeName(NodeType type);
 

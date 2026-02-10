@@ -310,7 +310,10 @@ static const char* nodeTypeName(V3LinkDotDepGraph::NodeType type) {
     case V3LinkDotDepGraph::NodeType::ATTROF: return "ATTROF";
     case V3LinkDotDepGraph::NodeType::FUNC: return "FUNC";
     }
-    return "?";
+    // LCOV_EXCL_START
+    UASSERT(false, "nodeTypeName: unhandled NodeType");
+    return "?";  // Unreachable
+    // LCOV_EXCL_STOP
 }
 
 void V3LinkDotDepGraph::dumpGraph(const char* stageName) {
@@ -775,7 +778,10 @@ const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
     case NodeType::ATTROF: return "ATTROF";
     case NodeType::FUNC: return "FUNC";
     }
-    return "?";
+    // LCOV_EXCL_START
+    UASSERT(false, "nodeTypeName: unhandled NodeType");
+    return "?";  // Unreachable
+    // LCOV_EXCL_STOP
 }
 
 V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
@@ -1044,7 +1050,11 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
         }
         break;
     }
-    default:
+    case NodeType::ATTROF:
+        // ATTROF nodes ($bits, etc.) have no initial width - computed during resolution
+        break;
+    case NodeType::FUNC:
+        // FUNC nodes have no initial width - they track return type dependencies
         break;
     }
 
@@ -1097,7 +1107,8 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findByNameAndOwner(
 }
 
 void V3LinkDotDepGraph::addEdge(DepNode* from, DepNode* to) {
-    if (!from || !to) return;
+    UASSERT(from, "addEdge called with null 'from' node");
+    UASSERT(to, "addEdge called with null 'to' node");
     if (from == to) {
         UINFO(5, "DEPGRAPH: skip self-edge '" << nodeName(from) << "'@" << nodeOwnerName(from)
                   << " type=" << nodeTypeName(from->nodeType) << " nodep=" << (from->nodep ? cvtToHex(from->nodep) : "<nullptr>") << endl);
@@ -1135,13 +1146,16 @@ class DepExprVisitor final : public VNVisitorConst {
 private:
     V3LinkDotDepGraph::DepNode* m_depNode;
     string m_cellPathOverride;  // Override cellPath for pin expressions (use parent's context)
+    bool m_hasCellPathOverride = false;  // True if cellPathOverride was explicitly provided
 
     // Get the effective cellPath - use override if set, else depNode's cellPath
     // IMPORTANT: For cross-module references (e.g., nested interface referencing parent's param),
     // the caller MUST provide cellPathOverride. Returning empty string for cross-module refs
     // creates template nodes that cause incorrect dependency resolution.
     string effectiveCellPath(AstNodeModule* targetOwnerp) const {
-        if (!m_cellPathOverride.empty()) return m_cellPathOverride;
+        // If caller explicitly provided a cellPathOverride, use it.
+        // Note: empty string IS a valid override (top-level context).
+        if (m_hasCellPathOverride) return m_cellPathOverride;
         if (!m_depNode) return "";
         if (targetOwnerp == m_depNode->ownerModp) return m_depNode->cellPath;
 
@@ -1160,7 +1174,14 @@ private:
                 return parentPath;
             }
         }
-        return "";
+        // Falling through to empty cellPath for cross-module ref creates template nodes
+        // that cause incorrect dependency resolution. This is a bug in the caller.
+        UASSERT_OBJ(false, m_depNode ? m_depNode->nodep : nullptr,
+                     "effectiveCellPath: cross-module ref returning empty cellPath"
+                     << " target=" << (targetOwnerp ? targetOwnerp->name() : "<null>")
+                     << " depNode=" << (m_depNode ? V3LinkDotDepGraph::nodeName(m_depNode) : "<null>")
+                     << " cellPath='" << (m_depNode ? m_depNode->cellPath : "") << "'");
+        return "";  // Unreachable, but needed for compiler
     }
 
     void visit(AstVarRef* nodep) override {
@@ -1229,6 +1250,12 @@ private:
                                 }
                             }
                         }
+                    } else {
+                        UINFO(1, "DEPGRAPH: WARNING: VarXRef dotted='" << dotted
+                                  << "' cellName='" << cellName
+                                  << "' could not resolve interface module in "
+                                  << m_depNode->ownerModp->name()
+                                  << " - using original target" << endl);
                     }
                 }
             }
@@ -1656,18 +1683,21 @@ private:
 
 public:
     DepExprVisitor(AstNode* exprp, V3LinkDotDepGraph::DepNode* depNode,
-                   const string& cellPathOverride = "")
+                   const string& cellPathOverride = "",
+                   bool hasCellPathOverride = false)
         : m_depNode(depNode)
-        , m_cellPathOverride(cellPathOverride) {
+        , m_cellPathOverride(cellPathOverride)
+        , m_hasCellPathOverride(hasCellPathOverride) {
         if (exprp) iterateConst(exprp);
     }
 };
 
 void V3LinkDotDepGraph::collectExpressionDeps(AstNode* exprp, DepNode* depNode,
                                                AstNodeModule* /*scopeModp*/,
-                                               const string& cellPathOverride) {
+                                               const string& cellPathOverride,
+                                               bool hasCellPathOverride) {
     if (!exprp || !depNode) return;
-    DepExprVisitor{exprp, depNode, cellPathOverride};
+    DepExprVisitor{exprp, depNode, cellPathOverride, hasCellPathOverride};
 }
 
 //======================================================================
@@ -1752,6 +1782,11 @@ private:
 
                     // Register the association
                     V3LinkDotDepGraph::registerCellAssociation(portPath, ifaceCellPath);
+                } else {
+                    UINFO(1, "DEPGRAPH: WARNING: CellAssocDiscovery: interface port '"
+                              << portName << "' on cell '" << nodep->name()
+                              << "' has non-VarRef expression type="
+                              << exprp->typeName() << " - skipping association" << endl);
                 }
             }
         }
@@ -2155,7 +2190,7 @@ private:
                  UINFO(5, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name()
                            << " collecting deps from subDTypep with cellPath='" << m_cellPath << "'\n");
             }
-            V3LinkDotDepGraph::collectExpressionDeps(nodep->subDTypep(), depNodep, m_modp, m_cellPath);
+            V3LinkDotDepGraph::collectExpressionDeps(nodep->subDTypep(), depNodep, m_modp, m_cellPath, /*hasCellPathOverride=*/true);
         } else {
             if (nodep->name() == "T") {
                  UINFO(5, "DEPGRAPH: DEBUG: visit ParamTypeDType 'T' in " << m_modp->name()
@@ -2211,7 +2246,7 @@ private:
                 if (AstNode* const exprp = pinp->exprp()) {
                     UINFO(9, "DEPGRAPH: Collecting deps from param override expr for "
                               << childVarp->name() << " using parentCellPath='" << parentCellPath << "'" << endl);
-                    V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath);
+                    V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath, /*hasCellPathOverride=*/true);
 
                     // Capture override expression - override REPLACES default as boundary condition
                     if (childNodep->initialValuep) {
@@ -2249,7 +2284,7 @@ private:
                 if (AstNode* const exprp = pinp->exprp()) {
                     UINFO(9, "DEPGRAPH: Collecting deps from type param override for "
                               << childPtdp->name() << " using parentCellPath='" << parentCellPath << "'" << endl);
-                    V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath);
+                    V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath, /*hasCellPathOverride=*/true);
                 }
 
                 // For type parameter pins, capture the override type's width as initial state
@@ -2290,8 +2325,10 @@ private:
             childNodep->pinp = pinp;
 
             // The child param depends on the pin expression (which may reference parent params/lparams)
+            // IMPORTANT: Use parentCellPath for expression deps - the expression is in the
+            // parent module's scope, not the child's (same as parameter pins above)
             if (AstNode* const exprp = pinp->exprp()) {
-                V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp);
+                V3LinkDotDepGraph::collectExpressionDeps(exprp, childNodep, m_modp, parentCellPath, /*hasCellPathOverride=*/true);
             }
         }
 
@@ -2958,10 +2995,9 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
     if (s_allNodes.empty()) {
         reset();
     } else {
-        // OLD ARCHITECTURE REMNANT: This branch was for preserving nodes across iterations
-        // In new architecture, build should only run once with empty graph
-        UINFO(3, "DEPGRAPH WARNING: build() called with " << s_allNodes.size()
-                  << " existing nodes - old architecture remnant?" << endl);
+        // NEW ARCHITECTURE: build should only run once with empty graph
+        UASSERT(false, "DEPGRAPH: build() called with " << s_allNodes.size()
+                       << " existing nodes - build should only be called once");
     }
 
     // PHASE 1: Discover and register cell associations for interface ports
@@ -3638,8 +3674,12 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                 // This may happen if dependencies aren't fully resolved yet
                 if (!nodep->resolvedValuep) {
                     nodep->resolvedValuep = nodep->initialValuep;
-                    UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
-                              << "' using initialValuep as fallback" << endl);
+                    UINFO(1, "DEPGRAPH: WARNING: LPARAM '" << nodeName(nodep)
+                              << "'@" << nodeOwnerName(nodep)
+                              << " cellPath='" << nodep->cellPath
+                              << "' evaluation failed, using initialValuep as fallback"
+                              << " (result type=" << (nodep->initialValuep ? nodep->initialValuep->typeName() : "<null>")
+                              << ")" << endl);
                 }
             }
         }
@@ -3831,7 +3871,15 @@ int V3LinkDotDepGraph::resolve() {
         }
     }
     if (unresolvedCount > 0) {
-        UINFO(5, "DEPGRAPH: " << unresolvedCount << " unresolved nodes (possible cycles)" << endl);
+        UINFO(1, "DEPGRAPH: WARNING: " << unresolvedCount
+                  << " unresolved nodes after resolution (possible dependency cycle)" << endl);
+        for (DepNode* nodep : s_allNodes) {
+            if (!nodep || nodep->resolved) continue;
+            UINFO(1, "DEPGRAPH:   UNRESOLVED: [" << nodeTypeName(nodep->nodeType) << "] "
+                      << nodeName(nodep) << "@" << nodeOwnerName(nodep)
+                      << " cellPath='" << nodep->cellPath << "'"
+                      << " pendingDeps=" << nodep->pendingDeps << endl);
+        }
     }
 
     if (debug() >= 5) {
@@ -4058,7 +4106,8 @@ void V3LinkDotDepGraph::finalizeAST() {
         case NodeType::ATTROF:
             // ATTROF ($bits) - don't modify AST here, V3Width handles this
             break;
-        default:
+        case NodeType::FUNC:
+            // FUNC nodes - no AST finalization needed
             break;
         }
     }
