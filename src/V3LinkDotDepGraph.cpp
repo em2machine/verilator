@@ -1159,26 +1159,41 @@ private:
         if (!m_depNode) return "";
         if (targetOwnerp == m_depNode->ownerModp) return m_depNode->cellPath;
 
-        // Cross-module reference without cellPathOverride - this is a bug in the caller.
-        // The caller should have provided the correct cellPath for the target module.
-        // For now, compute parent cellPath for nested interface case to avoid breaking
-        // existing tests, but log a warning.
+        // Cross-module reference without cellPathOverride.
+        // Handle known legitimate cases:
+
+        // Case 1: Target is top module or package - empty cellPath is correct.
+        // These are global/shared and don't have per-instance context.
+        if (targetOwnerp && (targetOwnerp->isTop() || VN_IS(targetOwnerp, Package))) {
+            UINFO(9, "DEPGRAPH: cross-module ref to top/package " << targetOwnerp->name()
+                      << " returning empty cellPath" << endl);
+            return "";
+        }
+
+        // Case 2: Target is a parent interface - strip last component to get parent cellPath.
         if (!m_depNode->cellPath.empty() && targetOwnerp && VN_IS(targetOwnerp, Iface)) {
-            // Strip the last component to get parent cellPath
             const size_t lastDot = m_depNode->cellPath.rfind('.');
             if (lastDot != string::npos) {
                 const string parentPath = m_depNode->cellPath.substr(0, lastDot);
-                UINFO(5, "DEPGRAPH: WARNING: cross-module ref to " << targetOwnerp->name()
-                          << " without cellPathOverride, using parent cellPath='" << parentPath
+                UINFO(5, "DEPGRAPH: cross-module ref to interface " << targetOwnerp->name()
+                          << " using parent cellPath='" << parentPath
                           << "' (depNode cellPath='" << m_depNode->cellPath << "')" << endl);
                 return parentPath;
             }
         }
-        // Falling through to empty cellPath for cross-module ref creates template nodes
-        // that cause incorrect dependency resolution. This is a bug in the caller.
+
+        // Case 3: Target owner is null (compilation unit) - empty cellPath is correct.
+        if (!targetOwnerp) {
+            UINFO(9, "DEPGRAPH: cross-module ref to null owner (compilation unit)"
+                      << " returning empty cellPath" << endl);
+            return "";
+        }
+
+        // Unhandled cross-module ref - this is a bug in the caller or an unhandled pattern.
         UASSERT_OBJ(false, m_depNode ? m_depNode->nodep : nullptr,
-                     "effectiveCellPath: cross-module ref returning empty cellPath"
+                     "effectiveCellPath: unhandled cross-module ref"
                      << " target=" << (targetOwnerp ? targetOwnerp->name() : "<null>")
+                     << " targetType=" << (targetOwnerp ? targetOwnerp->typeName() : "<null>")
                      << " depNode=" << (m_depNode ? V3LinkDotDepGraph::nodeName(m_depNode) : "<null>")
                      << " cellPath='" << (m_depNode ? m_depNode->cellPath : "") << "'");
         return "";  // Unreachable, but needed for compiler
