@@ -1760,7 +1760,16 @@ public:
         // Evaluate all module constants
         V3Const::constifyParamsEdit(nodep);
         // Set name for warnings for when we param propagate the module
-        const string instanceName = someInstanceName + "." + nodep->name();
+        // For AstIfaceRefDType, name() returns the modport name (often empty),
+        // so use cellName() which is the actual cell instance name.
+        // If both are empty (interface port, not a cell), skip appending
+        // to avoid double-dots in the path.
+        string nodeName = nodep->name();
+        if (AstIfaceRefDType* const ifaceRefp = VN_CAST(nodep, IfaceRefDType)) {
+            if (nodeName.empty()) nodeName = ifaceRefp->cellName();
+        }
+        const string instanceName
+            = nodeName.empty() ? someInstanceName : (someInstanceName + "." + nodeName);
         srcModp->someInstanceName(instanceName);
 
         AstNodeModule* newModp = nullptr;

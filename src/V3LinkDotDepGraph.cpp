@@ -167,6 +167,25 @@ private:
                 }
             }
         }
+
+        // Also check for ConsPackUOrStruct (what PATTERN becomes after V3Width/V3Const)
+        if (AstConsPackUOrStruct* const consp = VN_CAST(nodep->fromp(), ConsPackUOrStruct)) {
+            const string& memberName = nodep->name();
+            // Extract the member value from the ConsPackUOrStruct
+            // membersp() is a list of AstConsPackMember
+            for (AstConsPackMember* memp = consp->membersp(); memp;
+                 memp = VN_AS(memp->nextp(), ConsPackMember)) {
+                if (memp->name() == memberName && memp->rhsp()) {
+                    // Found the member - replace MemberSel with the member value
+                    AstNode* const valuep = memp->rhsp()->cloneTree(false);
+                    UINFO(5, "DEPGRAPH: ParamSubstVisitor extracting member '" << memberName
+                              << "' from ConsPackUOrStruct" << endl);
+                    nodep->replaceWith(valuep);
+                    VL_DO_DANGLING(nodep->deleteTree(), nodep);
+                    return;
+                }
+            }
+        }
     }
 
     void visit(AstRefDType* nodep) override {
@@ -1611,6 +1630,27 @@ private:
             }
         }
         // Don't iterate children - the ATTROF node handles its own dependencies
+    }
+    void visit(AstMemberSel* nodep) override {
+        // Struct member access like cfg.AddrBits - depends on the base variable being resolved
+        // The base variable (e.g., cfg) must be a parameter for us to resolve the member value
+        if (AstVarRef* const vrp = VN_CAST(nodep->fromp(), VarRef)) {
+            if (AstVar* const varp = vrp->varp()) {
+                // Only create dependency if the base is a parameter
+                if (varp->isGParam() || varp->isParam()) {
+                    AstNodeModule* const varOwnerp = V3LinkDotDepGraph::findOwnerModule(varp);
+                    V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(varp);
+                    const string cellPath = effectiveCellPath(varOwnerp);
+                    V3LinkDotDepGraph::DepNode* const targetp
+                        = V3LinkDotDepGraph::findOrCreateNode(varp, type, varOwnerp, cellPath);
+                    V3LinkDotDepGraph::addEdge(m_depNode, targetp);
+                    UINFO(5, "DEPGRAPH: MemberSel '" << nodep->name() << "' depends on param '"
+                              << varp->name() << "'" << endl);
+                }
+            }
+        }
+        // Continue iterating children (in case there are nested expressions)
+        iterateChildrenConst(nodep);
     }
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
@@ -4070,6 +4110,8 @@ void V3LinkDotDepGraph::cleanupClonedTypes() {
 void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
                                               const std::string& cellPath) {
     if (!s_enabled) return;
+    UASSERT_OBJ(srcModp, srcModp, "applyResolvedToClone called with null srcModp");
+    UASSERT_OBJ(newModp, newModp, "applyResolvedToClone called with null newModp");
     if (cellPath.empty()) return;
 
     UINFO(5, "DEPGRAPH: applyResolvedToClone srcMod=" << srcModp->name()
@@ -4083,34 +4125,225 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
         }
     }
 
-    // Find all DepNodes for this cellPath and apply their resolved values
-    int appliedCount = 0;
-    for (DepNode* nodep : s_allNodes) {
-        if (!nodep || !nodep->resolved) continue;
-        if (nodep->cellPath != cellPath) continue;
-        if (nodep->ownerModp != srcModp) continue;
+    // Determine which cellPath to use for matching DepNodes.
+    // V3Param may pass a cellPath that doesn't match DepGraph's cellPath
+    // (e.g., for nested interface instances where someInstanceName() is stale).
+    // In that case, fall back to matching by GPARAM values on the cloned module.
+    // This is safe because identical GPARAMs produce identical LPARAMs, and
+    // V3Param deduplicates clones with identical parameters.
+    std::string matchCellPath = cellPath;
 
-        // Only apply LPARAMs (GPARAMs are handled by V3Param from pins)
-        if (nodep->nodeType == NodeType::LPARAM) {
-            AstVar* const srcVarp = VN_CAST(nodep->nodep, Var);
-            if (!srcVarp) continue;
+    // Check if any resolved DepNode exists with exact cellPath match for this srcModp
+    bool hasExactMatch = false;
+    for (DepNode* dnp : s_allNodes) {
+        if (!dnp || !dnp->resolved) continue;
+        if (dnp->ownerModp != srcModp) continue;
+        if (dnp->cellPath == cellPath) { hasExactMatch = true; break; }
+    }
 
-            // Find the corresponding var in the cloned module
-            const auto it = clonedVarsByName.find(srcVarp->name());
-            if (it == clonedVarsByName.end()) continue;
-            AstVar* const clonedVarp = it->second;
+    if (!hasExactMatch) {
+        UINFO(5, "DEPGRAPH: applyResolvedToClone no exact cellPath match, trying fallbacks" << endl);
 
-            // Apply resolved value
-            if (nodep->resolvedValuep) {
-                UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
-                          << "' val=" << nodep->resolvedValuep << endl);
-                if (clonedVarp->valuep()) {
-                    clonedVarp->valuep()->unlinkFrBack()->deleteTree();
+        // Collect GPARAM values from the cloned module (already set by V3Param pin assignment)
+        std::unordered_map<std::string, AstNode*> cloneGParamValues;
+        for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+                if (varp->isGParam() && varp->valuep()) {
+                    cloneGParamValues[varp->name()] = varp->valuep();
+                    UINFO(5, "DEPGRAPH:   clone GPARAM '" << varp->name()
+                              << "' type=" << varp->valuep()->typeName() << endl);
                 }
-                clonedVarp->valuep(nodep->resolvedValuep->cloneTree(false));
-                ++appliedCount;
             }
         }
+
+        // Collect all distinct cellPaths for this srcModp that have resolved GPARAM nodes
+        std::set<std::string> candidatePaths;
+        for (DepNode* dnp : s_allNodes) {
+            if (!dnp || !dnp->resolved) continue;
+            if (dnp->ownerModp != srcModp) continue;
+            if (dnp->nodeType == NodeType::GPARAM && !dnp->cellPath.empty()) {
+                candidatePaths.insert(dnp->cellPath);
+            }
+        }
+
+        UINFO(5, "DEPGRAPH:   candidate cellPaths: " << candidatePaths.size() << endl);
+        for (const auto& cp : candidatePaths) {
+            UINFO(5, "DEPGRAPH:     candidate: '" << cp << "'" << endl);
+        }
+
+        // Try to match by GPARAM values first (using sameTree - works when both
+        // sides are the same AST node type, e.g., both CONST)
+        bool foundByGParam = false;
+        for (const auto& candPath : candidatePaths) {
+            bool allMatch = true;
+            bool anyChecked = false;
+            for (DepNode* dnp : s_allNodes) {
+                if (!dnp || !dnp->resolved) continue;
+                if (dnp->ownerModp != srcModp) continue;
+                if (dnp->cellPath != candPath) continue;
+                if (dnp->nodeType != NodeType::GPARAM) continue;
+
+                AstVar* const gvarp = VN_CAST(dnp->nodep, Var);
+                if (!gvarp || !dnp->resolvedValuep) continue;
+
+                const auto it = cloneGParamValues.find(gvarp->name());
+                if (it == cloneGParamValues.end()) { allMatch = false; break; }
+
+                if (!it->second->sameTree(dnp->resolvedValuep)) {
+                    allMatch = false;
+                    break;
+                }
+                anyChecked = true;
+            }
+            if (allMatch && anyChecked) {
+                UINFO(5, "DEPGRAPH: applyResolvedToClone cellPath fallback (GPARAM match): '"
+                          << cellPath << "' -> '" << candPath << "'" << endl);
+                matchCellPath = candPath;
+                foundByGParam = true;
+                break;
+            }
+        }
+
+        // If GPARAM value comparison failed (e.g., CONST vs PATTERN type mismatch),
+        // try rewriting V3Param's cellPath using s_cellAssociations.
+        //
+        // V3Param builds paths through module cells: t.u_subA.sub_types
+        //   (t -> u_subA cell -> skips interface port 'io' -> sub_types cell)
+        // DepGraph builds paths through interface cells: t.subA_io.sub_types
+        //   (t -> subA_io interface cell -> sub_types cell)
+        //
+        // s_cellAssociations maps: "t.u_subA.io" -> "t.subA_io"
+        //
+        // Algorithm: split V3Param's path at each dot from the right.
+        // For each prefix, check if any s_cellAssociations key starts with
+        // that prefix + "." (meaning the module at that prefix has an interface
+        // port). If found, the association value gives the interface cell path.
+        // Append the suffix to get the DepGraph-style path.
+        if (!foundByGParam && !candidatePaths.empty()) {
+            std::string rewrittenPath;
+            bool foundRewrite = false;
+
+            // Split cellPath into prefix and suffix at each dot from the right
+            // e.g., "t.u_subA.sub_types" -> prefix="t.u_subA", suffix="sub_types"
+            size_t splitPos = cellPath.rfind('.');
+            while (splitPos != std::string::npos && !foundRewrite) {
+                const std::string prefix = cellPath.substr(0, splitPos);
+                const std::string suffix = cellPath.substr(splitPos + 1);
+                const std::string prefixDot = prefix + ".";
+
+                // Find any s_cellAssociations key that starts with this prefix + "."
+                // e.g., key="t.u_subA.io" starts with "t.u_subA."
+                for (const auto& assoc : s_cellAssociations) {
+                    const std::string& portPath = assoc.first;   // e.g., "t.u_subA.io"
+                    const std::string& ifacePath = assoc.second;  // e.g., "t.subA_io"
+
+                    if (portPath.size() > prefixDot.size()
+                        && portPath.compare(0, prefixDot.size(), prefixDot) == 0) {
+                        // Found: portPath starts with prefix + "."
+                        // Rewrite: ifacePath + "." + suffix
+                        rewrittenPath = ifacePath + "." + suffix;
+                        UINFO(5, "DEPGRAPH:   trying rewrite via assoc: prefix='"
+                                  << prefix << "' portPath='" << portPath
+                                  << "' -> '" << ifacePath << "' + '." << suffix
+                                  << "' = '" << rewrittenPath << "'" << endl);
+                        if (candidatePaths.count(rewrittenPath)) {
+                            foundRewrite = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Try next split point (further left)
+                if (splitPos > 0) {
+                    splitPos = cellPath.rfind('.', splitPos - 1);
+                } else {
+                    break;
+                }
+            }
+
+            if (foundRewrite) {
+                UINFO(5, "DEPGRAPH: applyResolvedToClone cellPath fallback "
+                          "(cellAssoc rewrite): '" << cellPath
+                          << "' -> '" << rewrittenPath << "'" << endl);
+                matchCellPath = rewrittenPath;
+            } else {
+                UASSERT_OBJ(false, srcModp,
+                             "applyResolvedToClone: no cellPath match found for '"
+                             << cellPath << "' srcMod=" << srcModp->name()
+                             << " candidates=" << candidatePaths.size());
+            }
+        }
+    }
+
+    // Apply resolved LPARAM values in two passes:
+    // 1. Instance-specific (matching cellPath) - these take priority
+    // 2. Template-level (empty cellPath) - only for LPARAMs not already set
+    std::set<std::string> appliedNames;  // Track which LPARAMs were set by instance match
+    int appliedCount = 0;
+
+    // Pass 1: Instance-specific matches
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep || !nodep->resolved) continue;
+        if (nodep->ownerModp != srcModp) continue;
+        if (nodep->cellPath != matchCellPath) continue;
+        if (nodep->nodeType != NodeType::LPARAM) continue;
+
+        AstVar* const srcVarp = VN_CAST(nodep->nodep, Var);
+        UASSERT(srcVarp, "LPARAM DepNode has non-Var nodep");
+        if (!nodep->resolvedValuep) continue;
+
+        // Only apply fully constant values. Non-constant resolved values
+        // (e.g., PATTERNs) may contain broken references that fold to zero.
+        // Leave those alone so V3Param can fold the original expression
+        // using the clone's already-set GPARAM values.
+        if (!VN_IS(nodep->resolvedValuep, Const)) {
+            UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
+                      << "' (instance) SKIPPED non-const type=" << nodep->resolvedValuep->typeName() << endl);
+            continue;
+        }
+
+        const auto it = clonedVarsByName.find(srcVarp->name());
+        UASSERT_OBJ(it != clonedVarsByName.end(), srcVarp,
+                     "LPARAM '" << srcVarp->name() << "' not found in cloned module " << newModp->name());
+        AstVar* const clonedVarp = it->second;
+
+        UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
+                  << "' (instance) val=" << nodep->resolvedValuep << endl);
+        if (clonedVarp->valuep()) clonedVarp->valuep()->unlinkFrBack()->deleteTree();
+        clonedVarp->valuep(nodep->resolvedValuep->cloneTree(false));
+        appliedNames.insert(srcVarp->name());
+        ++appliedCount;
+    }
+
+    // Pass 2: Template-level (empty cellPath) - only for LPARAMs not already set
+    for (DepNode* nodep : s_allNodes) {
+        if (!nodep || !nodep->resolved) continue;
+        if (nodep->ownerModp != srcModp) continue;
+        if (!nodep->cellPath.empty()) continue;  // Only template-level
+        if (nodep->nodeType != NodeType::LPARAM) continue;
+
+        AstVar* const srcVarp = VN_CAST(nodep->nodep, Var);
+        UASSERT(srcVarp, "LPARAM DepNode has non-Var nodep");
+        if (!nodep->resolvedValuep) continue;
+        if (appliedNames.count(srcVarp->name())) continue;  // Already set by instance match
+
+        // Only apply fully constant values (same reason as pass 1)
+        if (!VN_IS(nodep->resolvedValuep, Const)) {
+            UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
+                      << "' (template) SKIPPED non-const type=" << nodep->resolvedValuep->typeName() << endl);
+            continue;
+        }
+
+        const auto it = clonedVarsByName.find(srcVarp->name());
+        UASSERT_OBJ(it != clonedVarsByName.end(), srcVarp,
+                     "LPARAM '" << srcVarp->name() << "' not found in cloned module " << newModp->name());
+        AstVar* const clonedVarp = it->second;
+
+        UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
+                  << "' (template) val=" << nodep->resolvedValuep << endl);
+        if (clonedVarp->valuep()) clonedVarp->valuep()->unlinkFrBack()->deleteTree();
+        clonedVarp->valuep(nodep->resolvedValuep->cloneTree(false));
+        ++appliedCount;
     }
 
     UINFO(5, "DEPGRAPH: applyResolvedToClone applied " << appliedCount << " values" << endl);
