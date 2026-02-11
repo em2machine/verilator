@@ -710,11 +710,26 @@ class ParamProcessor final {
 
         if (V3LinkDotIfaceCapture::enabled()) {
             AstCell* const cloneCellp = VN_CAST(ifErrorp, Cell);
+            UINFO(5, "IfaceCapture clone: srcModp=" << srcModp->name()
+                      << " newModp=" << newModp->name()
+                      << " cloneCellp=" << (cloneCellp ? cloneCellp->name() : "<null>")
+                      << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
             V3LinkDotIfaceCapture::forEachOwned(
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
                     if (!entry.refp) return;
 
+                    UINFO(5, "IfaceCapture entry: refp=" << entry.refp->name()
+                              << " typedefp=" << (entry.typedefp ? entry.typedefp->name() : "<null>")
+                              << " paramTypep=" << (entry.paramTypep ? entry.paramTypep->name() : "<null>")
+                              << " cellp=" << (entry.cellp ? entry.cellp->name() : "<null>")
+                              << " cellp->modp=" << (entry.cellp && entry.cellp->modp() ? entry.cellp->modp()->name() : "<null>")
+                              << " ownerModp=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
+                              << " typedefOwnerModp=" << (entry.typedefOwnerModp ? entry.typedefOwnerModp->name() : "<null>")
+                              << " ifacePortVarp=" << (entry.ifacePortVarp ? entry.ifacePortVarp->name() : "<null>")
+                              << endl);
+
                     if (!V3LinkDotIfaceCapture::shouldApplyToClone(entry, srcModp, cloneCellp)) {
+                        UINFO(5, "IfaceCapture: shouldApplyToClone=false, skipping" << endl);
                         return;
                     }
 
@@ -749,10 +764,61 @@ class ParamProcessor final {
                             if (targetTypedefp) break;
                         }
 
-                        if (!targetTypedefp) targetTypedefp = origTypedefp->clonep();
+                        UINFO(5, "IfaceCapture: after ifaceRefRefs search: targetTypedefp="
+                                  << (targetTypedefp ? targetTypedefp->name() : "<null>")
+                                  << " for typedef '" << typedefName << "'" << endl);
+
+                        // If ifaceRefRefs didn't find it, try the cloned cell's interface.
+                        // entry.cellp is the original cell (e.g., port_types in template child).
+                        // Its clonep() gives the cloned cell in newModp, whose modp() points
+                        // to the correct cloned interface for this specific instance.
+                        if (!targetTypedefp && entry.cellp) {
+                            AstCell* const clonedCellp = entry.cellp->clonep();
+                            UINFO(5, "IfaceCapture: cloned cell search: entry.cellp="
+                                      << entry.cellp->name()
+                                      << " clonedCellp=" << (clonedCellp ? clonedCellp->name() : "<null>")
+                                      << " clonedCellp->modp=" << (clonedCellp && clonedCellp->modp() ? clonedCellp->modp()->name() : "<null>")
+                                      << " origModp=" << (entry.cellp->modp() ? entry.cellp->modp()->name() : "<null>")
+                                      << " same=" << (clonedCellp && clonedCellp->modp() == entry.cellp->modp())
+                                      << endl);
+                            if (clonedCellp) {
+                                AstNodeModule* const clonedModp = clonedCellp->modp();
+                                if (clonedModp && clonedModp != entry.cellp->modp()) {
+                                    for (AstNode* stmtp = clonedModp->stmtsp(); stmtp;
+                                         stmtp = stmtp->nextp()) {
+                                        if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                                            if (tdp->name() == typedefName) {
+                                                targetTypedefp = tdp;
+                                                UINFO(5, "IfaceCapture: found typedef '"
+                                                          << typedefName << "' via cloned cell '"
+                                                          << clonedCellp->name() << "' in "
+                                                          << clonedModp->name() << endl);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!targetTypedefp) {
+                            targetTypedefp = origTypedefp->clonep();
+                            UINFO(5, "IfaceCapture: fallback to clonep(): "
+                                      << (targetTypedefp ? targetTypedefp->name() : "<null>")
+                                      << " owner="
+                                      << (targetTypedefp ? V3LinkDotIfaceCapture::findOwnerModule(targetTypedefp) : nullptr)
+                                      << endl);
+                        }
+
+                        UINFO(5, "IfaceCapture: FINAL targetTypedefp="
+                                  << (targetTypedefp ? targetTypedefp->name() : "<null>")
+                                  << " for refp=" << entry.refp->name()
+                                  << " in srcModp=" << srcModp->name()
+                                  << " -> newModp=" << newModp->name() << endl);
 
                         if (targetTypedefp) {
-                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp);
+                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp,
+                                                                  cloneCellp);
                         }
                     }
                     // Handle PARAMTYPEDTYPE references
@@ -918,93 +984,121 @@ class ParamProcessor final {
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
-        // Fix typedefp pointers on REFDTYPEs in the cloned module.
-        // After cloning, REFDTYPEs may have typedefp still pointing to a template
-        // interface's typedef (via clonep() which is last-writer-wins).
-        // Walk newModp's cells to find cloned interfaces, build a template→clone
-        // typedef map, then redirect typedefp pointers to the correct clone.
-        // Must run before widthParamsEdit so V3Width sees correct pointers.
+        // Record deferred fixups for REFDTYPEs in the cloned module whose
+        // typedefp/refDTypep still points to a template interface's node.
+        // Build a template→clone interface map from:
+        //   1. ifaceRefRefs (port-connected interfaces — the IFACEREFDTYPE was
+        //      already wired to the cloned interface above)
+        //   2. newModp's cells that already point to cloned interfaces
+        // Then for each REFDTYPE whose target owner is a template in the map,
+        // record a deferred fixup with the correct clone module.
+        // The actual pointer fixup happens in finalizeIfaceCapture() when all
+        // clones exist and have correct types.
         {
-            std::map<AstTypedef*, AstTypedef*> typedefMap;
-            // Walk cells in newModp to find cloned interface references
+            // Helper: find template interface by origName
+            auto findTemplate = [](AstNodeModule* cloneModp) -> AstNodeModule* {
+                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
+                    if (AstIface* const ifp = VN_CAST(np, Iface)) {
+                        if (ifp != cloneModp && ifp->name() == cloneModp->origName()) {
+                            return ifp;
+                        }
+                    }
+                }
+                return nullptr;
+            };
+
+            std::map<AstNodeModule*, AstNodeModule*> templateToClone;
+
+            UINFO(5, "DIAG deferred: newModp=" << newModp->name()
+                      << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
+
+            // Source 1: ifaceRefRefs — port-connected interfaces
+            for (const auto& pair : ifaceRefRefs) {
+                const AstIfaceRefDType* const pinIrefp = pair.second;
+                AstIface* const cloneIfacep = pinIrefp->ifaceViaCellp();
+                UINFO(5, "DIAG deferred: ifaceRefRef pin=" << pinIrefp
+                          << " cloneIface=" << (cloneIfacep ? cloneIfacep->name() : "<null>")
+                          << " origName=" << (cloneIfacep ? cloneIfacep->origName() : "<null>")
+                          << endl);
+                if (!cloneIfacep) continue;
+                if (cloneIfacep->name().find("__") == string::npos) continue;
+                AstNodeModule* const tmplp = findTemplate(cloneIfacep);
+                UINFO(5, "DIAG deferred: findTemplate(" << cloneIfacep->name()
+                          << ") = " << (tmplp ? tmplp->name() : "<null>") << endl);
+                if (tmplp) templateToClone[tmplp] = cloneIfacep;
+
+                // Recurse: cloned interface may contain cells to other cloned interfaces
+                for (AstNode* sp = cloneIfacep->stmtsp(); sp; sp = sp->nextp()) {
+                    if (AstCell* const innerCellp = VN_CAST(sp, Cell)) {
+                        AstNodeModule* const innerModp = innerCellp->modp();
+                        if (!innerModp || !VN_IS(innerModp, Iface)) continue;
+                        if (innerModp->name().find("__") == string::npos) continue;
+                        AstNodeModule* const innerTmplp = findTemplate(innerModp);
+                        if (innerTmplp) templateToClone[innerTmplp] = innerModp;
+                    }
+                }
+            }
+
+            // Source 2: newModp's direct cells that point to cloned interfaces
             for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                 AstCell* const cellp = VN_CAST(stmtp, Cell);
                 if (!cellp) continue;
                 AstNodeModule* const cellModp = cellp->modp();
                 if (!cellModp || !VN_IS(cellModp, Iface)) continue;
                 if (cellModp->name().find("__") == string::npos) continue;
-                // This cell points to a cloned interface. Find its template.
-                AstNodeModule* templateIfacep = nullptr;
-                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
-                    if (AstIface* const ifp = VN_CAST(np, Iface)) {
-                        if (ifp != cellModp && ifp->name() == cellModp->origName()) {
-                            templateIfacep = ifp;
-                            break;
-                        }
-                    }
-                }
-                if (!templateIfacep) continue;
-                // Map template typedefs → cloned typedefs by name
-                for (AstNode* tp = templateIfacep->stmtsp(); tp; tp = tp->nextp()) {
-                    AstTypedef* const tmplTdp = VN_CAST(tp, Typedef);
-                    if (!tmplTdp) continue;
-                    for (AstNode* cp = cellModp->stmtsp(); cp; cp = cp->nextp()) {
-                        AstTypedef* const cloneTdp = VN_CAST(cp, Typedef);
-                        if (cloneTdp && cloneTdp->name() == tmplTdp->name()) {
-                            typedefMap[tmplTdp] = cloneTdp;
-                            break;
-                        }
-                    }
-                }
-                // Also recurse into the cloned interface's cells for nested interfaces
+                AstNodeModule* const tmplp = findTemplate(cellModp);
+                if (tmplp) templateToClone[tmplp] = cellModp;
+
+                // Recurse into sub-cells
                 for (AstNode* sp = cellModp->stmtsp(); sp; sp = sp->nextp()) {
-                    AstCell* const innerCellp = VN_CAST(sp, Cell);
-                    if (!innerCellp) continue;
-                    AstNodeModule* const innerModp = innerCellp->modp();
-                    if (!innerModp || !VN_IS(innerModp, Iface)) continue;
-                    if (innerModp->name().find("__") == string::npos) continue;
-                    AstNodeModule* innerTemplatep = nullptr;
-                    for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
-                        if (AstIface* const ifp = VN_CAST(np, Iface)) {
-                            if (ifp != innerModp && ifp->name() == innerModp->origName()) {
-                                innerTemplatep = ifp;
-                                break;
-                            }
-                        }
-                    }
-                    if (!innerTemplatep) continue;
-                    for (AstNode* tp = innerTemplatep->stmtsp(); tp; tp = tp->nextp()) {
-                        AstTypedef* const tmplTdp = VN_CAST(tp, Typedef);
-                        if (!tmplTdp) continue;
-                        for (AstNode* cp = innerModp->stmtsp(); cp; cp = cp->nextp()) {
-                            AstTypedef* const cloneTdp = VN_CAST(cp, Typedef);
-                            if (cloneTdp && cloneTdp->name() == tmplTdp->name()) {
-                                typedefMap[tmplTdp] = cloneTdp;
-                                break;
-                            }
-                        }
+                    if (AstCell* const innerCellp = VN_CAST(sp, Cell)) {
+                        AstNodeModule* const innerModp = innerCellp->modp();
+                        if (!innerModp || !VN_IS(innerModp, Iface)) continue;
+                        if (innerModp->name().find("__") == string::npos) continue;
+                        AstNodeModule* const innerTmplp = findTemplate(innerModp);
+                        if (innerTmplp) templateToClone[innerTmplp] = innerModp;
                     }
                 }
             }
-            if (!typedefMap.empty()) {
-                int fixed = 0;
-                newModp->foreach([&](AstRefDType* refp) {
-                    if (AstTypedef* const tdp = refp->typedefp()) {
-                        const auto it = typedefMap.find(tdp);
-                        if (it != typedefMap.end()) {
-                            UINFO(5, "V3Param: fixing typedefp in " << newModp->name()
-                                      << " ref=" << refp->name()
-                                      << " old=" << tdp->name()
-                                      << " new=" << it->second->name() << endl);
-                            refp->typedefp(it->second);
-                            ++fixed;
+
+            // Record deferred fixups for REFDTYPEs whose targets are in template
+            // interfaces OR in wrong clones (via clonep() last-writer-wins).
+            // Build a reverse map: any clone of the same template → correct clone.
+            if (!templateToClone.empty()) {
+                // Build set of all clones of templates we know about, mapping
+                // each to the correct clone for this module instance.
+                // Also include templates themselves.
+                std::map<AstNodeModule*, AstNodeModule*> anyToCorrectClone;
+                for (const auto& kv : templateToClone) {
+                    // template → correct clone
+                    anyToCorrectClone[kv.first] = kv.second;
+                }
+                // Find all other clones of the same templates and map them too
+                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
+                    AstNodeModule* const modp = VN_CAST(np, NodeModule);
+                    if (!modp || modp->dead()) continue;
+                    if (modp->name().find("__") == string::npos) continue;
+                    // Check if this is a clone of one of our templates
+                    for (const auto& kv : templateToClone) {
+                        if (modp->origName() == kv.first->name()
+                            && modp != kv.second) {
+                            // This is a wrong clone — map it to the correct one
+                            anyToCorrectClone[modp] = kv.second;
+                            break;
                         }
                     }
-                });
-                if (fixed) {
-                    UINFO(5, "V3Param: fixed " << fixed << " typedefp pointers in "
-                              << newModp->name() << endl);
                 }
+
+                UINFO(5, "DIAG deferred: anyToCorrectClone has "
+                          << anyToCorrectClone.size() << " entries for "
+                          << newModp->name() << ":" << endl);
+                for (const auto& kv : anyToCorrectClone) {
+                    UINFO(5, "DIAG deferred:   " << kv.first->name()
+                              << " -> " << kv.second->name() << endl);
+                }
+
+                // Fixups are handled by the pendingClones list in IfaceCapture.
+                // When replaceTypedef is called, it updates ALL pending clones.
             }
         }
         // Assign parameters to the constants specified
