@@ -61,21 +61,10 @@ public:
     };
     using LocalparamMap = std::unordered_map<const AstVar*, CapturedIfaceLocalparam>;
 
-    // Cross-interface refDTypep that needs fixup when target interface is cloned
-    // Key: the REFDTYPE that has refDTypep pointing to a template interface
-    // Value: info about the target interface and the refDTypep target
-    struct CrossIfaceRefDType final {
-        AstRefDType* refp = nullptr;           // The REFDTYPE with cross-interface refDTypep
-        AstNodeModule* ownerModp = nullptr;    // Cloned interface containing the REFDTYPE
-        AstNodeDType* targetDTypep = nullptr;  // The target dtype in template interface
-        AstNodeModule* targetModp = nullptr;   // Template interface containing targetDTypep
-    };
-    using CrossIfaceMap = std::unordered_map<const AstRefDType*, CrossIfaceRefDType>;
 
 private:
     static CapturedMap s_map;
     static LocalparamMap s_localparamMap;
-    static CrossIfaceMap s_crossIfaceMap;
     static bool s_enabled;
     static bool s_explicitlyDisabled;  // Set when explicitly disabled by DepGraph
 
@@ -97,7 +86,6 @@ public:
             s_explicitlyDisabled = true;  // Mark as explicitly disabled
             s_map.clear();
             s_localparamMap.clear();
-            s_crossIfaceMap.clear();
         }
     }
     static bool enabled() { return s_enabled; }
@@ -105,7 +93,6 @@ public:
     static void reset() {
         s_map.clear();
         s_localparamMap.clear();
-        s_crossIfaceMap.clear();
     }
     static AstNodeModule* findOwnerModule(AstNode* nodep);
     static void add(AstRefDType* refp, AstCell* cellp, AstNodeModule* ownerModp,
@@ -151,13 +138,6 @@ public:
     static bool replaceParamType(const AstRefDType* refp,
                                               AstParamTypeDType* newParamTypep);
 
-    // Cross-interface refDTypep capture and fixup
-    // Called by V3Width when setting refDTypep on a REFDTYPE in a cloned interface
-    // that points to a dtype in a template interface
-    static void addCrossIfaceRefDType(AstRefDType* refp, AstNodeModule* ownerModp,
-                                       AstNodeDType* targetDTypep, AstNodeModule* targetModp);
-    // Called by V3Param after cloning an interface to fix up cross-interface refs
-    static void fixupCrossIfaceRefs(AstNodeModule* clonedModp, AstNodeModule* templateModp);
 
     // Called after V3Param but before V3Dead to fix any remaining cross-interface refs
     // that were created during V3Width::widthParamsEdit() and weren't captured earlier.

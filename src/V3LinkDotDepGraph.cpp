@@ -1271,11 +1271,13 @@ private:
                             }
                         }
                     } else {
-                        UINFO(1, "DEPGRAPH: WARNING: VarXRef dotted='" << dotted
+                        // Expected for port-based VarXRefs (e.g., io.cfg where io is a port
+                        // of the parent module, not a cell in the current interface).
+                        // The cellAssociations lookup below will resolve the correct cellPath.
+                        UINFO(5, "DEPGRAPH: VarXRef dotted='" << dotted
                                   << "' cellName='" << cellName
-                                  << "' could not resolve interface module in "
-                                  << m_depNode->ownerModp->name()
-                                  << " - using original target" << endl);
+                                  << "' not a cell in " << m_depNode->ownerModp->name()
+                                  << " - will resolve via cellAssociations" << endl);
                     }
                 }
             }
@@ -1287,14 +1289,51 @@ private:
                 return;
             }
             V3LinkDotDepGraph::NodeType type = V3LinkDotDepGraph::classifyVar(targetVarp);
-            // Use effectiveCellPath for cross-module refs
-            const string cellPath = effectiveCellPath(targetModp);
+
+            // For VarXRef through interface ports (e.g., io.cfg), use s_cellAssociations
+            // to resolve the port reference to the actual interface instance cellPath.
+            // e.g., dotted='io' in child at top.u0 → portPath='top.u0.io' → 'top.bus0'
+            string cellPath;
+            if (m_depNode && !nodep->dotted().empty()) {
+                const string dotted = nodep->dotted();
+                const size_t firstDot = dotted.find('.');
+                const string cellName = firstDot == string::npos
+                                            ? dotted
+                                            : dotted.substr(0, firstDot);
+
+                // Build the parent cellPath (strip last component from depNode's cellPath)
+                string parentCellPath;
+                if (!m_depNode->cellPath.empty()) {
+                    const size_t lastDot = m_depNode->cellPath.rfind('.');
+                    if (lastDot != string::npos) {
+                        parentCellPath = m_depNode->cellPath.substr(0, lastDot);
+                    }
+                }
+                // If caller provided cellPathOverride, use that as parent context
+                if (m_hasCellPathOverride) parentCellPath = m_cellPathOverride;
+
+                if (!cellName.empty() && !parentCellPath.empty()) {
+                    const string portPath = parentCellPath + "." + cellName;
+                    const auto assocIt = s_cellAssociations.find(portPath);
+                    if (assocIt != s_cellAssociations.end()) {
+                        cellPath = assocIt->second;
+                        UINFO(5, "DEPGRAPH: xref resolved via cellAssoc: portPath='"
+                                  << portPath << "' -> ifaceCellPath='" << cellPath << "'" << endl);
+                    }
+                }
+            }
+            // Fallback to effectiveCellPath if cellAssoc didn't resolve
+            if (cellPath.empty()) {
+                cellPath = effectiveCellPath(targetModp);
+            }
+
             V3LinkDotDepGraph::DepNode* const targetp
                 = V3LinkDotDepGraph::findOrCreateNode(targetVarp, type, targetModp, cellPath);
             V3LinkDotDepGraph::addEdge(m_depNode, targetp);
             UINFO(5, "DEPGRAPH: xref '" << nodep->name() << "' dotted='" << nodep->dotted()
                       << "' -> " << V3LinkDotDepGraph::nodeName(targetp) << "@"
-                      << (targetModp ? targetModp->name() : "<null>") << endl);
+                      << (targetModp ? targetModp->name() : "<null>")
+                      << " cellPath='" << cellPath << "'" << endl);
         }
     }
     void visit(AstRefDType* nodep) override {
@@ -4101,19 +4140,30 @@ void V3LinkDotDepGraph::finalizeAST() {
 
         switch (nodep->nodeType) {
         case NodeType::PARAMTYPEDTYPE:
-            finalizeParamType(nodep);
-            ++paramTypeCount;
+            // Only finalize template-level (empty cellPath).
+            // Cell-context instances have different resolved widths for the same
+            // template AST node — writing all of them lets the last writer win,
+            // corrupting the template that V3Param clones from.
+            // V3Width re-evaluates typedef widths on each clone using the clone's
+            // correctly-set GPARAM values.
+            if (nodep->cellPath.empty()) {
+                finalizeParamType(nodep);
+                ++paramTypeCount;
+            }
             break;
         case NodeType::REFDTYPE:
-            finalizeRefDType(nodep);
-            ++refDTypeCount;
+            if (nodep->cellPath.empty()) {
+                finalizeRefDType(nodep);
+                ++refDTypeCount;
+            }
             break;
         case NodeType::TYPEDEF:
-            finalizeTypedef(nodep);
-            ++typedefCount;
+            if (nodep->cellPath.empty()) {
+                finalizeTypedef(nodep);
+                ++typedefCount;
+            }
             break;
         case NodeType::GPARAM:
-            // GPARAMs can be finalized on template - V3Param will override from pins anyway
             finalizeParam(nodep);
             ++paramCount;
             break;
@@ -4215,7 +4265,6 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
         if (dnp->ownerModp != srcModp) continue;
         if (dnp->cellPath == cellPath) { hasExactMatch = true; break; }
     }
-
     if (!hasExactMatch) {
         UINFO(5, "DEPGRAPH: applyResolvedToClone no exact cellPath match, trying fallbacks" << endl);
 

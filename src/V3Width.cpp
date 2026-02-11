@@ -1883,6 +1883,20 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep();
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
+            if (nodep->attrType() == VAttrType::DIM_BITS) {
+                AstNodeModule* ownerModp = nullptr;
+                for (AstNode* bp = nodep->backp(); bp; bp = bp->backp()) {
+                    if (AstNodeModule* mp = VN_CAST(bp, NodeModule)) { ownerModp = mp; break; }
+                }
+                UINFO(5, "DIAG DIM_BITS: owner="
+                          << (ownerModp ? ownerModp->name() : "<null>")
+                          << " fromp=" << nodep->fromp()
+                          << " dtypep=" << dtypep
+                          << " dtypep->width()=" << dtypep->width()
+                          << " skipRefp=" << dtypep->skipRefp()
+                          << " skipRefp->width()=" << dtypep->skipRefp()->width()
+                          << endl);
+            }
             if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
                 switch (nodep->attrType()) {
                 case VAttrType::DIM_SIZE: {
@@ -2267,28 +2281,8 @@ class WidthVisitor final : public VNVisitor {
                 // Capture cross-interface refDTypep for later fixup:
                 // If this REFDTYPE is in a cloned module/interface (name contains "__")
                 // and refDTypep points to a dtype in a template interface (name doesn't contain "__"),
-                // capture it so we can fix it up when the template interface is cloned.
-                if (V3LinkDotIfaceCapture::enabled() && !V3LinkDotDepGraph::isExecuting()
-                    && ownerModp && ownerModp->name().find("__") != string::npos) {
-                    AstNodeModule* const targetModp
-                        = V3LinkDotIfaceCapture::findOwnerModule(nodep->refDTypep());
-                    UINFO(9, "V3Width: cross-iface check: ownerModp=" << ownerModp->name()
-                              << " targetModp=" << (targetModp ? targetModp->name() : "<null>")
-                              << " isIface=" << (targetModp ? VN_IS(targetModp, Iface) : false)
-                              << " hasDoubleUnderscore="
-                              << (targetModp ? (targetModp->name().find("__") != string::npos) : false)
-                              << endl);
-                    if (targetModp && VN_IS(targetModp, Iface)
-                        && targetModp->name().find("__") == string::npos) {
-                        // This is a cross-interface reference from cloned to template
-                        UINFO(5, "V3Width: CROSS-IFACE detected: " << nodep
-                                  << " in " << ownerModp->name()
-                                  << " -> " << nodep->refDTypep()
-                                  << " in " << targetModp->name() << endl);
-                        V3LinkDotIfaceCapture::addCrossIfaceRefDType(
-                            nodep, ownerModp, nodep->refDTypep(), targetModp);
-                    }
-                }
+                // Cross-interface pointer fixup is handled by
+                // finalizeIfaceCapture() using per-module cell traversal.
             }
             // Widths are resolved, but special iterate to check for recursion
             userIterate(nodep->subDTypep(), nullptr);

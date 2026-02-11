@@ -898,16 +898,6 @@ class ParamProcessor final {
         CloneMap* const clonemapp = &(iter->second.m_cloneMap);
         UINFO(4, "     De-parameterize to new: " << newModp);
 
-        // Fix up cross-interface refDTypep pointers that were captured by V3Width.
-        // These are REFDTYPEs in already-cloned interfaces that have refDTypep pointing
-        // to dtypes in this template interface (srcModp). Now that we've cloned srcModp
-        // to newModp, we can update those refDTypep pointers to point to the cloned dtypes.
-        if (V3LinkDotIfaceCapture::enabled() && VN_IS(srcModp, Iface)) {
-            UINFO(5, "V3Param: calling fixupCrossIfaceRefs for cloned interface "
-                      << newModp->name() << " from template " << srcModp->name() << endl);
-            V3LinkDotIfaceCapture::fixupCrossIfaceRefs(newModp, srcModp);
-        }
-
         // Grab all I/O so we can remap our pins later
         // Note we allow multiple users of a parameterized model,
         // thus we need to stash this info.
@@ -926,6 +916,96 @@ class ParamProcessor final {
             UINFO(8, "     IfaceClo " << cloneIrefp);
             cloneIrefp->ifacep(pinIrefp->ifaceViaCellp());
             UINFO(8, "     IfaceNew " << cloneIrefp);
+        }
+
+        // Fix typedefp pointers on REFDTYPEs in the cloned module.
+        // After cloning, REFDTYPEs may have typedefp still pointing to a template
+        // interface's typedef (via clonep() which is last-writer-wins).
+        // Walk newModp's cells to find cloned interfaces, build a template→clone
+        // typedef map, then redirect typedefp pointers to the correct clone.
+        // Must run before widthParamsEdit so V3Width sees correct pointers.
+        {
+            std::map<AstTypedef*, AstTypedef*> typedefMap;
+            // Walk cells in newModp to find cloned interface references
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                AstCell* const cellp = VN_CAST(stmtp, Cell);
+                if (!cellp) continue;
+                AstNodeModule* const cellModp = cellp->modp();
+                if (!cellModp || !VN_IS(cellModp, Iface)) continue;
+                if (cellModp->name().find("__") == string::npos) continue;
+                // This cell points to a cloned interface. Find its template.
+                AstNodeModule* templateIfacep = nullptr;
+                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
+                    if (AstIface* const ifp = VN_CAST(np, Iface)) {
+                        if (ifp != cellModp && ifp->name() == cellModp->origName()) {
+                            templateIfacep = ifp;
+                            break;
+                        }
+                    }
+                }
+                if (!templateIfacep) continue;
+                // Map template typedefs → cloned typedefs by name
+                for (AstNode* tp = templateIfacep->stmtsp(); tp; tp = tp->nextp()) {
+                    AstTypedef* const tmplTdp = VN_CAST(tp, Typedef);
+                    if (!tmplTdp) continue;
+                    for (AstNode* cp = cellModp->stmtsp(); cp; cp = cp->nextp()) {
+                        AstTypedef* const cloneTdp = VN_CAST(cp, Typedef);
+                        if (cloneTdp && cloneTdp->name() == tmplTdp->name()) {
+                            typedefMap[tmplTdp] = cloneTdp;
+                            break;
+                        }
+                    }
+                }
+                // Also recurse into the cloned interface's cells for nested interfaces
+                for (AstNode* sp = cellModp->stmtsp(); sp; sp = sp->nextp()) {
+                    AstCell* const innerCellp = VN_CAST(sp, Cell);
+                    if (!innerCellp) continue;
+                    AstNodeModule* const innerModp = innerCellp->modp();
+                    if (!innerModp || !VN_IS(innerModp, Iface)) continue;
+                    if (innerModp->name().find("__") == string::npos) continue;
+                    AstNodeModule* innerTemplatep = nullptr;
+                    for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
+                        if (AstIface* const ifp = VN_CAST(np, Iface)) {
+                            if (ifp != innerModp && ifp->name() == innerModp->origName()) {
+                                innerTemplatep = ifp;
+                                break;
+                            }
+                        }
+                    }
+                    if (!innerTemplatep) continue;
+                    for (AstNode* tp = innerTemplatep->stmtsp(); tp; tp = tp->nextp()) {
+                        AstTypedef* const tmplTdp = VN_CAST(tp, Typedef);
+                        if (!tmplTdp) continue;
+                        for (AstNode* cp = innerModp->stmtsp(); cp; cp = cp->nextp()) {
+                            AstTypedef* const cloneTdp = VN_CAST(cp, Typedef);
+                            if (cloneTdp && cloneTdp->name() == tmplTdp->name()) {
+                                typedefMap[tmplTdp] = cloneTdp;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!typedefMap.empty()) {
+                int fixed = 0;
+                newModp->foreach([&](AstRefDType* refp) {
+                    if (AstTypedef* const tdp = refp->typedefp()) {
+                        const auto it = typedefMap.find(tdp);
+                        if (it != typedefMap.end()) {
+                            UINFO(5, "V3Param: fixing typedefp in " << newModp->name()
+                                      << " ref=" << refp->name()
+                                      << " old=" << tdp->name()
+                                      << " new=" << it->second->name() << endl);
+                            refp->typedefp(it->second);
+                            ++fixed;
+                        }
+                    }
+                });
+                if (fixed) {
+                    UINFO(5, "V3Param: fixed " << fixed << " typedefp pointers in "
+                              << newModp->name() << endl);
+                }
+            }
         }
         // Assign parameters to the constants specified
         // DOES clone() so must be finished with module clonep() before here
@@ -1126,7 +1206,25 @@ class ParamProcessor final {
                     += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(pinp->exprp());
                 any_overridesr = true;
             } else {
+                UINFO(5, "DIAG cellPinCleanup: before constify pin='" << pinp->name()
+                          << "' mod='" << srcModp->name()
+                          << "' exprType=" << pinp->exprp()->typeName()
+                          << " modvar='" << modvarp->name() << "'"
+                          << " modval=" << (modvarp->valuep() ? modvarp->valuep()->typeName() : "null")
+                          << (modvarp->valuep() && VN_IS(modvarp->valuep(), Const)
+                              ? string(" modvalNum=") + VN_AS(modvarp->valuep(), Const)->num().ascii(false)
+                              : string(""))
+                          << " w=" << modvarp->width()
+                          << endl);
                 V3Const::constifyParamsEdit(pinp->exprp());
+                UINFO(5, "DIAG cellPinCleanup: after constify pin='" << pinp->name()
+                          << "' exprType=" << pinp->exprp()->typeName()
+                          << " isConst=" << VN_IS(pinp->exprp(), Const)
+                          << (VN_IS(pinp->exprp(), Const)
+                              ? string(" val=") + VN_AS(pinp->exprp(), Const)->num().ascii(false)
+                              : string(""))
+                          << " w=" << pinp->exprp()->width()
+                          << endl);
                 // String constants are parsed as logic arrays and converted to strings in V3Const.
                 // At this moment, some constants may have been already converted.
                 // To correctly compare constants, both should be of the same type,
@@ -1140,6 +1238,9 @@ class ParamProcessor final {
                 if (!exprp) {
                     // With DepGraph architecture, all expressions should be constants
                     // by the time V3Param runs. If not, it's an error.
+                    UINFO(5, "DIAG cellPinCleanup: NOT CONST after constify pin='" << pinp->name()
+                              << "' mod='" << srcModp->name()
+                              << "' exprType=" << pinp->exprp()->typeName() << endl);
                     UINFOTREE(1, pinp, "", "errnode");
                     pinp->v3error("Can't convert defparam value to constant: Param "
                                   << pinp->prettyNameQ() << " of " << nodep->prettyNameQ());
@@ -1154,6 +1255,9 @@ class ParamProcessor final {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
+                    UINFO(5, "DIAG cellPinCleanup: SAME AS DEFAULT pin='" << pinp->name()
+                              << "' mod='" << srcModp->name()
+                              << "' val=" << exprp->num().ascii(false) << endl);
                 } else if (exprp->num().isDouble() || exprp->num().isString()
                            || exprp->num().isFourState() || exprp->num().width() != 32) {
                     longnamer
@@ -1465,6 +1569,11 @@ class ParamProcessor final {
             }
         }
 
+        UINFO(5, "DIAG nodeDeparamCommon: src='" << srcModp->name()
+                  << "' longname='" << longname
+                  << "' any_overrides=" << any_overrides
+                  << " cell='" << nodep->name() << "'" << endl);
+
         AstNodeModule* newModp = nullptr;
         if (m_hierBlocks.hierSubRun() && m_hierBlocks.isHierBlock(srcModp->origName())) {
             AstNodeModule* const paramedModp
@@ -1476,6 +1585,8 @@ class ParamProcessor final {
             newModp = paramedModp;
             // any_overrides = true;  // Unused later, so not needed
         } else if (!any_overrides) {
+            UINFO(5, "DIAG nodeDeparamCommon: NO OVERRIDES for '" << srcModp->name()
+                      << "' cell='" << nodep->name() << "'" << endl);
             UINFO(8, "Cell parameters all match original values, skipping expansion.");
             // If it's the first use of the default instance, create a copy and store it in user3p.
             // user3p will also be used to check if the default instance is used.
