@@ -8765,7 +8765,7 @@ class WidthVisitor final : public VNVisitor {
             // our cloned types from polluting the global type table)
             UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
             dtnodep->unlinkFrBack();
-            UINFO(0, "V3Width: ADDING TO TYPE TABLE: " << dtnodep->prettyTypeName()
+            UINFO(9, "V3Width: ADDING TO TYPE TABLE: " << dtnodep->prettyTypeName()
                       << " ptr=" << cvtToHex(dtnodep)
                       << " depGraphExec=" << V3LinkDotDepGraph::isExecuting() << endl);
             if (!V3LinkDotDepGraph::isExecuting()) {

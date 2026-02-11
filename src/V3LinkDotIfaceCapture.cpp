@@ -23,7 +23,6 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 V3LinkDotIfaceCapture::CapturedMap V3LinkDotIfaceCapture::s_map{};
 V3LinkDotIfaceCapture::LocalparamMap V3LinkDotIfaceCapture::s_localparamMap{};
-std::vector<V3LinkDotIfaceCapture::DeferredRefFixup> V3LinkDotIfaceCapture::s_deferredFixups{};
 bool V3LinkDotIfaceCapture::s_enabled = true;
 bool V3LinkDotIfaceCapture::s_explicitlyDisabled = false;
 
@@ -518,83 +517,12 @@ bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
     return true;
 }
 
-void V3LinkDotIfaceCapture::addDeferredFixup(AstRefDType* refp, AstNodeModule* templateModp,
-                                              AstNodeModule* cloneModp) {
-    UINFO(9, "iface capture addDeferredFixup: refp=" << refp->name()
-              << " template=" << templateModp->name()
-              << " clone=" << cloneModp->name() << endl);
-    s_deferredFixups.push_back({refp, templateModp, cloneModp});
-}
-
 void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     if (!s_enabled) return;
 
     UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs" << endl);
 
-    // Phase 1: Apply deferred fixups recorded at V3Param clone time.
-    // These have exact disambiguation: each records the specific cloned interface
-    // that a REFDTYPE should point to. This handles multi-instantiation correctly.
-    {
-        int deferredFixed = 0;
-        for (const auto& fixup : s_deferredFixups) {
-            AstRefDType* const refp = fixup.refp;
-            AstNodeModule* const cloneModp = fixup.cloneModp;
-            AstNodeModule* const templateModp = fixup.templateModp;
-
-            // Fix typedefp: find matching typedef by name in cloneModp
-            if (AstTypedef* const tdp = refp->typedefp()) {
-                if (findOwnerModule(tdp) == templateModp) {
-                    const string& tdName = tdp->name();
-                    for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
-                        if (AstTypedef* const cloneTdp = VN_CAST(sp, Typedef)) {
-                            if (cloneTdp->name() == tdName) {
-                                UINFO(9, "iface capture deferred fixup typedefp: "
-                                          << refp->name() << " in "
-                                          << findOwnerModule(refp)->name()
-                                          << " old=" << tdp->name()
-                                          << "@" << templateModp->name()
-                                          << " new=" << cloneTdp->name()
-                                          << "@" << cloneModp->name() << endl);
-                                refp->typedefp(cloneTdp);
-                                ++deferredFixed;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Fix refDTypep: find matching dtype by name in cloneModp
-            if (refp->refDTypep()) {
-                AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
-                if (targetModp == templateModp) {
-                    const string& targetName = refp->refDTypep()->prettyName();
-                    for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
-                        if (AstNodeDType* const dtp = VN_CAST(sp, NodeDType)) {
-                            if (dtp->prettyName() == targetName) {
-                                UINFO(9, "iface capture deferred fixup refDTypep: "
-                                          << refp->name() << " in "
-                                          << findOwnerModule(refp)->name()
-                                          << " old=" << refp->refDTypep()->prettyName()
-                                          << "@" << templateModp->name()
-                                          << " new=" << dtp->prettyName()
-                                          << "@" << cloneModp->name() << endl);
-                                refp->refDTypep(dtp);
-                                ++deferredFixed;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        UINFO(4, "finalizeIfaceCapture: applied " << deferredFixed
-                  << " deferred fixups from " << s_deferredFixups.size()
-                  << " records" << endl);
-        s_deferredFixups.clear();
-    }
-
-    // Phase 2: Heuristic-based fixups for any remaining cross-interface refs.
+    // Heuristic-based fixups for any remaining cross-interface refs.
     // Build a map of template modules to their cloned versions
     // Template modules are those marked dead() or without "__" in name
     // Cloned modules have "__" in their name

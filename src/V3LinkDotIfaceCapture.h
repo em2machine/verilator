@@ -67,20 +67,9 @@ public:
     };
     using LocalparamMap = std::unordered_map<const AstVar*, CapturedIfaceLocalparam>;
 
-    // Deferred fixup: records that a REFDTYPE's typedefp/refDTypep should be
-    // redirected from a node in templateModp to the corresponding node in cloneModp.
-    // Recorded at V3Param clone time (when we know the exact clone mapping),
-    // applied at finalizeIfaceCapture (when all clones exist and have correct types).
-    struct DeferredRefFixup final {
-        AstRefDType* refp = nullptr;           // The REFDTYPE to fix
-        AstNodeModule* templateModp = nullptr;  // Template interface containing the old target
-        AstNodeModule* cloneModp = nullptr;     // Cloned interface containing the correct target
-    };
-
 private:
     static CapturedMap s_map;
     static LocalparamMap s_localparamMap;
-    static std::vector<DeferredRefFixup> s_deferredFixups;
     static bool s_enabled;
     static bool s_explicitlyDisabled;  // Set when explicitly disabled by DepGraph
 
@@ -103,7 +92,6 @@ public:
             s_explicitlyDisabled = true;  // Mark as explicitly disabled
             s_map.clear();
             s_localparamMap.clear();
-            s_deferredFixups.clear();
         }
     }
     static bool enabled() { return s_enabled; }
@@ -111,7 +99,6 @@ public:
     static void reset() {
         s_map.clear();
         s_localparamMap.clear();
-        s_deferredFixups.clear();
     }
     static AstNodeModule* findOwnerModule(AstNode* nodep);
     static void add(AstRefDType* refp, AstCell* cellp, AstNodeModule* ownerModp,
@@ -158,12 +145,6 @@ public:
     static bool replaceParamType(const AstRefDType* refp,
                                               AstParamTypeDType* newParamTypep);
 
-
-    // Record a deferred fixup: refp's typedefp/refDTypep should be redirected
-    // from a node in templateModp to the corresponding node in cloneModp.
-    // Called from V3Param at clone time when we know the exact instance→clone mapping.
-    static void addDeferredFixup(AstRefDType* refp, AstNodeModule* templateModp,
-                                 AstNodeModule* cloneModp);
 
     // Called after V3Param but before V3Dead to fix any remaining cross-interface refs
     // that were created during V3Width::widthParamsEdit() and weren't captured earlier.
