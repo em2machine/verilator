@@ -710,7 +710,7 @@ class ParamProcessor final {
 
         if (V3LinkDotIfaceCapture::enabled()) {
             AstCell* const cloneCellp = VN_CAST(ifErrorp, Cell);
-            UINFO(5, "IfaceCapture clone: srcModp=" << srcModp->name()
+            UINFO(9, "iface capture clone: srcModp=" << srcModp->name()
                       << " newModp=" << newModp->name()
                       << " cloneCellp=" << (cloneCellp ? cloneCellp->name() : "<null>")
                       << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
@@ -718,7 +718,7 @@ class ParamProcessor final {
                 srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
                     if (!entry.refp) return;
 
-                    UINFO(5, "IfaceCapture entry: refp=" << entry.refp->name()
+                    UINFO(9, "iface capture entry: refp=" << entry.refp->name()
                               << " typedefp=" << (entry.typedefp ? entry.typedefp->name() : "<null>")
                               << " paramTypep=" << (entry.paramTypep ? entry.paramTypep->name() : "<null>")
                               << " cellp=" << (entry.cellp ? entry.cellp->name() : "<null>")
@@ -729,7 +729,7 @@ class ParamProcessor final {
                               << endl);
 
                     if (!V3LinkDotIfaceCapture::shouldApplyToClone(entry, srcModp, cloneCellp)) {
-                        UINFO(5, "IfaceCapture: shouldApplyToClone=false, skipping" << endl);
+                        UINFO(9, "iface capture shouldApplyToClone=false, skipping" << endl);
                         return;
                     }
 
@@ -764,7 +764,7 @@ class ParamProcessor final {
                             if (targetTypedefp) break;
                         }
 
-                        UINFO(5, "IfaceCapture: after ifaceRefRefs search: targetTypedefp="
+                        UINFO(9, "iface capture after ifaceRefRefs search: targetTypedefp="
                                   << (targetTypedefp ? targetTypedefp->name() : "<null>")
                                   << " for typedef '" << typedefName << "'" << endl);
 
@@ -774,7 +774,7 @@ class ParamProcessor final {
                         // to the correct cloned interface for this specific instance.
                         if (!targetTypedefp && entry.cellp) {
                             AstCell* const clonedCellp = entry.cellp->clonep();
-                            UINFO(5, "IfaceCapture: cloned cell search: entry.cellp="
+                            UINFO(9, "iface capture cloned cell search: entry.cellp="
                                       << entry.cellp->name()
                                       << " clonedCellp=" << (clonedCellp ? clonedCellp->name() : "<null>")
                                       << " clonedCellp->modp=" << (clonedCellp && clonedCellp->modp() ? clonedCellp->modp()->name() : "<null>")
@@ -789,7 +789,7 @@ class ParamProcessor final {
                                         if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
                                             if (tdp->name() == typedefName) {
                                                 targetTypedefp = tdp;
-                                                UINFO(5, "IfaceCapture: found typedef '"
+                                                UINFO(9, "iface capture found typedef '"
                                                           << typedefName << "' via cloned cell '"
                                                           << clonedCellp->name() << "' in "
                                                           << clonedModp->name() << endl);
@@ -803,14 +803,14 @@ class ParamProcessor final {
 
                         if (!targetTypedefp) {
                             targetTypedefp = origTypedefp->clonep();
-                            UINFO(5, "IfaceCapture: fallback to clonep(): "
+                            UINFO(9, "iface capture fallback to clonep(): "
                                       << (targetTypedefp ? targetTypedefp->name() : "<null>")
                                       << " owner="
                                       << (targetTypedefp ? V3LinkDotIfaceCapture::findOwnerModule(targetTypedefp) : nullptr)
                                       << endl);
                         }
 
-                        UINFO(5, "IfaceCapture: FINAL targetTypedefp="
+                        UINFO(9, "iface capture FINAL targetTypedefp="
                                   << (targetTypedefp ? targetTypedefp->name() : "<null>")
                                   << " for refp=" << entry.refp->name()
                                   << " in srcModp=" << srcModp->name()
@@ -1009,21 +1009,21 @@ class ParamProcessor final {
 
             std::map<AstNodeModule*, AstNodeModule*> templateToClone;
 
-            UINFO(5, "DIAG deferred: newModp=" << newModp->name()
+            UINFO(9, "iface capture deferred: newModp=" << newModp->name()
                       << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
 
             // Source 1: ifaceRefRefs — port-connected interfaces
             for (const auto& pair : ifaceRefRefs) {
                 const AstIfaceRefDType* const pinIrefp = pair.second;
                 AstIface* const cloneIfacep = pinIrefp->ifaceViaCellp();
-                UINFO(5, "DIAG deferred: ifaceRefRef pin=" << pinIrefp
+                UINFO(9, "iface capture deferred: ifaceRefRef pin=" << pinIrefp
                           << " cloneIface=" << (cloneIfacep ? cloneIfacep->name() : "<null>")
                           << " origName=" << (cloneIfacep ? cloneIfacep->origName() : "<null>")
                           << endl);
                 if (!cloneIfacep) continue;
                 if (cloneIfacep->name().find("__") == string::npos) continue;
                 AstNodeModule* const tmplp = findTemplate(cloneIfacep);
-                UINFO(5, "DIAG deferred: findTemplate(" << cloneIfacep->name()
+                UINFO(9, "iface capture deferred: findTemplate(" << cloneIfacep->name()
                           << ") = " << (tmplp ? tmplp->name() : "<null>") << endl);
                 if (tmplp) templateToClone[tmplp] = cloneIfacep;
 
@@ -1089,11 +1089,11 @@ class ParamProcessor final {
                     }
                 }
 
-                UINFO(5, "DIAG deferred: anyToCorrectClone has "
+                UINFO(9, "iface capture deferred: anyToCorrectClone has "
                           << anyToCorrectClone.size() << " entries for "
                           << newModp->name() << ":" << endl);
                 for (const auto& kv : anyToCorrectClone) {
-                    UINFO(5, "DIAG deferred:   " << kv.first->name()
+                    UINFO(9, "iface capture deferred:   " << kv.first->name()
                               << " -> " << kv.second->name() << endl);
                 }
 
@@ -1300,7 +1300,7 @@ class ParamProcessor final {
                     += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(pinp->exprp());
                 any_overridesr = true;
             } else {
-                UINFO(5, "DIAG cellPinCleanup: before constify pin='" << pinp->name()
+                UINFO(9, "iface capture cellPinCleanup: before constify pin='" << pinp->name()
                           << "' mod='" << srcModp->name()
                           << "' exprType=" << pinp->exprp()->typeName()
                           << " modvar='" << modvarp->name() << "'"
@@ -1311,7 +1311,7 @@ class ParamProcessor final {
                           << " w=" << modvarp->width()
                           << endl);
                 V3Const::constifyParamsEdit(pinp->exprp());
-                UINFO(5, "DIAG cellPinCleanup: after constify pin='" << pinp->name()
+                UINFO(9, "iface capture cellPinCleanup: after constify pin='" << pinp->name()
                           << "' exprType=" << pinp->exprp()->typeName()
                           << " isConst=" << VN_IS(pinp->exprp(), Const)
                           << (VN_IS(pinp->exprp(), Const)
@@ -1332,7 +1332,7 @@ class ParamProcessor final {
                 if (!exprp) {
                     // With DepGraph architecture, all expressions should be constants
                     // by the time V3Param runs. If not, it's an error.
-                    UINFO(5, "DIAG cellPinCleanup: NOT CONST after constify pin='" << pinp->name()
+                    UINFO(9, "iface capture cellPinCleanup: NOT CONST after constify pin='" << pinp->name()
                               << "' mod='" << srcModp->name()
                               << "' exprType=" << pinp->exprp()->typeName() << endl);
                     UINFOTREE(1, pinp, "", "errnode");
@@ -1349,7 +1349,7 @@ class ParamProcessor final {
                     // Setting parameter to its default value.  Just ignore it.
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
-                    UINFO(5, "DIAG cellPinCleanup: SAME AS DEFAULT pin='" << pinp->name()
+                    UINFO(9, "iface capture cellPinCleanup: SAME AS DEFAULT pin='" << pinp->name()
                               << "' mod='" << srcModp->name()
                               << "' val=" << exprp->num().ascii(false) << endl);
                 } else if (exprp->num().isDouble() || exprp->num().isString()
@@ -1663,7 +1663,7 @@ class ParamProcessor final {
             }
         }
 
-        UINFO(5, "DIAG nodeDeparamCommon: src='" << srcModp->name()
+        UINFO(9, "iface capture nodeDeparamCommon: src='" << srcModp->name()
                   << "' longname='" << longname
                   << "' any_overrides=" << any_overrides
                   << " cell='" << nodep->name() << "'" << endl);
@@ -1679,7 +1679,7 @@ class ParamProcessor final {
             newModp = paramedModp;
             // any_overrides = true;  // Unused later, so not needed
         } else if (!any_overrides) {
-            UINFO(5, "DIAG nodeDeparamCommon: NO OVERRIDES for '" << srcModp->name()
+            UINFO(9, "iface capture nodeDeparamCommon: NO OVERRIDES for '" << srcModp->name()
                       << "' cell='" << nodep->name() << "'" << endl);
             UINFO(8, "Cell parameters all match original values, skipping expansion.");
             // If it's the first use of the default instance, create a copy and store it in user3p.

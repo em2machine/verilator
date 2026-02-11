@@ -38,7 +38,7 @@ bool V3LinkDotIfaceCapture::finalizeCapturedEntry(CapturedMap::iterator it, cons
                                                    AstCell* matchCellp) {
     CapturedIfaceTypedef& entry = it->second;
     AstTypedef* const reboundTypedefp = entry.typedefp;
-    UINFO(5, "finalizeCapturedEntry(" << reasonp << "): refp="
+    UINFO(9, "iface capture finalizeCapturedEntry(" << reasonp << "): refp="
               << (entry.refp ? entry.refp->name() : "<null>")
               << " typedefp=" << (reboundTypedefp ? reboundTypedefp->name() : "<null>")
               << " pendingClones.size=" << entry.pendingClones.size()
@@ -67,12 +67,12 @@ bool V3LinkDotIfaceCapture::finalizeCapturedEntry(CapturedMap::iterator it, cons
         } else if (it2->cellp == matchCellp) {
             matches = true;  // Exact cell pointer match
         }
-        UINFO(5, "  pendingClone: refp=" << it2->refp->name()
+        UINFO(9, "iface capture   pendingClone: refp=" << it2->refp->name()
                   << " cellp=" << (it2->cellp ? it2->cellp->name() : "<null>")
                   << " cellp(ptr)=" << cvtToHex(it2->cellp)
                   << " matches=" << matches << endl);
         if (matches) {
-            UINFO(5, "  -> UPDATING typedefp to " << reboundTypedefp->name()
+            UINFO(9, "iface capture   -> UPDATING typedefp to " << reboundTypedefp->name()
                       << " in " << (findOwnerModule(reboundTypedefp) ? findOwnerModule(reboundTypedefp)->name() : "<null>")
                       << endl);
             if (entry.cellp) it2->refp->user2p(entry.cellp);
@@ -169,7 +169,7 @@ bool V3LinkDotIfaceCapture::replaceTypedef(const AstRefDType* refp, AstTypedef* 
     if (!refp || !newTypedefp) return false;
     auto it = s_map.find(refp);
     if (it == s_map.end()) return false;
-    UINFO(5, "replaceTypedef: refp=" << refp->name()
+    UINFO(9, "iface capture replaceTypedef: refp=" << refp->name()
               << " newTypedefp=" << newTypedefp->name()
               << " owner=" << (findOwnerModule(newTypedefp) ? findOwnerModule(newTypedefp)->name() : "<null>")
               << " matchCellp=" << (matchCellp ? matchCellp->name() : "<null>")
@@ -205,7 +205,7 @@ void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDT
     // Store the cloned cell for disambiguation: when the nested interface
     // is later cloned, we match by cell pointer to find the right clone.
     AstCell* clonedCellp = entry.cellp ? entry.cellp->clonep() : nullptr;
-    UINFO(5, "propagateClone: orig=" << origRefp->name()
+    UINFO(9, "iface capture propagateClone: orig=" << origRefp->name()
               << " new=" << newRefp
               << " entry.cellp=" << (entry.cellp ? entry.cellp->name() : "<null>")
               << " clonedCellp=" << (clonedCellp ? clonedCellp->name() : "<null>")
@@ -296,12 +296,12 @@ void V3LinkDotIfaceCapture::forEach(const std::function<void(const CapturedIface
 void V3LinkDotIfaceCapture::forEachOwned(
     const AstNodeModule* ownerModp, const std::function<void(const CapturedIfaceTypedef&)>& fn) {
     if (!ownerModp || !fn) return;
-    UINFO(0, "forEachOwned: checking entries for ownerModp=" << ownerModp->name()
+    UINFO(9, "iface capture forEachOwned: checking entries for ownerModp=" << ownerModp->name()
               << " map size=" << s_map.size() << endl);
     forEachImpl(
         [ownerModp](const CapturedIfaceTypedef& e) {
             const bool matches = e.ownerModp == ownerModp || e.typedefOwnerModp == ownerModp;
-            UINFO(0, "forEachOwned filter: entry refp=" << e.refp
+            UINFO(9, "iface capture forEachOwned filter: entry refp=" << e.refp
                       << " e.ownerModp=" << (e.ownerModp ? e.ownerModp->name() : "<null>")
                       << " e.typedefOwnerModp=" << (e.typedefOwnerModp ? e.typedefOwnerModp->name() : "<null>")
                       << " matches=" << matches << endl);
@@ -392,7 +392,7 @@ void V3LinkDotIfaceCapture::addLocalparam(AstVar* varp, AstNode* exprp,
     // Clone the expression to preserve it
     AstNode* const clonedExprp = exprp->cloneTree(false);
     s_localparamMap[varp] = CapturedIfaceLocalparam{varp, clonedExprp, ownerModp};
-    UINFO(5, "LOCALPARAM-CAPTURE var=" << varp->name()
+    UINFO(9, "iface capture localparam: var=" << varp->name()
               << " owner=" << (ownerModp ? ownerModp->name() : "<null>")
               << " expr=" << clonedExprp << endl);
 }
@@ -520,7 +520,7 @@ bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
 
 void V3LinkDotIfaceCapture::addDeferredFixup(AstRefDType* refp, AstNodeModule* templateModp,
                                               AstNodeModule* cloneModp) {
-    UINFO(5, "addDeferredFixup: refp=" << refp->name()
+    UINFO(9, "iface capture addDeferredFixup: refp=" << refp->name()
               << " template=" << templateModp->name()
               << " clone=" << cloneModp->name() << endl);
     s_deferredFixups.push_back({refp, templateModp, cloneModp});
@@ -548,7 +548,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                     for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
                         if (AstTypedef* const cloneTdp = VN_CAST(sp, Typedef)) {
                             if (cloneTdp->name() == tdName) {
-                                UINFO(5, "deferred fixup typedefp: "
+                                UINFO(9, "iface capture deferred fixup typedefp: "
                                           << refp->name() << " in "
                                           << findOwnerModule(refp)->name()
                                           << " old=" << tdp->name()
@@ -572,7 +572,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                     for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
                         if (AstNodeDType* const dtp = VN_CAST(sp, NodeDType)) {
                             if (dtp->prettyName() == targetName) {
-                                UINFO(5, "deferred fixup refDTypep: "
+                                UINFO(9, "iface capture deferred fixup refDTypep: "
                                           << refp->name() << " in "
                                           << findOwnerModule(refp)->name()
                                           << " old=" << refp->refDTypep()->prettyName()
@@ -682,7 +682,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 if (it != templateToCloneMap.end()) {
                     const string& targetName = refp->refDTypep()->prettyName();
                     if (AstNode* const newp = findInClone(it->second, targetName, false)) {
-                        UINFO(5, "finalizeCapture (" << location
+                        UINFO(9, "iface capture finalizeCapture (" << location
                                   << "): fixing refDTypep refp=" << refp
                                   << " dead=" << targetModp->name()
                                   << " -> " << it->second->name() << endl);
@@ -701,7 +701,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 if (it != templateToCloneMap.end()) {
                     const string& tdName = refp->typedefp()->name();
                     if (AstNode* const newp = findInClone(it->second, tdName, true)) {
-                        UINFO(5, "finalizeCapture (" << location
+                        UINFO(9, "iface capture finalizeCapture (" << location
                                   << "): fixing typedefp refp=" << refp
                                   << " dead=" << typedefModp->name()
                                   << " -> " << it->second->name() << endl);
