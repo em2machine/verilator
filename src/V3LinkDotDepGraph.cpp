@@ -3796,9 +3796,6 @@ int V3LinkDotDepGraph::resolve() {
     UINFO(3, "\n");
     UINFO(3, "========== DEPGRAPH PHASE: RESOLVE ==========" << endl);
 
-    // Set execution flag so V3Width knows not to add our cloned types to type table
-    s_executing = true;
-
     // NEW ARCHITECTURE: Single-pass OOO resolution
     // - Ready nodes (pendingDeps=0) are boundary conditions with initial values
     // - Each node executes: read from parents, compute, store in self, wake children
@@ -3992,7 +3989,6 @@ int V3LinkDotDepGraph::resolve() {
     // Dump the dependents tree after execution to verify resolved values
     dumpGraphDependentsTree("after-resolve");
 
-    s_executing = false;
     return s_iterationCount;
 }
 

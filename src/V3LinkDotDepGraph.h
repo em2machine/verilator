@@ -162,6 +162,9 @@ public:
     // Check if DepGraph is currently in execution phase
     // Used by V3Width to avoid adding cloned types to global type table
     static bool isExecuting() { return s_executing; }
+    // Set execution flag - keeps type table clean for entire DepGraph flow
+    // (build, resolve, finalizeAST, and V3Param cloning)
+    static void setExecuting(bool flag) { s_executing = flag; }
 
     // Finalize AST after resolution
     // This is the ONLY place that mutates the AST based on DepGraph results

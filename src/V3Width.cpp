@@ -8761,14 +8761,12 @@ class WidthVisitor final : public VNVisitor {
             UASSERT_OBJ(dtnodep->didWidth(), parentp,
                         "iterateEditMoveDTypep didn't get width resolution of "
                             << dtnodep->prettyTypeName());
-            // Move to under netlist (skip during DepGraph execution to prevent
-            // our cloned types from polluting the global type table)
-            UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
-            dtnodep->unlinkFrBack();
-            UINFO(9, "V3Width: ADDING TO TYPE TABLE: " << dtnodep->prettyTypeName()
-                      << " ptr=" << cvtToHex(dtnodep)
-                      << " depGraphExec=" << V3LinkDotDepGraph::isExecuting() << endl);
+            // Move to under netlist (skip entirely during DepGraph execution to prevent
+            // our cloned types from polluting the global type table AND to keep child
+            // dtypes in place so cloneTree() includes them in subsequent V3Param clones)
             if (!V3LinkDotDepGraph::isExecuting()) {
+                UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
+                dtnodep->unlinkFrBack();
                 v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
             }
         }
