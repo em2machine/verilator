@@ -1,6 +1,6 @@
 // -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
-// DESCRIPTION: Verilator:
+// DESCRIPTION: Verilator: Interface typedef capture with path-based keys
 //
 // Code available from: https://verilator.org
 //
@@ -33,76 +33,36 @@ AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
     return nullptr;
 }
 
-bool V3LinkDotIfaceCapture::finalizeCapturedEntry(CapturedMap::iterator it, const char* reasonp,
-                                                   AstCell* matchCellp) {
-    CapturedIfaceTypedef& entry = it->second;
-    AstTypedef* const reboundTypedefp = entry.typedefp;
-    UINFO(9, "iface capture finalizeCapturedEntry(" << reasonp << "): refp="
-              << (entry.refp ? entry.refp->name() : "<null>")
-              << " typedefp=" << (reboundTypedefp ? reboundTypedefp->name() : "<null>")
-              << " pendingClones.size=" << entry.pendingClones.size()
-              << " matchCellp=" << (matchCellp ? matchCellp->name() : "<null>")
-              << " matchCellp(ptr)=" << cvtToHex(matchCellp)
-              << endl);
-    if (entry.pendingClones.empty() || !reboundTypedefp) return false;
-    bool anyUpdated = false;
-    auto it2 = entry.pendingClones.begin();
-    while (it2 != entry.pendingClones.end()) {
-        if (!it2->refp) {
-            it2 = entry.pendingClones.erase(it2);
-            continue;
-        }
-        // Disambiguation: match pending clone by cell pointer.
-        // matchCellp is the cell that triggered the interface cloning (e.g.,
-        // port_types in child__Iz3). The pending clone's cellp was recorded
-        // at propagateClone time via entry.cellp->clonep().
-        // If matchCellp is provided, only update the matching clone.
-        // If matchCellp is nullptr, update all (no disambiguation needed).
-        bool matches = false;
-        if (!matchCellp) {
-            matches = true;  // No disambiguation — update all
-        } else if (!it2->cellp) {
-            matches = true;  // No cell context on pending clone — always match
-        } else if (it2->cellp == matchCellp) {
-            matches = true;  // Exact cell pointer match
-        }
-        UINFO(9, "iface capture   pendingClone: refp=" << it2->refp->name()
-                  << " cellp=" << (it2->cellp ? it2->cellp->name() : "<null>")
-                  << " cellp(ptr)=" << cvtToHex(it2->cellp)
-                  << " matches=" << matches << endl);
-        if (matches) {
-            UINFO(9, "iface capture   -> UPDATING typedefp to " << reboundTypedefp->name()
-                      << " in " << (findOwnerModule(reboundTypedefp) ? findOwnerModule(reboundTypedefp)->name() : "<null>")
-                      << endl);
-            if (entry.cellp) it2->refp->user2p(entry.cellp);
-            it2->refp->user3(false);
-            it2->refp->typedefp(reboundTypedefp);
-            it2 = entry.pendingClones.erase(it2);
-            anyUpdated = true;
-        } else {
-            ++it2;
-        }
+void V3LinkDotIfaceCapture::dumpEntries(const string& label) {
+    UINFO(9, "========== iface capture dumpEntries: " << label
+              << " (entries=" << s_map.size()
+              << " localparams=" << s_localparamMap.size() << ") ==========" << endl);
+    int idx = 0;
+    for (const auto& pair : s_map) {
+        const CaptureKey& key = pair.first;
+        const CapturedEntry& entry = pair.second;
+        const char* captType = (entry.captureType == CaptureType::IFACE) ? "IFACE" : "CLASS";
+        UINFO(9, "  [" << idx << "] " << captType
+                  << " key=(" << cvtToHex(key.templateRefp) << ",'" << key.cellPath << "')"
+                  << " ref='" << (entry.refp ? entry.refp->name() : "<null>") << "'"
+                  << " refp=" << cvtToHex(entry.refp)
+                  << " cellPath='" << entry.cellPath << "'"
+                  << " ownerMod=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
+                  << " typedefp=" << (entry.typedefp ? entry.typedefp->name() : "<null>")
+                  << " typedefOwnerModName='" << entry.typedefOwnerModName << "'"
+                  << " paramTypep=" << (entry.paramTypep ? entry.paramTypep->name() : "<null>")
+                  << " ifacePortVarp=" << (entry.ifacePortVarp ? entry.ifacePortVarp->name() : "<null>")
+                  << endl);
+        ++idx;
     }
-    return anyUpdated;
-}
-
-bool V3LinkDotIfaceCapture::shouldApplyToClone(const CapturedIfaceTypedef& entry,
-                                               const AstNodeModule* srcModp,
-                                               const AstCell* cloneCellp) {
-    if (!entry.cellp || !cloneCellp) return true;
-    if (entry.typedefOwnerModp != srcModp) return true;
-    if (entry.cellp == cloneCellp) return true;
-    if (entry.cellp->name() == cloneCellp->name()) return true;
-
-    // If the entry cell is a direct child of srcModp, treat as a sibling and skip.
-    for (AstNode* stmtp = srcModp ? srcModp->stmtsp() : nullptr; stmtp; stmtp = stmtp->nextp()) {
-        if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
-            if (cellp->name() == entry.cellp->name()) return false;
-        }
+    for (const auto& pair : s_localparamMap) {
+        const CapturedIfaceLocalparam& lp = pair.second;
+        UINFO(9, "  LP: var='" << (lp.varp ? lp.varp->name() : "<null>") << "'"
+                  << " ownerMod=" << (lp.ownerModp ? lp.ownerModp->name() : "<null>")
+                  << " origExprp=" << (lp.origExprp ? "yes" : "no")
+                  << endl);
     }
-
-    // Otherwise, keep entry (nested interface chains should still apply).
-    return true;
+    UINFO(9, "========== end iface capture dumpEntries ==========" << endl);
 }
 
 string V3LinkDotIfaceCapture::extractIfacePortName(const string& dotText) {
@@ -114,196 +74,234 @@ string V3LinkDotIfaceCapture::extractIfacePortName(const string& dotText) {
     return name;
 }
 
-void V3LinkDotIfaceCapture::add(AstRefDType* refp, AstCell* cellp, AstNodeModule* ownerModp,
-                                AstTypedef* typedefp, AstNodeModule* typedefOwnerModp,
+string V3LinkDotIfaceCapture::lastPathComponent(const string& cellPath) {
+    UASSERT(!cellPath.empty(), "lastPathComponent called with empty cellPath");
+    const size_t dotPos = cellPath.rfind('.');
+    if (dotPos == string::npos) return cellPath;
+    const string result = cellPath.substr(dotPos + 1);
+    UASSERT(!result.empty(),
+            "lastPathComponent produced empty result from '" << cellPath << "'");
+    return result;
+}
+
+void V3LinkDotIfaceCapture::add(AstRefDType* refp, const string& cellPath,
+                                AstNodeModule* ownerModp, AstTypedef* typedefp,
+                                const string& typedefOwnerModName,
                                 AstVar* ifacePortVarp) {
-    if (!refp) return;
+    UASSERT(refp, "add() called with null refp");
+    UASSERT(ownerModp, "add() called with null ownerModp for refp='" << refp->name() << "'");
     if (!typedefp) typedefp = refp->typedefp();
-    if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
-    s_map[refp] = CapturedIfaceTypedef{
-        CaptureType::IFACE, refp,    cellp,        nullptr, ownerModp, typedefp,
-        nullptr, typedefOwnerModp,   {}, ifacePortVarp};
+    string tdOwnerName = typedefOwnerModName;
+    if (tdOwnerName.empty() && typedefp) {
+        AstNodeModule* const tdOwnerModp = findOwnerModule(typedefp);
+        if (tdOwnerModp) tdOwnerName = tdOwnerModp->name();
+    }
+    const CaptureKey key{refp, cellPath};
+    s_map[key] = CapturedEntry{CaptureType::IFACE, refp, cellPath, nullptr,
+                               ownerModp, typedefp, nullptr, tdOwnerName, ifacePortVarp};
+    UINFO(9, "iface capture add: refp=" << refp->name()
+              << " cellPath='" << cellPath << "'"
+              << " ownerMod=" << (ownerModp ? ownerModp->name() : "<null>")
+              << " typedefp=" << (typedefp ? typedefp->name() : "<null>")
+              << " typedefOwnerModName='" << tdOwnerName << "'"
+              << endl);
 }
 
 void V3LinkDotIfaceCapture::addClass(AstRefDType* refp, AstClass* origClassp,
                                      AstNodeModule* ownerModp, AstTypedef* typedefp,
-                                     AstNodeModule* typedefOwnerModp) {
-    if (!refp) return;
+                                     const string& typedefOwnerModName) {
+    UASSERT(refp, "addClass() called with null refp");
+    UASSERT(ownerModp, "addClass() called with null ownerModp");
     if (!typedefp) typedefp = refp->typedefp();
-    if (!typedefOwnerModp && typedefp) typedefOwnerModp = findOwnerModule(typedefp);
-    s_map[refp] = CapturedIfaceTypedef{CaptureType::CLASS, refp,      nullptr,
-                                       origClassp,         ownerModp, typedefp,
-                                       nullptr, typedefOwnerModp,   {},   nullptr};
+    string tdOwnerName = typedefOwnerModName;
+    if (tdOwnerName.empty() && typedefp) {
+        AstNodeModule* const tdOwnerModp = findOwnerModule(typedefp);
+        if (tdOwnerModp) tdOwnerName = tdOwnerModp->name();
+    }
+    // For CLASS captures, use the class name as cellPath
+    UASSERT_OBJ(origClassp, refp,
+                "addClass() called with null origClassp for refp='" << refp->name() << "'");
+    const string cellPath = origClassp->name();
+    UASSERT(!cellPath.empty(), "addClass() produced empty cellPath from class='" << origClassp->name() << "'");
+    const CaptureKey key{refp, cellPath};
+    s_map[key] = CapturedEntry{CaptureType::CLASS, refp, cellPath, origClassp,
+                               ownerModp, typedefp, nullptr, tdOwnerName, nullptr};
+    UINFO(9, "iface capture addClass: refp=" << refp->name()
+              << " cellPath='" << cellPath << "'"
+              << " ownerMod=" << (ownerModp ? ownerModp->name() : "<null>")
+              << endl);
 }
 
-const V3LinkDotIfaceCapture::CapturedIfaceTypedef*
-V3LinkDotIfaceCapture::find(const AstRefDType* refp) {
+const V3LinkDotIfaceCapture::CapturedEntry*
+V3LinkDotIfaceCapture::find(const AstRefDType* refp, const string& cellPath) {
     if (!refp) return nullptr;
-    const auto it = s_map.find(refp);
+    const CaptureKey key{refp, cellPath};
+    const auto it = s_map.find(key);
     if (VL_UNLIKELY(it == s_map.end())) return nullptr;
     return &it->second;
 }
 
-bool V3LinkDotIfaceCapture::erase(const AstRefDType* refp) {
+bool V3LinkDotIfaceCapture::erase(const AstRefDType* refp, const string& cellPath) {
     if (!refp) return false;
-    const auto it = s_map.find(refp);
+    const CaptureKey key{refp, cellPath};
+    const auto it = s_map.find(key);
     if (it == s_map.end()) return false;
     s_map.erase(it);
     return true;
 }
 
-bool V3LinkDotIfaceCapture::replaceRef(const AstRefDType* oldRefp, AstRefDType* newRefp) {
+const V3LinkDotIfaceCapture::CapturedEntry*
+V3LinkDotIfaceCapture::findAny(const AstRefDType* refp) {
+    if (!refp) return nullptr;
+    for (const auto& kv : s_map) {
+        if (kv.first.templateRefp == refp) return &kv.second;
+    }
+    return nullptr;
+}
+
+bool V3LinkDotIfaceCapture::eraseAll(const AstRefDType* refp) {
+    if (!refp) return false;
+    bool any = false;
+    for (auto it = s_map.begin(); it != s_map.end();) {
+        if (it->first.templateRefp == refp) {
+            it = s_map.erase(it);
+            any = true;
+        } else {
+            ++it;
+        }
+    }
+    return any;
+}
+
+bool V3LinkDotIfaceCapture::replaceRef(const AstRefDType* oldRefp, AstRefDType* newRefp,
+                                       const string& cellPath) {
     if (!oldRefp || !newRefp) return false;
-    const auto it = s_map.find(oldRefp);
+    const CaptureKey oldKey{oldRefp, cellPath};
+    const auto it = s_map.find(oldKey);
     if (it == s_map.end()) return false;
     auto entry = it->second;
+    UASSERT(entry.cellPath == cellPath,
+            "replaceRef key/entry cellPath mismatch: key='" << cellPath
+            << "' entry='" << entry.cellPath << "'");
     entry.refp = newRefp;
+    entry.cellPath = cellPath;  // keep consistent
     s_map.erase(it);
-    s_map.emplace(newRefp, entry);
+    const CaptureKey newKey{newRefp, cellPath};
+    s_map.emplace(newKey, entry);
     return true;
 }
 
-bool V3LinkDotIfaceCapture::replaceTypedef(const AstRefDType* refp, AstTypedef* newTypedefp,
-                                           AstCell* matchCellp) {
+bool V3LinkDotIfaceCapture::replaceTypedef(const AstRefDType* refp, const string& cellPath,
+                                           AstTypedef* newTypedefp) {
     if (!refp || !newTypedefp) return false;
-    auto it = s_map.find(refp);
+    const CaptureKey key{refp, cellPath};
+    auto it = s_map.find(key);
     if (it == s_map.end()) return false;
-    UINFO(9, "iface capture replaceTypedef: refp=" << refp->name()
-              << " newTypedefp=" << newTypedefp->name()
-              << " owner=" << (findOwnerModule(newTypedefp) ? findOwnerModule(newTypedefp)->name() : "<null>")
-              << " matchCellp=" << (matchCellp ? matchCellp->name() : "<null>")
-              << " pendingClones.size=" << it->second.pendingClones.size()
-              << endl);
-    it->second.typedefp = newTypedefp;
-    it->second.typedefOwnerModp = findOwnerModule(newTypedefp);
-
-    // For CLASS captures, update the RefDType node directly
-    if (it->second.captureType == CaptureType::CLASS && it->second.refp) {
-        it->second.refp->typedefp(newTypedefp);
-        // Also update classOrPackagep to point to the specialized class
-        if (AstClass* const newClassp = VN_CAST(it->second.typedefOwnerModp, Class)) {
-            it->second.refp->classOrPackagep(newClassp);
-        }
-        UINFO(9, "class capture updated RefDType typedefp: " << it->second.refp << " -> "
-                                                             << newTypedefp);
+    CapturedEntry& entry = it->second;
+    AstNodeModule* const newOwnerModp = findOwnerModule(newTypedefp);
+    if (!newOwnerModp) {
+        UINFO(1, "iface capture replaceTypedef WARNING: findOwnerModule returned null"
+                  " for newTypedefp='" << newTypedefp->name() << "'" << endl);
     }
+    UINFO(9, "iface capture replaceTypedef: refp=" << refp->name()
+              << " cellPath='" << cellPath << "'"
+              << " newTypedefp=" << newTypedefp->name()
+              << " owner=" << (newOwnerModp ? newOwnerModp->name() : "<null>")
+              << endl);
+    entry.typedefp = newTypedefp;
+    if (newOwnerModp) entry.typedefOwnerModName = newOwnerModp->name();
 
-    finalizeCapturedEntry(it, "typedef clone", matchCellp);
+    // For CLASS captures, also update classOrPackagep
+    if (entry.captureType == CaptureType::CLASS && entry.refp) {
+        entry.refp->typedefp(newTypedefp);
+        if (AstClass* const newClassp = VN_CAST(newOwnerModp, Class)) {
+            entry.refp->classOrPackagep(newClassp);
+        }
+        UINFO(9, "class capture updated RefDType typedefp: " << entry.refp << " -> "
+                                                             << newTypedefp << endl);
+    } else {
+        // IFACE capture: update the RefDType's typedefp
+        UASSERT(entry.refp, "replaceTypedef: entry has null refp");
+        entry.refp->typedefp(newTypedefp);
+    }
     return true;
 }
 
-void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDType* newRefp) {
-    if (!origRefp || !newRefp) return;
-    const auto it = s_map.find(origRefp);
-    UASSERT_OBJ(it != s_map.end(), origRefp,
-                "iface capture propagateClone missing entry for orig=" << cvtToStr(origRefp));
-    CapturedIfaceTypedef& entry = it->second;
-
-    if (entry.cellp) newRefp->user2p(entry.cellp);
-    newRefp->user3(false);
-    // Store the cloned cell for disambiguation: when the nested interface
-    // is later cloned, we match by cell pointer to find the right clone.
-    AstCell* clonedCellp = entry.cellp ? entry.cellp->clonep() : nullptr;
-    UINFO(9, "iface capture propagateClone: orig=" << origRefp->name()
-              << " new=" << newRefp
-              << " entry.cellp=" << (entry.cellp ? entry.cellp->name() : "<null>")
-              << " clonedCellp=" << (clonedCellp ? clonedCellp->name() : "<null>")
-              << " clonedCellp(ptr)=" << cvtToHex(clonedCellp)
-              << " pendingClones.size=" << entry.pendingClones.size()
-              << endl);
-    entry.pendingClones.push_back({newRefp, clonedCellp});
-
-    // If replaceTypedef was already called (interface cloned before module),
-    // entry.typedefp will differ from the original RefDType's typedef.
-    // In that case, finalize now with the updated typedef.
-    if (entry.typedefp && origRefp->typedefp() && entry.typedefp != origRefp->typedefp()) {
-        finalizeCapturedEntry(it, "ref clone");
-    }
-
-    // Handle PARAMTYPEDTYPE references: find the correct PARAMTYPEDTYPE in the cloned interface
-    // The cloned cell's modp() should now point to the cloned interface
-    if (entry.paramTypep && entry.cellp) {
-        AstParamTypeDType* const origParamTypep = VN_CAST(origRefp->refDTypep(), ParamTypeDType);
-        if (origParamTypep) {
-            // Find the cloned cell - it should have the same name as the original
-            // and be in the cloned module (newRefp's owner)
-            AstCell* clonedCellp = entry.cellp->clonep();
-            if (!clonedCellp) {
-                // Try to find via user2p which may have been set during cloning
-                clonedCellp = VN_CAST(newRefp->user2p(), Cell);
-            }
-            UINFO(9, "propagateClone paramtype: origCellp=" << entry.cellp
-                      << " clonedCellp=" << clonedCellp
-                      << " clonedCellp->modp()=" << (clonedCellp ? clonedCellp->modp() : nullptr)
-                      << endl);
-            if (clonedCellp && clonedCellp->modp()) {
-                // Check if the cloned cell's modp() is different from the original
-                // If it's the same, the nested interface hasn't been cloned yet
-                AstNodeModule* const clonedModp = clonedCellp->modp();
-                AstNodeModule* const origModp = entry.cellp->modp();
-                UINFO(9, "propagateClone paramtype: origModp=" << (origModp ? origModp->name() : "<null>")
-                          << " clonedModp=" << (clonedModp ? clonedModp->name() : "<null>")
-                          << endl);
-                if (clonedModp != origModp) {
-                    // Search for the PARAMTYPEDTYPE with the same name in the cloned interface
-                    const string& paramTypeName = origParamTypep->name();
-                    for (AstNode* stmtp = clonedModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                        if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
-                            if (ptdp->name() == paramTypeName) {
-                                newRefp->refDTypep(ptdp);
-                                UINFO(9, "propagateClone updated cloned RefDType refDTypep: " << newRefp
-                                          << " -> " << ptdp << " in " << clonedModp->name() << endl);
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    // Nested interface not cloned yet - store for deferred processing
-                    UINFO(9, "propagateClone: nested interface not cloned yet, deferring refp="
-                              << newRefp << " paramTypeName=" << origParamTypep->name() << endl);
-                    entry.pendingClones.push_back({newRefp, clonedCellp});
-                }
-            }
+void V3LinkDotIfaceCapture::propagateClone(const AstRefDType* origRefp, AstRefDType* newRefp,
+                                           const string& cellPath) {
+    UASSERT(origRefp, "propagateClone() called with null origRefp");
+    UASSERT(newRefp, "propagateClone() called with null newRefp");
+    const CaptureKey origKey{origRefp, cellPath};
+    const auto it = s_map.find(origKey);
+    if (it == s_map.end()) {
+        // Try empty cellPath as fallback (PARAMTYPEDTYPE entries may have empty cellPath)
+        const CaptureKey emptyKey{origRefp, ""};
+        const auto it2 = s_map.find(emptyKey);
+        if (it2 == s_map.end()) {
+            UINFO(9, "iface capture propagateClone: no entry for orig="
+                      << origRefp->name() << " cellPath='" << cellPath << "' — skipping" << endl);
+            return;
         }
+        // Create new entry for the clone with the provided cellPath.
+        // This fallback is expected for PARAMTYPEDTYPE entries captured with empty dotText.
+        CapturedEntry newEntry = it2->second;
+        UASSERT(newEntry.refp, "propagateClone empty-key fallback found entry with null refp");
+        newEntry.refp = newRefp;
+        newEntry.cellPath = cellPath;
+        const CaptureKey newKey{newRefp, cellPath};
+        s_map[newKey] = newEntry;
+        UINFO(1, "iface capture propagateClone (empty-key fallback): orig=" << origRefp->name()
+                  << " new=" << newRefp->name()
+                  << " cellPath='" << cellPath << "'" << endl);
+        return;
     }
+    // Create a new entry for the cloned RefDType, inheriting cellPath
+    CapturedEntry newEntry = it->second;
+    newEntry.refp = newRefp;
+    const CaptureKey newKey{newRefp, cellPath};
+    s_map[newKey] = newEntry;
+    UINFO(9, "iface capture propagateClone: orig=" << origRefp->name()
+              << " new=" << newRefp->name()
+              << " cellPath='" << cellPath << "'" << endl);
 }
 
 template <typename FilterFn, typename Fn>
 void V3LinkDotIfaceCapture::forEachImpl(FilterFn&& filter, Fn&& fn) {
-    std::vector<const AstRefDType*> keys;
+    std::vector<CaptureKey> keys;
     keys.reserve(s_map.size());
     for (const auto& kv : s_map) keys.push_back(kv.first);
 
-    for (const AstRefDType* key : keys) {
+    for (const CaptureKey& key : keys) {
         const auto it = s_map.find(key);
         if (it == s_map.end()) continue;
-
-        CapturedIfaceTypedef& entry = it->second;
-        if (entry.cellp && entry.refp && entry.refp->user2p() != entry.cellp) {
-            entry.refp->user2p(entry.cellp);
-        }
+        CapturedEntry& entry = it->second;
         if (!filter(entry)) continue;
         fn(entry);
     }
 }
 
-void V3LinkDotIfaceCapture::forEach(const std::function<void(const CapturedIfaceTypedef&)>& fn) {
+void V3LinkDotIfaceCapture::forEach(const std::function<void(const CapturedEntry&)>& fn) {
     if (!fn) return;
-    forEachImpl([](const CapturedIfaceTypedef&) { return true; }, fn);
+    forEachImpl([](const CapturedEntry&) { return true; }, fn);
 }
 
 void V3LinkDotIfaceCapture::forEachOwned(
-    const AstNodeModule* ownerModp, const std::function<void(const CapturedIfaceTypedef&)>& fn) {
+    const AstNodeModule* ownerModp, const std::function<void(const CapturedEntry&)>& fn) {
     if (!ownerModp || !fn) return;
-    UINFO(9, "iface capture forEachOwned: checking entries for ownerModp=" << ownerModp->name()
+    const string ownerName = ownerModp->name();
+    UINFO(9, "iface capture forEachOwned: ownerModp=" << ownerName
               << " map size=" << s_map.size() << endl);
     forEachImpl(
-        [ownerModp](const CapturedIfaceTypedef& e) {
-            const bool matches = e.ownerModp == ownerModp || e.typedefOwnerModp == ownerModp;
-            UINFO(9, "iface capture forEachOwned filter: entry refp=" << e.refp
-                      << " e.ownerModp=" << (e.ownerModp ? e.ownerModp->name() : "<null>")
-                      << " e.typedefOwnerModp=" << (e.typedefOwnerModp ? e.typedefOwnerModp->name() : "<null>")
-                      << " matches=" << matches << endl);
+        [ownerModp, &ownerName](const CapturedEntry& e) {
+            // Match by ownerModp pointer or typedefOwnerModName string
+            const bool matches = e.ownerModp == ownerModp
+                                 || e.typedefOwnerModName == ownerName;
+            UINFO(9, "iface capture forEachOwned filter: ref='"
+                      << (e.refp ? e.refp->name() : "<null>")
+                      << "' cellPath='" << e.cellPath
+                      << "' ownerMod=" << (e.ownerModp ? e.ownerModp->name() : "<null>")
+                      << " typedefOwnerModName='" << e.typedefOwnerModName
+                      << "' matches=" << matches << endl);
             return matches;
         },
         fn);
@@ -332,6 +330,19 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
         return;
     }
 
+    // Use dotText as the hierarchical cellPath key component.
+    // dotText is the full dot-separated path from the owning module to the
+    // interface cell (e.g. "a_inst", "wif.a_inst", "outer.mid.inner").
+    // Fall back to ifaceCellp->name() only when dotText is empty
+    // (expected for PARAMTYPEDTYPE entries where dotText is not set).
+    const string cellPath = dotText.empty() ? ifaceCellp->name() : dotText;
+    if (dotText.empty()) {
+        UINFO(5, indentFn() << "iface capture using ifaceCellp->name() fallback: '"
+                            << cellPath << "' (dotText empty)" << endl);
+    }
+    UASSERT(!cellPath.empty(),
+            "captureTypedefContext: cellPath is empty for refp='" << refp->name() << "'");
+
     AstVar* ifacePortVarp = nullptr;
     if (!dotText.empty() && curSymp) {
         const std::string portName = extractIfacePortName(dotText);
@@ -342,18 +353,18 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
         }
     }
 
-    refp->user2p(const_cast<AstCell*>(ifaceCellp));
     // Check if refDTypep is a ParamTypeDType - if so, use addParamType instead of add
     if (AstParamTypeDType* const paramTypep = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
-        V3LinkDotIfaceCapture::addParamType(refp, const_cast<AstCell*>(ifaceCellp), modp,
-                                            paramTypep, nullptr, ifacePortVarp);
+        V3LinkDotIfaceCapture::addParamType(refp, cellPath, modp,
+                                            paramTypep, "", ifacePortVarp);
     } else {
-        V3LinkDotIfaceCapture::add(refp, const_cast<AstCell*>(ifaceCellp), modp, refp->typedefp(),
-                                   nullptr, ifacePortVarp);
+        V3LinkDotIfaceCapture::add(refp, cellPath, modp, refp->typedefp(),
+                                   "", ifacePortVarp);
     }
 
     UINFO(9, indentFn() << "iface capture capture success typedef=" << refp
                         << " cell=" << ifaceCellp
+                        << " cellPath='" << cellPath << "'"
                         << " mod=" << (ifaceCellp->modp() ? ifaceCellp->modp()->name() : "<null>")
                         << " dotPos=" << dotPos);
     if (!dotIsFinal) return;
@@ -413,19 +424,26 @@ void V3LinkDotIfaceCapture::forEachLocalparamOwned(
     }
 }
 
-void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, AstCell* cellp,
+void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, const string& cellPath,
                                           AstNodeModule* ownerModp,
                                           AstParamTypeDType* paramTypep,
-                                          AstNodeModule* paramTypeOwnerModp,
+                                          const string& paramTypeOwnerModName,
                                           AstVar* ifacePortVarp) {
-    if (!refp) return;
-    if (!paramTypeOwnerModp && paramTypep) paramTypeOwnerModp = findOwnerModule(paramTypep);
+    UASSERT(refp, "addParamType() called with null refp");
+    UASSERT(ownerModp, "addParamType() called with null ownerModp for refp='" << refp->name() << "'");
+    UASSERT_OBJ(paramTypep, refp,
+                "addParamType() called with null paramTypep for refp='" << refp->name() << "'");
+    string ptOwnerName = paramTypeOwnerModName;
+    if (ptOwnerName.empty() && paramTypep) {
+        AstNodeModule* const ptOwnerModp = findOwnerModule(paramTypep);
+        if (ptOwnerModp) ptOwnerName = ptOwnerModp->name();
+    }
     UINFO(9, "addParamType: refp=" << refp
+              << " cellPath='" << cellPath << "'"
               << " ownerModp=" << (ownerModp ? ownerModp->name() : "<null>")
               << " paramTypep=" << paramTypep
-              << " paramTypeOwnerModp=" << (paramTypeOwnerModp ? paramTypeOwnerModp->name() : "<null>")
+              << " paramTypeOwnerModName='" << ptOwnerName << "'"
               << endl);
-    // Dump the PARAMTYPEDTYPE's subDTypep chain to see what's there at capture time
     if (paramTypep) {
         UINFO(9, "addParamType: paramTypep subDTypep chain:" << endl);
         paramTypep->foreach([&](AstRefDType* innerRefp) {
@@ -436,84 +454,79 @@ void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, AstCell* cellp,
                       << endl);
         });
     }
-    s_map[refp] = CapturedIfaceTypedef{
-        CaptureType::IFACE, refp, cellp, nullptr, ownerModp, nullptr,
-        paramTypep, paramTypeOwnerModp, {}, ifacePortVarp};
+    const CaptureKey key{refp, cellPath};
+    s_map[key] = CapturedEntry{CaptureType::IFACE, refp, cellPath, nullptr,
+                               ownerModp, nullptr, paramTypep, ptOwnerName, ifacePortVarp};
 
     // Also capture REFDTYPEs inside the PARAMTYPEDTYPE's subDTypep chain.
-    // These REFDTYPEs may have refDTypep pointing to nodes in a nested interface
-    // that will be cloned separately. We need to track them so we can update
-    // their refDTypep when the nested interface is cloned.
     if (paramTypep) {
         paramTypep->foreach([&](AstRefDType* innerRefp) {
-            if (innerRefp == refp) return;  // Skip the outer RefDType we already captured
-            if (!innerRefp->refDTypep()) return;  // Skip if no refDTypep
+            if (innerRefp == refp) return;
+            if (!innerRefp->refDTypep()) return;
 
-            // Check if refDTypep is in a different interface (nested interface)
             AstNodeModule* const refOwnerModp = findOwnerModule(innerRefp->refDTypep());
-            if (refOwnerModp && VN_IS(refOwnerModp, Iface) && refOwnerModp != paramTypeOwnerModp) {
-                // This REFDTYPE has refDTypep pointing to a node in a different interface
-                // Capture it so we can update it when that interface is cloned
-                if (s_map.find(innerRefp) == s_map.end()) {
-                    UINFO(9, "addParamType: also capturing inner RefDType " << innerRefp
-                              << " refDTypep owner=" << refOwnerModp->name() << endl);
-                    // Find the cell for the nested interface
-                    AstCell* nestedCellp = nullptr;
-                    for (AstNode* stmtp = paramTypeOwnerModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                        if (AstCell* const cp = VN_CAST(stmtp, Cell)) {
-                            if (cp->modp() == refOwnerModp) {
-                                nestedCellp = cp;
-                                break;
+            if (refOwnerModp && VN_IS(refOwnerModp, Iface)
+                && refOwnerModp->name() != ptOwnerName) {
+                const CaptureKey innerKey{innerRefp, cellPath};
+                if (s_map.find(innerKey) == s_map.end()) {
+                    // Find the cell name for the nested interface
+                    string nestedCellName;
+                    AstNodeModule* const ptOwnerModp = findOwnerModule(paramTypep);
+                    if (ptOwnerModp) {
+                        for (AstNode* stmtp = ptOwnerModp->stmtsp(); stmtp;
+                             stmtp = stmtp->nextp()) {
+                            if (AstCell* const cp = VN_CAST(stmtp, Cell)) {
+                                if (cp->modp() == refOwnerModp) {
+                                    nestedCellName = cp->name();
+                                    break;
+                                }
                             }
                         }
                     }
-                    s_map[innerRefp] = CapturedIfaceTypedef{
-                        CaptureType::IFACE, innerRefp, nestedCellp, nullptr, paramTypeOwnerModp,
-                        innerRefp->typedefp(), nullptr, refOwnerModp, {}, nullptr};
+                    if (nestedCellName.empty()) {
+                        UINFO(1, "addParamType WARNING: could not find cell for nested iface '"
+                                  << refOwnerModp->name() << "' in '"
+                                  << (ptOwnerModp ? ptOwnerModp->name() : "<null>")
+                                  << "' — using parent cellPath='" << cellPath << "'" << endl);
+                    }
+                    UINFO(9, "addParamType: also capturing inner RefDType " << innerRefp
+                              << " refDTypep owner=" << refOwnerModp->name()
+                              << " nestedCellName='" << nestedCellName << "'" << endl);
+                    s_map[innerKey] = CapturedEntry{
+                        CaptureType::IFACE, innerRefp, nestedCellName.empty() ? cellPath : nestedCellName,
+                        nullptr, ptOwnerModp,
+                        innerRefp->typedefp(), nullptr, refOwnerModp->name(), nullptr};
                 }
             }
         });
     }
 }
 
-bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp,
+bool V3LinkDotIfaceCapture::replaceParamType(const AstRefDType* refp, const string& cellPath,
                                               AstParamTypeDType* newParamTypep) {
     UINFO(9, "replaceParamType called: refp=" << refp
+              << " cellPath='" << cellPath << "'"
               << " newParamTypep=" << (newParamTypep ? newParamTypep->name() : "<null>") << endl);
     if (!refp || !newParamTypep) return false;
-    auto it = s_map.find(refp);
+    const CaptureKey key{refp, cellPath};
+    auto it = s_map.find(key);
     if (it == s_map.end()) {
-        UINFO(9, "replaceParamType: entry not found for refp=" << refp << endl);
+        UINFO(9, "replaceParamType: entry not found for refp=" << refp
+                  << " cellPath='" << cellPath << "'" << endl);
         return false;
     }
-    UINFO(9, "replaceParamType: found entry, pendingClones.size="
-              << it->second.pendingClones.size() << endl);
-    it->second.paramTypep = newParamTypep;
-    it->second.typedefOwnerModp = findOwnerModule(newParamTypep);
-    // Update the RefDType's refDTypep
-    if (it->second.refp) {
-        it->second.refp->refDTypep(newParamTypep);
-    }
-    // Also update any pending cloned RefDTypes that were deferred because
-    // the nested interface wasn't cloned yet at propagateClone time
+    CapturedEntry& entry = it->second;
+    entry.paramTypep = newParamTypep;
     AstNodeModule* const paramOwnerModp = findOwnerModule(newParamTypep);
-    auto pit = it->second.pendingClones.begin();
-    while (pit != it->second.pendingClones.end()) {
-        if (!pit->refp) {
-            pit = it->second.pendingClones.erase(pit);
-            continue;
-        }
-        bool matches = !pit->cellp || !paramOwnerModp
-                       || pit->cellp->modp() == paramOwnerModp;
-        if (matches) {
-            pit->refp->refDTypep(newParamTypep);
-            UINFO(9, "replaceParamType also updated pendingClone: " << pit->refp
-                      << " -> " << newParamTypep << endl);
-            pit = it->second.pendingClones.erase(pit);
-        } else {
-            ++pit;
-        }
+    if (paramOwnerModp) {
+        entry.typedefOwnerModName = paramOwnerModp->name();
+    } else {
+        UINFO(1, "replaceParamType WARNING: findOwnerModule returned null"
+                  " for newParamTypep='" << newParamTypep->name()
+                  << "' — typedefOwnerModName left as '" << entry.typedefOwnerModName << "'" << endl);
     }
+    UASSERT(entry.refp, "replaceParamType: entry has null refp");
+    entry.refp->refDTypep(newParamTypep);
     return true;
 }
 
@@ -564,7 +577,17 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                     // Find the template module
                     for (AstNodeModule* tmplp : templateModules) {
                         if (tmplp->name() == templateName) {
-                            templateToCloneMap[tmplp] = modp;
+                            auto existing = templateToCloneMap.find(tmplp);
+                            if (existing != templateToCloneMap.end()) {
+                                UINFO(1, "iface capture WARNING: finalizeIfaceCapture"
+                                          " multiple clones for template '"
+                                          << templateName << "': existing='"
+                                          << existing->second->name()
+                                          << "' new='" << modp->name()
+                                          << "' — keeping first" << endl);
+                            } else {
+                                templateToCloneMap[tmplp] = modp;
+                            }
                             UINFO(9, "finalizeIfaceCapture: " << templateName
                                       << " -> " << modp->name() << endl);
                             break;

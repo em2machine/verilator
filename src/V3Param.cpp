@@ -715,29 +715,49 @@ class ParamProcessor final {
                       << " cloneCellp=" << (cloneCellp ? cloneCellp->name() : "<null>")
                       << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
             V3LinkDotIfaceCapture::forEachOwned(
-                srcModp, [&](const V3LinkDotIfaceCapture::CapturedIfaceTypedef& entry) {
+                srcModp, [&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
                     if (!entry.refp) return;
 
                     UINFO(9, "iface capture entry: refp=" << entry.refp->name()
+                              << " cellPath='" << entry.cellPath << "'"
                               << " typedefp=" << (entry.typedefp ? entry.typedefp->name() : "<null>")
                               << " paramTypep=" << (entry.paramTypep ? entry.paramTypep->name() : "<null>")
-                              << " cellp=" << (entry.cellp ? entry.cellp->name() : "<null>")
-                              << " cellp->modp=" << (entry.cellp && entry.cellp->modp() ? entry.cellp->modp()->name() : "<null>")
                               << " ownerModp=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
-                              << " typedefOwnerModp=" << (entry.typedefOwnerModp ? entry.typedefOwnerModp->name() : "<null>")
+                              << " typedefOwnerModName='" << entry.typedefOwnerModName << "'"
                               << " ifacePortVarp=" << (entry.ifacePortVarp ? entry.ifacePortVarp->name() : "<null>")
                               << endl);
 
-                    if (!V3LinkDotIfaceCapture::shouldApplyToClone(entry, srcModp, cloneCellp)) {
-                        UINFO(9, "iface capture shouldApplyToClone=false, skipping" << endl);
-                        return;
+                    // When cloning the interface that owns the typedef (matched via
+                    // typedefOwnerModName), only process entries whose cellPath's
+                    // last component matches the cell that triggered this clone.
+                    // The last component of a hierarchical path like "wif.a_inst"
+                    // is "a_inst" — the direct interface cell name.  This correctly
+                    // handles arbitrary nesting depth.
+                    if (cloneCellp && entry.ownerModp != srcModp
+                        && entry.typedefOwnerModName == srcModp->name()) {
+                        UASSERT_OBJ(!entry.cellPath.empty(), entry.refp,
+                                    "cellPath is empty in entry matched via typedefOwnerModName");
+                        const string lastComp
+                            = V3LinkDotIfaceCapture::lastPathComponent(entry.cellPath);
+                        if (lastComp != cloneCellp->name()) {
+                            UINFO(9, "iface capture skipping: cellPath='" << entry.cellPath
+                                      << "' lastComp='" << lastComp
+                                      << "' != cloneCellp='" << cloneCellp->name() << "'" << endl);
+                            return;
+                        }
                     }
+
+                    // Entries must have exactly one of typedefp or paramTypep
+                    UASSERT_OBJ(!entry.typedefp || !entry.paramTypep, entry.refp,
+                                "entry has BOTH typedefp='" << entry.typedefp->name()
+                                << "' AND paramTypep='" << entry.paramTypep->name() << "'");
 
                     // Handle TYPEDEF references
                     if (AstTypedef* const origTypedefp = entry.typedefp) {
                         AstTypedef* targetTypedefp = nullptr;
                         const string& typedefName = origTypedefp->name();
 
+                        // Search ifaceRefRefs (port connections)
                         for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
                             const AstIfaceRefDType* const portIrefp = it->first;
                             AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
@@ -768,57 +788,52 @@ class ParamProcessor final {
                                   << (targetTypedefp ? targetTypedefp->name() : "<null>")
                                   << " for typedef '" << typedefName << "'" << endl);
 
-                        // If ifaceRefRefs didn't find it, try the cloned cell's interface.
-                        // entry.cellp is the original cell (e.g., port_types in template child).
-                        // Its clonep() gives the cloned cell in newModp, whose modp() points
-                        // to the correct cloned interface for this specific instance.
-                        if (!targetTypedefp && entry.cellp) {
-                            AstCell* const clonedCellp = entry.cellp->clonep();
-                            UINFO(9, "iface capture cloned cell search: entry.cellp="
-                                      << entry.cellp->name()
-                                      << " clonedCellp=" << (clonedCellp ? clonedCellp->name() : "<null>")
-                                      << " clonedCellp->modp=" << (clonedCellp && clonedCellp->modp() ? clonedCellp->modp()->name() : "<null>")
-                                      << " origModp=" << (entry.cellp->modp() ? entry.cellp->modp()->name() : "<null>")
-                                      << " same=" << (clonedCellp && clonedCellp->modp() == entry.cellp->modp())
-                                      << endl);
-                            if (clonedCellp) {
-                                AstNodeModule* const clonedModp = clonedCellp->modp();
-                                if (clonedModp && clonedModp != entry.cellp->modp()) {
-                                    for (AstNode* stmtp = clonedModp->stmtsp(); stmtp;
-                                         stmtp = stmtp->nextp()) {
-                                        if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                                            if (tdp->name() == typedefName) {
-                                                targetTypedefp = tdp;
-                                                UINFO(9, "iface capture found typedef '"
-                                                          << typedefName << "' via cloned cell '"
-                                                          << clonedCellp->name() << "' in "
-                                                          << clonedModp->name() << endl);
-                                                break;
-                                            }
-                                        }
+                        // If we're cloning the interface that owns the typedef,
+                        // the typedef is in newModp itself.
+                        if (!targetTypedefp && newModp != srcModp
+                            && entry.typedefOwnerModName == srcModp->name()) {
+                            for (AstNode* stmtp = newModp->stmtsp(); stmtp;
+                                 stmtp = stmtp->nextp()) {
+                                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                                    if (tdp->name() == typedefName) {
+                                        targetTypedefp = tdp;
+                                        UINFO(9, "iface capture found typedef '"
+                                                  << typedefName << "' in newModp "
+                                                  << newModp->name() << endl);
+                                        break;
                                     }
                                 }
                             }
                         }
 
+                        // Last resort: clonep() (one-shot, may be null)
                         if (!targetTypedefp) {
                             targetTypedefp = origTypedefp->clonep();
                             UINFO(9, "iface capture fallback to clonep(): "
                                       << (targetTypedefp ? targetTypedefp->name() : "<null>")
-                                      << " owner="
-                                      << (targetTypedefp ? V3LinkDotIfaceCapture::findOwnerModule(targetTypedefp) : nullptr)
                                       << endl);
+                        }
+
+                        if (!targetTypedefp) {
+                            UINFO(1, "iface capture WARNING: all typedef search paths"
+                                      " failed for '" << typedefName
+                                      << "' ref='" << entry.refp->name()
+                                      << "' cellName='" << entry.cellPath
+                                      << "' srcModp=" << srcModp->name()
+                                      << " newModp=" << newModp->name()
+                                      << " — typedef will NOT be rebound" << endl);
                         }
 
                         UINFO(9, "iface capture FINAL targetTypedefp="
                                   << (targetTypedefp ? targetTypedefp->name() : "<null>")
                                   << " for refp=" << entry.refp->name()
+                                  << " cellName='" << entry.cellPath << "'"
                                   << " in srcModp=" << srcModp->name()
                                   << " -> newModp=" << newModp->name() << endl);
 
                         if (targetTypedefp) {
-                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, targetTypedefp,
-                                                                  cloneCellp);
+                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, entry.cellPath,
+                                                                  targetTypedefp);
                         }
                     }
                     // Handle PARAMTYPEDTYPE references
@@ -853,11 +868,10 @@ class ParamProcessor final {
                             if (targetParamTypep) break;
                         }
 
-                        // If not found via ifaceRefRefs, try searching in newModp
-                        // This handles the case where the entry was matched via typedefOwnerModp
-                        // (i.e., the PARAMTYPEDTYPE is in the interface being cloned)
-                        if (!targetParamTypep && entry.typedefOwnerModp == srcModp) {
-                            // Search in the new cloned module for the PARAMTYPEDTYPE
+                        // If the PARAMTYPEDTYPE is in the interface being cloned,
+                        // search newModp directly
+                        if (!targetParamTypep
+                            && entry.typedefOwnerModName == srcModp->name()) {
                             for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                                 if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
                                     if (ptdp->name() == paramTypeName) {
@@ -879,13 +893,10 @@ class ParamProcessor final {
                             }
                         }
 
-                        // Skip replaceParamType if:
-                        // 1. PARAMTYPEDTYPE is a statement of srcModp (the interface being cloned)
-                        // 2. typedefOwnerModp matches srcModp (owned by this interface)
-                        // 3. There's actually a PIN for this PARAMTYPEDTYPE on cloneCellp
-                        // This means PIN processing will assign its type.
+                        // Skip replaceParamType if PIN processing will assign its type
                         bool hasPin = false;
-                        if (paramTypeIsSrcModStmt && entry.typedefOwnerModp == srcModp
+                        if (paramTypeIsSrcModStmt
+                            && entry.typedefOwnerModName == srcModp->name()
                             && cloneCellp) {
                             for (AstPin* pinp = cloneCellp->paramsp(); pinp;
                                  pinp = VN_AS(pinp->nextp(), Pin)) {
@@ -896,36 +907,33 @@ class ParamProcessor final {
                                 }
                             }
                         }
-                        if (paramTypeIsSrcModStmt && entry.typedefOwnerModp == srcModp
+                        if (paramTypeIsSrcModStmt
+                            && entry.typedefOwnerModName == srcModp->name()
                             && hasPin) {
                             return;  // Skip - PIN processing will assign its type
                         }
 
-                        // Fallback: try via cellp->modp() for internal cells
-                        if (!targetParamTypep && entry.cellp) {
-                            AstNodeModule* const cellModp = entry.cellp->modp();
-                            if (cellModp) {
-                                for (AstNode* stmtp = cellModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                                    if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
-                                        if (ptdp->name() == paramTypeName) {
-                                            targetParamTypep = ptdp;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
+                        // Last resort: clonep()
                         if (!targetParamTypep) targetParamTypep = origParamTypep->clonep();
 
                         if (targetParamTypep) {
-                            V3LinkDotIfaceCapture::replaceParamType(entry.refp, targetParamTypep);
+                            V3LinkDotIfaceCapture::replaceParamType(entry.refp, entry.cellPath,
+                                                                    targetParamTypep);
                         }
+                    }
+
+                    if (!entry.typedefp && !entry.paramTypep) {
+                        UINFO(1, "iface capture WARNING: entry has neither typedefp nor paramTypep"
+                                  " refp='" << entry.refp->name()
+                                  << "' cellPath='" << entry.cellPath
+                                  << "' ownerModp=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
+                                  << " — no rebinding action taken" << endl);
                     }
 
                     // Propagate to cloned RefDType in new module
                     if (AstRefDType* const clonedRefp = entry.refp->clonep()) {
-                        V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp);
+                        V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp,
+                                                              entry.cellPath);
                     }
                 });
         }
@@ -2806,6 +2814,7 @@ void V3Param::param(AstNetlist* rootp) {
     // This captures ALL cells, params, types, $bits() expressions
     UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
     V3LinkDotDepGraph::build(rootp);
+    V3LinkDotIfaceCapture::dumpEntries("after DepGraph build");
 
     // Phase 2: Resolve all dependencies in topological order
     // This computes all constants by propagating through dependency chains
@@ -2824,7 +2833,9 @@ void V3Param::param(AstNetlist* rootp) {
 
     // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
     UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
+    V3LinkDotIfaceCapture::dumpEntries("before V3Param");
     { ParamTop{rootp}; }
+    V3LinkDotIfaceCapture::dumpEntries("after V3Param");
 
     V3Global::dumpCheckGlobalTree("param", 0, dumpTreeEitherLevel() >= 3);
 }

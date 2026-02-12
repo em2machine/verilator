@@ -1404,12 +1404,43 @@ private:
                         UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF found cell association: portPath='"
                                   << portPath << "' -> ifaceCellPath='" << tdCellPath << "'" << endl);
                     } else {
-                        // Fallback: use cellContext + normalizedCellName directly
-                        tdCellPath = cellContext.empty()
-                            ? normalizedCellName
-                            : cellContext + "." + normalizedCellName;
-                        UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF no cell association for portPath='"
-                                  << portPath << "', using fallback tdCellPath='" << tdCellPath << "'" << endl);
+                        // Try prefix-based rewrite: if portPath is "t.c.wif.a_inst" and
+                        // cell association has "t.c.wif" -> "t.wif", rewrite to "t.wif.a_inst".
+                        // This handles nested interface access through ports (e.g., accessing
+                        // a sub-cell within an interface passed via a port).
+                        // Use longest-prefix match to avoid ambiguity when multiple associations
+                        // could match different prefixes of the same path.
+                        bool foundPrefix = false;
+                        size_t bestLen = 0;
+                        string bestTarget;
+                        string bestPrefix;
+                        for (const auto& assoc : s_cellAssociations) {
+                            const string& pfx = assoc.first;
+                            if (pfx.size() > bestLen
+                                && portPath.size() > pfx.size()
+                                && portPath[pfx.size()] == '.'
+                                && portPath.compare(0, pfx.size(), pfx) == 0) {
+                                bestLen = pfx.size();
+                                bestTarget = assoc.second;
+                                bestPrefix = pfx;
+                            }
+                        }
+                        if (bestLen > 0) {
+                            const string suffix = portPath.substr(bestLen);
+                            tdCellPath = bestTarget + suffix;
+                            UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF prefix cell association: portPath='"
+                                      << portPath << "' prefix='" << bestPrefix
+                                      << "' -> '" << tdCellPath << "'" << endl);
+                            foundPrefix = true;
+                        }
+                        if (!foundPrefix) {
+                            // Fallback: use cellContext + normalizedCellName directly
+                            tdCellPath = cellContext.empty()
+                                ? normalizedCellName
+                                : cellContext + "." + normalizedCellName;
+                            UINFO(5, "DEPGRAPH: REFDTYPE->TYPEDEF no cell association for portPath='"
+                                      << portPath << "', using fallback tdCellPath='" << tdCellPath << "'" << endl);
+                        }
                     }
                 } else if (!cellPath.empty()) {
                     // Try to find interface cell/port in current module that matches the typedef owner
@@ -1490,13 +1521,17 @@ private:
                 // First try to find an existing TYPEDEF node at this cellPath
                 tdNodep = V3LinkDotDepGraph::findByNameAndOwner(
                     tdp->name(), tdOwnerp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdCellPath);
+                UINFO(5, "DEPGRAPH: findByNameAndOwner('" << tdp->name() << "', " << tdOwnerp->name()
+                          << ", TYPEDEF, '" << tdCellPath << "') -> "
+                          << (tdNodep ? ("found cellPath='" + tdNodep->cellPath + "'") : "NOT FOUND") << endl);
 
                 if (!tdNodep) {
                     // Node doesn't exist yet, create it
                     tdNodep = V3LinkDotDepGraph::findOrCreateNode(
                         tdp, V3LinkDotDepGraph::NodeType::TYPEDEF, tdOwnerp, tdCellPath);
                 }
-                UINFO(5, "DEPGRAPH: Found/created interface typedef node at '" << tdCellPath << "'" << endl);
+                UINFO(5, "DEPGRAPH: Found/created interface typedef node at '" << tdCellPath
+                          << "' nodep=" << cvtToHex(tdNodep) << " cellPath='" << tdNodep->cellPath << "'" << endl);
             } else {
                 // For non-interface-typedef refs, create/find the node normally
                 tdNodep = V3LinkDotDepGraph::findOrCreateNode(
@@ -4160,8 +4195,14 @@ void V3LinkDotDepGraph::finalizeAST() {
             }
             break;
         case NodeType::GPARAM:
-            finalizeParam(nodep);
-            ++paramCount;
+            // Only finalize template-level GPARAMs (empty cellPath).
+            // Cell-context GPARAMs carry override values that must NOT be written
+            // to the template AST — V3Param compares pin overrides against the
+            // template's default to decide whether cloning is needed.
+            if (nodep->cellPath.empty()) {
+                finalizeParam(nodep);
+                ++paramCount;
+            }
             break;
         case NodeType::LPARAM:
             // LPARAMs with cell-context must be applied per-clone by V3Param

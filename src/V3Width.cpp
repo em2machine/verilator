@@ -8752,19 +8752,23 @@ class WidthVisitor final : public VNVisitor {
         const bool child1 = (parentp->getChildDTypep() == dtnodep);
         const bool child2 = (parentp->getChild2DTypep() == dtnodep);
         if (child1 || child2) {
-            UINFO(9, "iterateEditMoveDTypep child iterating " << dtnodep);
-            // Iterate, this might edit the dtypes which means dtnodep now lost
-            VL_DO_DANGLING(userIterate(dtnodep, nullptr), dtnodep);
-            // Figure out the new dtnodep, remained a child of parent so find it there
-            dtnodep = child1 ? parentp->getChildDTypep() : parentp->getChild2DTypep();
-            UASSERT_OBJ(dtnodep, parentp, "iterateEditMoveDTypep lost pointer to child");
-            UASSERT_OBJ(dtnodep->didWidth(), parentp,
-                        "iterateEditMoveDTypep didn't get width resolution of "
-                            << dtnodep->prettyTypeName());
-            // Move to under netlist (skip entirely during DepGraph execution to prevent
-            // our cloned types from polluting the global type table AND to keep child
-            // dtypes in place so cloneTree() includes them in subsequent V3Param clones)
+            // During DepGraph execution, skip child dtype processing entirely.
+            // Resolve works on shadow clones whose dtypep() may point back to
+            // template AST nodes.  Iterating here would set didWidth() on the
+            // template's child dtype, preventing the later full V3Width pass
+            // from moving it to the type table.  Resolve computes widths via
+            // DepNodes, so this iteration is unnecessary for shadow clones.
             if (!V3LinkDotDepGraph::isExecuting()) {
+                UINFO(9, "iterateEditMoveDTypep child iterating " << dtnodep);
+                // Iterate, this might edit the dtypes which means dtnodep now lost
+                VL_DO_DANGLING(userIterate(dtnodep, nullptr), dtnodep);
+                // Figure out the new dtnodep, remained a child of parent so find it there
+                dtnodep = child1 ? parentp->getChildDTypep() : parentp->getChild2DTypep();
+                UASSERT_OBJ(dtnodep, parentp, "iterateEditMoveDTypep lost pointer to child");
+                UASSERT_OBJ(dtnodep->didWidth(), parentp,
+                            "iterateEditMoveDTypep didn't get width resolution of "
+                                << dtnodep->prettyTypeName());
+                // Move to under netlist
                 UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
                 dtnodep->unlinkFrBack();
                 v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
