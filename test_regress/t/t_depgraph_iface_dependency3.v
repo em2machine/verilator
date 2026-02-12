@@ -42,7 +42,9 @@ module a_mod(
 endmodule
 
 module t();
-  localparam a_pkg::cfg_t cfg = '{8};
+  localparam a_pkg::cfg_t cfg = '{
+    a: 8
+  };
 
   depgraph_if #(cfg) ifc();
 

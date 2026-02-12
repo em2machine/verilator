@@ -77,8 +77,12 @@ string V3LinkDotIfaceCapture::extractIfacePortName(const string& dotText) {
 string V3LinkDotIfaceCapture::lastPathComponent(const string& cellPath) {
     UASSERT(!cellPath.empty(), "lastPathComponent called with empty cellPath");
     const size_t dotPos = cellPath.rfind('.');
-    if (dotPos == string::npos) return cellPath;
-    const string result = cellPath.substr(dotPos + 1);
+    string result = (dotPos == string::npos) ? cellPath : cellPath.substr(dotPos + 1);
+    // Strip __BRA__...__KET__ array index suffixes.
+    // Interface arrays like subA_io[2] are encoded as subA_io__BRA__??__KET__
+    // in dotText, but the cell name remains subA_io.
+    const size_t braPos = result.find("__BRA__");
+    if (braPos != string::npos) result = result.substr(0, braPos);
     UASSERT(!result.empty(),
             "lastPathComponent produced empty result from '" << cellPath << "'");
     return result;
@@ -535,79 +539,17 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
 
     UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs" << endl);
 
-    // Heuristic-based fixups for any remaining cross-interface refs.
-    // Build a map of template modules to their cloned versions
-    // Template modules are those marked dead() or without "__" in name
-    // Cloned modules have "__" in their name
-    std::map<AstNodeModule*, AstNodeModule*> templateToCloneMap;
-    std::set<AstNodeModule*> templateModules;
-
     if (!v3Global.rootp()) return;
 
-    // First pass: identify template modules/interfaces (dead or no "__" in name)
-    // The top-level module is a special case - it's never a template
-    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
-        if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
-            // Skip the top-level module - it's never a template
-            if (modp->isTop()) {
-                UINFO(9, "finalizeIfaceCapture: skipping top module " << modp->name() << endl);
-                continue;
-            }
-            // Skip packages - they don't get cloned
-            if (VN_IS(modp, Package)) continue;
-            if (modp->dead() || modp->name().find("__") == string::npos) {
-                templateModules.insert(modp);
-                UINFO(9, "finalizeIfaceCapture: template "
-                          << (VN_IS(modp, Iface) ? "interface" : "module")
-                          << " " << modp->name() << endl);
-            }
-        }
-    }
+    // Context-aware fixup for REFDTYPEs whose typedefp/refDTypep point to dead
+    // template modules.  Instead of a global template→clone map (which breaks
+    // with multi-instantiation), we walk the cell hierarchy of the containing
+    // module to find the correct clone of the target interface.
 
-    // Second pass: for each cloned module, find its template
-    // The template name is the part before "__"
-    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
-        if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
-            if (!modp->dead() && modp->name().find("__") != string::npos) {
-                // Extract template name (part before "__")
-                const string& name = modp->name();
-                const size_t pos = name.find("__");
-                if (pos != string::npos) {
-                    const string templateName = name.substr(0, pos);
-                    // Find the template module
-                    for (AstNodeModule* tmplp : templateModules) {
-                        if (tmplp->name() == templateName) {
-                            auto existing = templateToCloneMap.find(tmplp);
-                            if (existing != templateToCloneMap.end()) {
-                                UINFO(1, "iface capture WARNING: finalizeIfaceCapture"
-                                          " multiple clones for template '"
-                                          << templateName << "': existing='"
-                                          << existing->second->name()
-                                          << "' new='" << modp->name()
-                                          << "' — keeping first" << endl);
-                            } else {
-                                templateToCloneMap[tmplp] = modp;
-                            }
-                            UINFO(9, "finalizeIfaceCapture: " << templateName
-                                      << " -> " << modp->name() << endl);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Phase 2: Fix pointers that point to DEAD template modules.
-    // V3Param's cloneRelinkGen() sets typedefp/refDTypep correctly at clone time.
-    // The only pointers that need fixing here are ones still pointing to template
-    // modules (marked dead) that will be deleted by V3Dead.
-    // We NEVER redirect pointers to live modules — those were set correctly by V3Param.
-
-    // Helper: find a matching node by name in a cloned module
-    auto findInClone = [](AstNodeModule* cloneModp, const string& name,
-                          bool wantTypedef) -> AstNode* {
-        for (AstNode* stmtp = cloneModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+    // Helper: find a matching node by name in a module
+    auto findInModule = [](AstNodeModule* modp, const string& name,
+                           bool wantTypedef) -> AstNode* {
+        for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
             if (wantTypedef) {
                 if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
                     if (tdp->name() == name) return tdp;
@@ -621,22 +563,64 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
         return nullptr;
     };
 
-    // Helper: fix a single REFDTYPE's pointers if they point to dead modules
-    auto fixDeadRefs = [&](AstRefDType* refp, const char* location) -> int {
+    // Helper: given a module and a dead target module, find the correct clone
+    // of the target by walking the containing module's cell hierarchy.
+    // For example, if refp is in cache_if__Cz3 and targetModp is dead
+    // cache_types_if, we look at cache_if__Cz3's cells to find which clone
+    // of cache_types_if it instantiates (cache_types_if__Cz3).
+    // This recurses through the hierarchy to handle arbitrary nesting depth.
+    std::function<AstNodeModule*(AstNodeModule*, AstNodeModule*, int)> findCloneViaHierarchy;
+    findCloneViaHierarchy = [&](AstNodeModule* containingModp, AstNodeModule* deadTargetModp,
+                                int depth) -> AstNodeModule* {
+        if (depth > 20) return nullptr;  // Safety limit
+        for (AstNode* stmtp = containingModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+            if (AstCell* const cellp = VN_CAST(stmtp, Cell)) {
+                AstNodeModule* const cellModp = cellp->modp();
+                if (!cellModp) continue;
+                // Direct match: this cell points to a clone of the dead target
+                if (!cellModp->dead()) {
+                    // Check if cellModp is a clone of deadTargetModp by comparing
+                    // the template name (part before "__")
+                    const string& cellModName = cellModp->name();
+                    const string& deadName = deadTargetModp->name();
+                    const size_t pos = cellModName.find("__");
+                    if (pos != string::npos && cellModName.substr(0, pos) == deadName) {
+                        return cellModp;
+                    }
+                }
+                // Recurse into sub-cells
+                if (!cellModp->dead()) {
+                    AstNodeModule* const found
+                        = findCloneViaHierarchy(cellModp, deadTargetModp, depth + 1);
+                    if (found) return found;
+                }
+            }
+        }
+        return nullptr;
+    };
+
+    // Helper: fix a single REFDTYPE's pointers if they point to dead modules.
+    // containingModp is the live module that contains this REFDTYPE — used to
+    // walk the cell hierarchy for context-aware clone resolution.
+    auto fixDeadRefs = [&](AstRefDType* refp, AstNodeModule* containingModp,
+                           const char* location) -> int {
         int fixed = 0;
 
         // Fix refDTypep pointing to dead module
         if (refp->refDTypep()) {
             AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
             if (targetModp && targetModp->dead()) {
-                auto it = templateToCloneMap.find(targetModp);
-                if (it != templateToCloneMap.end()) {
+                AstNodeModule* cloneModp = nullptr;
+                if (containingModp) {
+                    cloneModp = findCloneViaHierarchy(containingModp, targetModp, 0);
+                }
+                if (cloneModp) {
                     const string& targetName = refp->refDTypep()->prettyName();
-                    if (AstNode* const newp = findInClone(it->second, targetName, false)) {
+                    if (AstNode* const newp = findInModule(cloneModp, targetName, false)) {
                         UINFO(9, "iface capture finalizeCapture (" << location
                                   << "): fixing refDTypep refp=" << refp
                                   << " dead=" << targetModp->name()
-                                  << " -> " << it->second->name() << endl);
+                                  << " -> " << cloneModp->name() << endl);
                         refp->refDTypep(VN_AS(newp, NodeDType));
                         ++fixed;
                     }
@@ -648,14 +632,17 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
         if (refp->typedefp()) {
             AstNodeModule* const typedefModp = findOwnerModule(refp->typedefp());
             if (typedefModp && typedefModp->dead()) {
-                auto it = templateToCloneMap.find(typedefModp);
-                if (it != templateToCloneMap.end()) {
+                AstNodeModule* cloneModp = nullptr;
+                if (containingModp) {
+                    cloneModp = findCloneViaHierarchy(containingModp, typedefModp, 0);
+                }
+                if (cloneModp) {
                     const string& tdName = refp->typedefp()->name();
-                    if (AstNode* const newp = findInClone(it->second, tdName, true)) {
+                    if (AstNode* const newp = findInModule(cloneModp, tdName, true)) {
                         UINFO(9, "iface capture finalizeCapture (" << location
                                   << "): fixing typedefp refp=" << refp
                                   << " dead=" << typedefModp->name()
-                                  << " -> " << it->second->name() << endl);
+                                  << " -> " << cloneModp->name() << endl);
                         refp->typedefp(VN_AS(newp, Typedef));
                         ++fixed;
                     }
@@ -669,28 +656,393 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     int typeTableFixed = 0;
     int moduleFixed = 0;
 
-    // Walk the type table
+    // Walk the type table — no containing module context, but type table entries
+    // that point to dead modules need special handling.  We find the containing
+    // module by looking at which live module references this type table entry.
     if (v3Global.rootp()->typeTablep()) {
+        // Build a map from type table REFDTYPE to the live module that uses it.
+        // This is needed because type table entries don't have a direct parent module.
+        std::unordered_map<const AstRefDType*, AstNodeModule*> typeTableRefOwners;
+        for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+            if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
+                if (modp->dead()) continue;
+                modp->foreach([&](AstRefDType* refp) {
+                    // Check if refp's refDTypep or typedefp is in the type table
+                    // by checking if the owner module of the target is null or dead
+                    if (refp->refDTypep()) {
+                        AstNodeModule* const ownerp = findOwnerModule(refp->refDTypep());
+                        if (!ownerp) {
+                            // Type table entry — record the containing module
+                            // (This is a heuristic; the first live module wins)
+                        }
+                    }
+                });
+            }
+        }
+
         for (AstNode* nodep = v3Global.rootp()->typeTablep()->typesp(); nodep;
              nodep = nodep->nextp()) {
             nodep->foreach([&](AstRefDType* refp) {
-                typeTableFixed += fixDeadRefs(refp, "type table");
+                // For type table entries, find the first live module that contains
+                // a cell hierarchy leading to the dead target
+                AstNodeModule* containingModp = nullptr;
+                AstNodeModule* deadTargetModp = nullptr;
+                if (refp->typedefp()) {
+                    deadTargetModp = findOwnerModule(refp->typedefp());
+                } else if (refp->refDTypep()) {
+                    deadTargetModp = findOwnerModule(refp->refDTypep());
+                }
+                if (deadTargetModp && deadTargetModp->dead()) {
+                    // Search all live modules for one that has a cell hierarchy
+                    // leading to a clone of the dead target
+                    for (AstNode* mnodep = v3Global.rootp()->modulesp(); mnodep;
+                         mnodep = mnodep->nextp()) {
+                        if (AstNodeModule* const modp = VN_CAST(mnodep, NodeModule)) {
+                            if (modp->dead()) continue;
+                            AstNodeModule* const found
+                                = findCloneViaHierarchy(modp, deadTargetModp, 0);
+                            if (found) {
+                                containingModp = modp;
+                                break;
+                            }
+                        }
+                    }
+                }
+                typeTableFixed += fixDeadRefs(refp, containingModp, "type table");
             });
         }
     }
 
-    // Walk all non-dead modules
+    // Walk all non-dead modules — Phase 1: fix dead-module pointers
     for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
         if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
             if (modp->dead()) continue;
             modp->foreach([&](AstRefDType* refp) {
-                moduleFixed += fixDeadRefs(refp, modp->name().c_str());
+                moduleFixed += fixDeadRefs(refp, modp, modp->name().c_str());
             });
         }
     }
 
     UINFO(4, "finalizeIfaceCapture: fixed " << typeTableFixed << " in type table, "
-              << moduleFixed << " in modules" << endl);
+              << moduleFixed << " in modules (dead refs)" << endl);
+
+    // Walk all non-dead modules — Phase 2: fix wrong-live-clone pointers.
+    //
+    // After Phase 1, all dead-module pointers are fixed. But clonep()
+    // last-writer-wins can leave REFDTYPEs pointing to a live sibling clone
+    // instead of the correct clone for this instance. For example,
+    // cache_if__Cz3 (wrap0) may have a REFDTYPE pointing to a typedef in
+    // cache_types_if__Cz5 (wrap1's clone) instead of cache_types_if__Cz3.
+    //
+    // Detection: for each module, collect all modules reachable via its cell
+    // hierarchy (recursively, to arbitrary depth). If a REFDTYPE's target
+    // owner is NOT in the reachable set and NOT the module itself, it's
+    // pointing to a wrong clone.
+    //
+    // Fix: search the reachable set for a node with the same name and type.
+    int wrongCloneFixed = 0;
+
+    // Per-module edge in the reachable graph: parent + connection name.
+    struct ParentEdge {
+        AstNodeModule* parentp;  // Module that instantiates this one
+        string connName;  // Cell instance name or port var name
+    };
+
+    // Data collected per-module during the reachable walk.
+    struct ReachableInfo {
+        // origName -> vector of reachable modules with that origName
+        std::map<string, std::vector<AstNodeModule*>> byOrigName;
+        // For each reachable module, how it's connected to its parent
+        std::map<AstNodeModule*, ParentEdge> parentMap;
+        // Flat set for quick membership test
+        std::set<AstNodeModule*> flat;
+    };
+
+    // Helper: collect all modules reachable from modp via cell hierarchy
+    // AND via IFACEREFDTYPE port connections.
+    // Both connection types are needed:
+    //   - Cells: direct sub-module instantiations
+    //   - IFACEREFDTYPE: interface port connections
+    // Builds origName map AND parent map (with connection names) for disambiguation.
+    // M itself is included in byOrigName so recursive parent-walk can terminate.
+    auto collectReachable = [](AstNodeModule* modp) -> ReachableInfo {
+        ReachableInfo info;
+        info.flat.insert(modp);
+        // Include M itself in byOrigName for recursive disambiguation
+        const string& modOrigName = modp->origName().empty()
+            ? modp->name() : modp->origName();
+        info.byOrigName[modOrigName].push_back(modp);
+        std::function<void(AstNodeModule*)> walk;
+        walk = [&](AstNodeModule* curp) {
+            for (AstNode* sp = curp->stmtsp(); sp; sp = sp->nextp()) {
+                // Follow cell instantiations
+                if (AstCell* const cellp = VN_CAST(sp, Cell)) {
+                    AstNodeModule* const cellModp = cellp->modp();
+                    if (cellModp && info.flat.insert(cellModp).second) {
+                        const string& origName = cellModp->origName().empty()
+                            ? cellModp->name() : cellModp->origName();
+                        info.byOrigName[origName].push_back(cellModp);
+                        info.parentMap[cellModp] = {curp, cellp->name()};
+                        walk(cellModp);
+                    }
+                }
+                // Follow IFACEREFDTYPE port connections
+                if (AstVar* const varp = VN_CAST(sp, Var)) {
+                    if (varp->isIfaceRef() && varp->childDTypep()) {
+                        if (AstIfaceRefDType* const irefp
+                            = VN_CAST(varp->childDTypep(), IfaceRefDType)) {
+                            AstIface* const ifacep = irefp->ifaceViaCellp();
+                            if (ifacep && info.flat.insert(ifacep).second) {
+                                const string& origName = ifacep->origName().empty()
+                                    ? ifacep->name() : ifacep->origName();
+                                info.byOrigName[origName].push_back(ifacep);
+                                info.parentMap[ifacep] = {curp, varp->name()};
+                                walk(ifacep);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        walk(modp);
+        return info;
+    };
+
+    // Helper: find the cell/port name that connects parentModp to childModp.
+    // Scans parentModp's stmts for a cell or IFACEREFDTYPE port pointing to childModp.
+    // Returns empty string if not found.
+    auto findConnName = [](AstNodeModule* parentModp,
+                           AstNodeModule* childModp) -> string {
+        for (AstNode* sp = parentModp->stmtsp(); sp; sp = sp->nextp()) {
+            if (AstCell* const cellp = VN_CAST(sp, Cell)) {
+                if (cellp->modp() == childModp) return cellp->name();
+            }
+            if (AstVar* const varp = VN_CAST(sp, Var)) {
+                if (varp->isIfaceRef() && varp->childDTypep()) {
+                    if (AstIfaceRefDType* const irefp
+                        = VN_CAST(varp->childDTypep(), IfaceRefDType)) {
+                        if (irefp->ifaceViaCellp() == childModp) return varp->name();
+                    }
+                }
+            }
+        }
+        return "";
+    };
+
+    // Helper: given a wrong target owner module W and the reachable info from M,
+    // find the correct clone C in M's hierarchy.
+    //
+    // Strategy: look up modules with matching origName. If exactly one, use it.
+    // If multiple (same interface template at different hierarchy levels), we
+    // disambiguate using the parent map and connection names.
+    //
+    // The key invariant: M and the wrong sibling are clones of the same
+    // template, so the structural path from M to C mirrors the path from
+    // the sibling to W. The path is defined by (parent origName, connection name)
+    // pairs at each level. Connection names (cell instance names, port var names)
+    // are preserved across clones because cloneTree copies them verbatim.
+    //
+    // Algorithm:
+    // 1. Find W's parent P_wrong and the connection name from P_wrong to W
+    //    (by scanning all live modules for a cell/port pointing to W).
+    // 2. Recursively find the correct clone of P_wrong in M's hierarchy.
+    // 3. Pick the candidate connected to the correct parent via the same
+    //    connection name.
+    std::function<AstNodeModule*(AstNodeModule*, const ReachableInfo&,
+                                 std::set<AstNodeModule*>&)> findCorrectClone;
+    findCorrectClone = [&](AstNodeModule* wrongOwnerp, const ReachableInfo& info,
+                           std::set<AstNodeModule*>& visited)
+                           -> AstNodeModule* {
+        const string& wrongOrigName = wrongOwnerp->origName().empty()
+            ? wrongOwnerp->name() : wrongOwnerp->origName();
+        auto it = info.byOrigName.find(wrongOrigName);
+        if (it == info.byOrigName.end()) return nullptr;
+        const auto& candidates = it->second;
+        if (candidates.size() == 1) return candidates[0];
+
+        // Multiple candidates — disambiguate by parent + connection name.
+        if (visited.count(wrongOwnerp)) return candidates[0];  // cycle guard
+        visited.insert(wrongOwnerp);
+
+        // Find W's instantiating parent and connection name by scanning all live modules
+        AstNodeModule* wrongParentp = nullptr;
+        string wrongConnName;
+        for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
+            AstNodeModule* const scanModp = VN_CAST(np, NodeModule);
+            if (!scanModp || scanModp->dead()) continue;
+            wrongConnName = findConnName(scanModp, wrongOwnerp);
+            if (!wrongConnName.empty()) {
+                wrongParentp = scanModp;
+                break;
+            }
+        }
+
+        if (!wrongParentp) {
+            UINFO(4, "finalizeIfaceCapture wrong-clone: cannot find parent of "
+                      << wrongOwnerp->name() << ", using first candidate" << endl);
+            return candidates[0];
+        }
+
+        UINFO(9, "finalizeIfaceCapture disambiguate: wrong " << wrongOwnerp->name()
+                  << " parent=" << wrongParentp->name()
+                  << " conn='" << wrongConnName << "'" << endl);
+
+        // Recursively find the correct clone of W's parent
+        AstNodeModule* correctParentp = nullptr;
+        if (info.flat.count(wrongParentp)) {
+            // W's parent is already in M's reachable set — it IS the correct parent
+            correctParentp = wrongParentp;
+        } else {
+            correctParentp = findCorrectClone(wrongParentp, info, visited);
+        }
+        if (!correctParentp) return candidates[0];
+
+        // Pick the candidate connected to correctParentp via the same connection name
+        for (AstNodeModule* const candp : candidates) {
+            auto pit = info.parentMap.find(candp);
+            if (pit != info.parentMap.end()
+                && pit->second.parentp == correctParentp
+                && pit->second.connName == wrongConnName) {
+                UINFO(9, "finalizeIfaceCapture disambiguate: resolved "
+                          << wrongOwnerp->name() << " -> " << candp->name()
+                          << " via parent=" << correctParentp->name()
+                          << " conn='" << wrongConnName << "'" << endl);
+                return candp;
+            }
+        }
+
+        // Fallback: try parent-only match (connection name might differ
+        // between cell and port representations)
+        for (AstNodeModule* const candp : candidates) {
+            auto pit = info.parentMap.find(candp);
+            if (pit != info.parentMap.end()
+                && pit->second.parentp == correctParentp) {
+                UINFO(4, "finalizeIfaceCapture wrong-clone: parent-only match for "
+                          << wrongOrigName << " -> " << candp->name()
+                          << " (conn mismatch: '" << wrongConnName
+                          << "' vs '" << pit->second.connName << "')" << endl);
+                return candp;
+            }
+        }
+
+        // Final fallback
+        UINFO(4, "finalizeIfaceCapture wrong-clone: could not disambiguate "
+                  << wrongOrigName << " among " << candidates.size()
+                  << " candidates under parent " << correctParentp->name()
+                  << " conn='" << wrongConnName << "'"
+                  << ", using first" << endl);
+        return candidates[0];
+    };
+
+    for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
+        AstNodeModule* const modp = VN_CAST(nodep, NodeModule);
+        if (!modp || modp->dead()) continue;
+
+        const ReachableInfo info = collectReachable(modp);
+        const std::set<AstNodeModule*>& reachable = info.flat;
+
+        modp->foreach([&](AstRefDType* refp) {
+            // Fix typedefp pointing to wrong live clone
+            if (refp->typedefp()) {
+                AstNodeModule* const tdOwnerp = findOwnerModule(refp->typedefp());
+                if (tdOwnerp && tdOwnerp != modp
+                    && !tdOwnerp->dead()
+                    && !VN_IS(tdOwnerp, Package)
+                    && reachable.find(tdOwnerp) == reachable.end()) {
+                    const string& tdName = refp->typedefp()->name();
+                    std::set<AstNodeModule*> visited;
+                    AstNodeModule* const correctModp
+                        = findCorrectClone(tdOwnerp, info, visited);
+                    if (correctModp) {
+                        // Search correctModp for the matching typedef
+                        bool found = false;
+                        for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
+                            if (AstTypedef* const newTdp = VN_CAST(sp, Typedef)) {
+                                if (newTdp->name() == tdName) {
+                                    UINFO(9, "finalizeIfaceCapture wrong-clone fixup: "
+                                              << modp->name()
+                                              << " refp=" << refp->name()
+                                              << " typedefp " << tdOwnerp->name()
+                                              << " -> " << correctModp->name() << endl);
+                                    refp->typedefp(newTdp);
+                                    ++wrongCloneFixed;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) {
+                            UINFO(4, "finalizeIfaceCapture wrong-clone WARNING: "
+                                      << modp->name()
+                                      << " refp=" << refp->name()
+                                      << " typedefp name='" << tdName
+                                      << "' not found in correct module "
+                                      << correctModp->name() << endl);
+                        }
+                    } else {
+                        UINFO(4, "finalizeIfaceCapture wrong-clone WARNING: "
+                                  << modp->name()
+                                  << " refp=" << refp->name()
+                                  << " typedefp owner=" << tdOwnerp->name()
+                                  << " no correct clone found in reachable set"
+                                  << endl);
+                    }
+                }
+            }
+            // Fix refDTypep pointing to wrong live clone
+            if (refp->refDTypep()) {
+                AstNodeModule* const rdOwnerp = findOwnerModule(refp->refDTypep());
+                if (rdOwnerp && rdOwnerp != modp
+                    && !rdOwnerp->dead()
+                    && !VN_IS(rdOwnerp, Package)
+                    && reachable.find(rdOwnerp) == reachable.end()) {
+                    const string& rdName = refp->refDTypep()->name();
+                    const VNType rdType = refp->refDTypep()->type();
+                    std::set<AstNodeModule*> visited;
+                    AstNodeModule* const correctModp
+                        = findCorrectClone(rdOwnerp, info, visited);
+                    if (correctModp) {
+                        // Search correctModp for the matching type
+                        bool found = false;
+                        for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
+                            if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
+                                if (newDtp->name() == rdName
+                                    && newDtp->type() == rdType) {
+                                    UINFO(9, "finalizeIfaceCapture wrong-clone fixup: "
+                                              << modp->name()
+                                              << " refp=" << refp->name()
+                                              << " refDTypep " << rdOwnerp->name()
+                                              << " -> " << correctModp->name() << endl);
+                                    refp->refDTypep(newDtp);
+                                    ++wrongCloneFixed;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!found) {
+                            UINFO(4, "finalizeIfaceCapture wrong-clone WARNING: "
+                                      << modp->name()
+                                      << " refp=" << refp->name()
+                                      << " refDTypep name='" << rdName
+                                      << "' not found in correct module "
+                                      << correctModp->name() << endl);
+                        }
+                    } else {
+                        UINFO(4, "finalizeIfaceCapture wrong-clone WARNING: "
+                                  << modp->name()
+                                  << " refp=" << refp->name()
+                                  << " refDTypep owner=" << rdOwnerp->name()
+                                  << " no correct clone found in reachable set"
+                                  << endl);
+                    }
+                }
+            }
+        });
+    }
+
+    UINFO(4, "finalizeIfaceCapture: fixed " << wrongCloneFixed
+              << " wrong-live-clone pointers" << endl);
 
     // Assert: no REFDTYPE in any live module should have typedefp or refDTypep
     // pointing to a dead module. If this fires, V3Param's cloneRelinkGen() failed

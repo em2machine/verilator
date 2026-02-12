@@ -992,122 +992,155 @@ class ParamProcessor final {
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
-        // Record deferred fixups for REFDTYPEs in the cloned module whose
-        // typedefp/refDTypep still points to a template interface's node.
-        // Build a template→clone interface map from:
-        //   1. ifaceRefRefs (port-connected interfaces — the IFACEREFDTYPE was
-        //      already wired to the cloned interface above)
-        //   2. newModp's cells that already point to cloned interfaces
-        // Then for each REFDTYPE whose target owner is a template in the map,
-        // record a deferred fixup with the correct clone module.
-        // The actual pointer fixup happens in finalizeIfaceCapture() when all
-        // clones exist and have correct types.
-        {
-            // Helper: find template interface by origName
-            auto findTemplate = [](AstNodeModule* cloneModp) -> AstNodeModule* {
-                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
-                    if (AstIface* const ifp = VN_CAST(np, Iface)) {
-                        if (ifp != cloneModp && ifp->name() == cloneModp->origName()) {
-                            return ifp;
+        // Fix cross-module REFDTYPE pointers in newModp using cell hierarchy.
+        //
+        // After cloneTree, some REFDTYPEs in newModp may have typedefp/refDTypep
+        // pointing to a template module (dead) or a wrong sibling clone (live).
+        // This happens because clonep() is last-writer-wins: the second clone of
+        // an interface overwrites clonep() set by the first clone.
+        //
+        // The fix is structural: walk newModp's cell hierarchy (recursively, to
+        // arbitrary depth) to collect all modules reachable from this instance.
+        // Then for each REFDTYPE whose target owner is NOT in that reachable set,
+        // find the correct target by searching the reachable modules for a
+        // typedef/type with the same name and same node type.
+        //
+        // This is the same approach DepGraph uses — the cell hierarchy in the AST
+        // is the ground truth for which clone belongs to which instance.
+        UASSERT_OBJ(newModp, srcModp, "newModp null before hierarchy fixup");
+        if (V3LinkDotIfaceCapture::enabled()) {
+            // Collect all modules reachable via newModp's cell hierarchy.
+            // The insert-check in reachable.insert().second prevents infinite
+            // recursion from any cycles in the cell graph.
+            std::set<AstNodeModule*> reachable;
+            reachable.insert(newModp);
+            std::function<void(AstNodeModule*)> collectReachable;
+            collectReachable = [&](AstNodeModule* modp) {
+                for (AstNode* sp = modp->stmtsp(); sp; sp = sp->nextp()) {
+                    if (AstCell* const cellp = VN_CAST(sp, Cell)) {
+                        AstNodeModule* const cellModp = cellp->modp();
+                        if (cellModp && reachable.insert(cellModp).second) {
+                            collectReachable(cellModp);
                         }
                     }
                 }
-                return nullptr;
             };
-
-            std::map<AstNodeModule*, AstNodeModule*> templateToClone;
-
-            UINFO(9, "iface capture deferred: newModp=" << newModp->name()
-                      << " ifaceRefRefs.size=" << ifaceRefRefs.size() << endl);
-
-            // Source 1: ifaceRefRefs — port-connected interfaces
+            // Also include modules reachable via ifaceRefRefs (port connections)
             for (const auto& pair : ifaceRefRefs) {
-                const AstIfaceRefDType* const pinIrefp = pair.second;
-                AstIface* const cloneIfacep = pinIrefp->ifaceViaCellp();
-                UINFO(9, "iface capture deferred: ifaceRefRef pin=" << pinIrefp
-                          << " cloneIface=" << (cloneIfacep ? cloneIfacep->name() : "<null>")
-                          << " origName=" << (cloneIfacep ? cloneIfacep->origName() : "<null>")
-                          << endl);
-                if (!cloneIfacep) continue;
-                if (cloneIfacep->name().find("__") == string::npos) continue;
-                AstNodeModule* const tmplp = findTemplate(cloneIfacep);
-                UINFO(9, "iface capture deferred: findTemplate(" << cloneIfacep->name()
-                          << ") = " << (tmplp ? tmplp->name() : "<null>") << endl);
-                if (tmplp) templateToClone[tmplp] = cloneIfacep;
-
-                // Recurse: cloned interface may contain cells to other cloned interfaces
-                for (AstNode* sp = cloneIfacep->stmtsp(); sp; sp = sp->nextp()) {
-                    if (AstCell* const innerCellp = VN_CAST(sp, Cell)) {
-                        AstNodeModule* const innerModp = innerCellp->modp();
-                        if (!innerModp || !VN_IS(innerModp, Iface)) continue;
-                        if (innerModp->name().find("__") == string::npos) continue;
-                        AstNodeModule* const innerTmplp = findTemplate(innerModp);
-                        if (innerTmplp) templateToClone[innerTmplp] = innerModp;
-                    }
+                AstIface* const pinIfacep = pair.second->ifaceViaCellp();
+                if (pinIfacep && reachable.insert(pinIfacep).second) {
+                    collectReachable(pinIfacep);
                 }
             }
+            collectReachable(newModp);
 
-            // Source 2: newModp's direct cells that point to cloned interfaces
-            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                AstCell* const cellp = VN_CAST(stmtp, Cell);
-                if (!cellp) continue;
-                AstNodeModule* const cellModp = cellp->modp();
-                if (!cellModp || !VN_IS(cellModp, Iface)) continue;
-                if (cellModp->name().find("__") == string::npos) continue;
-                AstNodeModule* const tmplp = findTemplate(cellModp);
-                if (tmplp) templateToClone[tmplp] = cellModp;
-
-                // Recurse into sub-cells
-                for (AstNode* sp = cellModp->stmtsp(); sp; sp = sp->nextp()) {
-                    if (AstCell* const innerCellp = VN_CAST(sp, Cell)) {
-                        AstNodeModule* const innerModp = innerCellp->modp();
-                        if (!innerModp || !VN_IS(innerModp, Iface)) continue;
-                        if (innerModp->name().find("__") == string::npos) continue;
-                        AstNodeModule* const innerTmplp = findTemplate(innerModp);
-                        if (innerTmplp) templateToClone[innerTmplp] = innerModp;
-                    }
-                }
+            UINFO(9, "iface capture hierarchy fixup: newModp=" << newModp->name()
+                      << " reachable={");
+            for (AstNodeModule* const rModp : reachable) {
+                UINFO(9, " " << rModp->name());
             }
+            UINFO(9, " }" << endl);
 
-            // Record deferred fixups for REFDTYPEs whose targets are in template
-            // interfaces OR in wrong clones (via clonep() last-writer-wins).
-            // Build a reverse map: any clone of the same template → correct clone.
-            if (!templateToClone.empty()) {
-                // Build set of all clones of templates we know about, mapping
-                // each to the correct clone for this module instance.
-                // Also include templates themselves.
-                std::map<AstNodeModule*, AstNodeModule*> anyToCorrectClone;
-                for (const auto& kv : templateToClone) {
-                    // template → correct clone
-                    anyToCorrectClone[kv.first] = kv.second;
-                }
-                // Find all other clones of the same templates and map them too
-                for (AstNode* np = v3Global.rootp()->modulesp(); np; np = np->nextp()) {
-                    AstNodeModule* const modp = VN_CAST(np, NodeModule);
-                    if (!modp || modp->dead()) continue;
-                    if (modp->name().find("__") == string::npos) continue;
-                    // Check if this is a clone of one of our templates
-                    for (const auto& kv : templateToClone) {
-                        if (modp->origName() == kv.first->name()
-                            && modp != kv.second) {
-                            // This is a wrong clone — map it to the correct one
-                            anyToCorrectClone[modp] = kv.second;
-                            break;
+            // For each REFDTYPE in newModp, check if its target is reachable
+            newModp->foreach([&](AstRefDType* refp) {
+                // Fix typedefp pointing outside reachable set
+                if (refp->typedefp()) {
+                    AstNodeModule* const tdOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(refp->typedefp());
+                    if (tdOwnerp && tdOwnerp != newModp
+                        && !VN_IS(tdOwnerp, Package)
+                        && reachable.find(tdOwnerp) == reachable.end()) {
+                        const string& tdName = refp->typedefp()->name();
+                        // Use origName to disambiguate: replacement must be in a
+                        // module that is a clone of the same template as the wrong target.
+                        const string& wrongOrigName = tdOwnerp->origName().empty()
+                            ? tdOwnerp->name() : tdOwnerp->origName();
+                        bool found = false;
+                        for (AstNodeModule* const rModp : reachable) {
+                            if (rModp == newModp) continue;
+                            const string& rOrigName = rModp->origName().empty()
+                                ? rModp->name() : rModp->origName();
+                            if (rOrigName != wrongOrigName) continue;
+                            for (AstNode* sp = rModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstTypedef* const newTdp = VN_CAST(sp, Typedef)) {
+                                    if (newTdp->name() == tdName) {
+                                        UINFO(9, "iface capture hierarchy fixup: "
+                                                  << newModp->name()
+                                                  << " refp=" << refp->name()
+                                                  << " typedefp " << tdOwnerp->name()
+                                                  << " -> " << rModp->name() << endl);
+                                        refp->typedefp(newTdp);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (found) break;
+                        }
+                        if (!found) {
+                            UINFO(4, "iface capture hierarchy fixup WARNING: "
+                                      << newModp->name()
+                                      << " refp=" << refp->name()
+                                      << " typedefp owner=" << tdOwnerp->name()
+                                      << (tdOwnerp->dead() ? " (dead)" : " (live)")
+                                      << " name='" << tdName
+                                      << "' not found in reachable set"
+                                      << " (reachable.size=" << reachable.size() << ")"
+                                      << endl);
                         }
                     }
                 }
-
-                UINFO(9, "iface capture deferred: anyToCorrectClone has "
-                          << anyToCorrectClone.size() << " entries for "
-                          << newModp->name() << ":" << endl);
-                for (const auto& kv : anyToCorrectClone) {
-                    UINFO(9, "iface capture deferred:   " << kv.first->name()
-                              << " -> " << kv.second->name() << endl);
+                // Fix refDTypep pointing outside reachable set
+                if (refp->refDTypep()) {
+                    AstNodeModule* const rdOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(refp->refDTypep());
+                    if (rdOwnerp && rdOwnerp != newModp
+                        && !VN_IS(rdOwnerp, Package)
+                        && reachable.find(rdOwnerp) == reachable.end()) {
+                        // Match by name AND node type to avoid false matches
+                        // between TYPEDEF, PARAMTYPEDTYPE, etc.
+                        const string& rdName = refp->refDTypep()->name();
+                        const VNType rdType = refp->refDTypep()->type();
+                        // Use origName to disambiguate hierarchy levels
+                        const string& wrongOrigName = rdOwnerp->origName().empty()
+                            ? rdOwnerp->name() : rdOwnerp->origName();
+                        bool found = false;
+                        for (AstNodeModule* const rModp : reachable) {
+                            if (rModp == newModp) continue;
+                            const string& rOrigName = rModp->origName().empty()
+                                ? rModp->name() : rModp->origName();
+                            if (rOrigName != wrongOrigName) continue;
+                            for (AstNode* sp = rModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
+                                    if (newDtp->name() == rdName
+                                        && newDtp->type() == rdType) {
+                                        UINFO(9, "iface capture hierarchy fixup: "
+                                                  << newModp->name()
+                                                  << " refp=" << refp->name()
+                                                  << " refDTypep " << rdOwnerp->name()
+                                                  << " -> " << rModp->name() << endl);
+                                        refp->refDTypep(newDtp);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (found) break;
+                        }
+                        if (!found) {
+                            UINFO(4, "iface capture hierarchy fixup WARNING: "
+                                      << newModp->name()
+                                      << " refp=" << refp->name()
+                                      << " refDTypep owner=" << rdOwnerp->name()
+                                      << (rdOwnerp->dead() ? " (dead)" : " (live)")
+                                      << " name='" << rdName
+                                      << "' not found in reachable set"
+                                      << " (reachable.size=" << reachable.size() << ")"
+                                      << endl);
+                        }
+                    }
                 }
-
-                // Fixups are handled by the pendingClones list in IfaceCapture.
-                // When replaceTypedef is called, it updates ALL pending clones.
-            }
+            });
         }
         // Assign parameters to the constants specified
         // DOES clone() so must be finished with module clonep() before here
