@@ -214,6 +214,11 @@ public:
     static void registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp);
     static void registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp);
 
+    // Query resolved ATTROF value for a given AstAttrOf node.
+    // Returns the resolved constant value, or nullptr if not resolved.
+    // Used by V3Width to get DepGraph-computed $bits() values.
+    static AstConst* getResolvedAttrOf(const AstAttrOf* nodep);
+
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
     static int iterationCount() { return s_iterationCount; }

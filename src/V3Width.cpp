@@ -1896,6 +1896,19 @@ class WidthVisitor final : public VNVisitor {
                           << " skipRefp=" << dtypep->skipRefp()
                           << " skipRefp->width()=" << dtypep->skipRefp()->width()
                           << endl);
+                // Check if DepGraph has a pre-computed value for this $bits().
+                // This handles interface type parameters where the dtype still
+                // points to the unspecialized template but the DepGraph resolved
+                // the correct per-cell-context width.
+                if (AstConst* const resolvedp
+                    = V3LinkDotDepGraph::getResolvedAttrOf(nodep)) {
+                    UINFO(5, "DEPGRAPH: V3Width using resolved $bits value="
+                              << resolvedp->num().toUInt() << endl);
+                    AstConst* const newp = resolvedp->cloneTree(false);
+                    nodep->replaceWith(newp);
+                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
+                    break;
+                }
             }
             if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
                 switch (nodep->attrType()) {

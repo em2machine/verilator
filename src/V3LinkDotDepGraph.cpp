@@ -2987,18 +2987,11 @@ private:
             UINFO(5, "DEPGRAPH: ATTROF '" << nodep->attrType().ascii()
                       << "' depends on REFDTYPE '" << rdp->name()
                       << "' in " << m_modp->name() << endl);
-
-            // Also add edge from REFDTYPE to PARAMTYPEDTYPE if applicable
-            if (AstParamTypeDType* const ptdp = VN_CAST(rdp->refDTypep(), ParamTypeDType)) {
-                AstNodeModule* ptdOwnerp = V3LinkDotDepGraph::findOwnerModule(ptdp);
-                if (!ptdOwnerp) ptdOwnerp = rdpOwnerp;
-                V3LinkDotDepGraph::DepNode* const ptdNodep = V3LinkDotDepGraph::findOrCreateNode(
-                    ptdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, ptdOwnerp, m_cellPath);
-                V3LinkDotDepGraph::addEdge(rdpNodep, ptdNodep);
-                UINFO(5, "DEPGRAPH: REFDTYPE '" << rdp->name()
-                          << "' depends on PARAMTYPEDTYPE '" << ptdp->name()
-                          << "' in " << m_modp->name() << endl);
-            }
+            // Do NOT add REFDTYPE->PARAMTYPEDTYPE edge here.  The REFDTYPE's
+            // own visit() creates the correct instance-specific edge with
+            // proper cellPath resolution.  Adding it here with m_cellPath
+            // (which is the ATTROF owner's path, not the interface instance
+            // path) creates a spurious template node with empty cellPath.
         } else if (AstVarRef* const vrp = VN_CAST(nodep->fromp(), VarRef)) {
             // $bits(var) - follow through to the variable's dtype
             if (AstVar* const varp = vrp->varp()) {
@@ -4143,6 +4136,25 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
     // NOTE: Do NOT modify varp->dtypep()->widthForce() here - V3Width handles this
 }
 
+// NOTE: We intentionally do NOT replace AstAttrOf nodes in finalizeAST.
+// The AstAttrOf's fromp() child (AstRefDType) may be referenced by the
+// IfaceCapture ledger.  Deleting the tree would leave dangling pointers.
+// Instead, V3Width calls getResolvedAttrOf() to get the pre-computed value.
+
+AstConst* V3LinkDotDepGraph::getResolvedAttrOf(const AstAttrOf* nodep) {
+    if (!s_enabled || !nodep) return nullptr;
+    // Search all DepNodes for an ATTROF node matching this AstAttrOf pointer.
+    // ATTROF nodes have unique AstAttrOf* pointers (one per $bits() expression).
+    for (const DepNode* dnp : s_allNodes) {
+        if (!dnp) continue;
+        if (dnp->nodeType != NodeType::ATTROF) continue;
+        if (dnp->nodep != nodep) continue;
+        if (!dnp->resolved) return nullptr;
+        return VN_CAST(dnp->resolvedValuep, Const);
+    }
+    return nullptr;
+}
+
 void V3LinkDotDepGraph::finalizeAST() {
     if (!s_enabled) return;
 
@@ -4217,7 +4229,9 @@ void V3LinkDotDepGraph::finalizeAST() {
             // Struct/union widths - don't modify AST here, V3Width handles this
             break;
         case NodeType::ATTROF:
-            // ATTROF ($bits) - don't modify AST here, V3Width handles this
+            // ATTROF ($bits) - do NOT replace here; the fromp child may be
+            // referenced by the IfaceCapture ledger.  The resolved value is
+            // available via getResolvedAttrOf() for V3Width to query.
             break;
         case NodeType::FUNC:
             // FUNC nodes - no AST finalization needed
