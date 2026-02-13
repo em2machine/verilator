@@ -728,212 +728,102 @@ class ParamProcessor final {
                               << endl);
 
                     // When cloning the interface that owns the typedef (matched via
-                    // typedefOwnerModName), only process entries whose cellPath's
-                    // last component matches the cell that triggered this clone.
-                    // The last component of a hierarchical path like "wif.a_inst"
-                    // is "a_inst" — the direct interface cell name.  This correctly
-                    // handles arbitrary nesting depth.
+                    // typedefOwnerModName), disambiguate using the FULL cellPath.
+                    // Walk cellPath-minus-last-component from entry.ownerModp and
+                    // verify it resolves to m_modp (the parent module containing
+                    // the cell being cloned).  This prevents the same entry from
+                    // being processed by multiple clones of the same template.
                     if (cloneCellp && entry.ownerModp != srcModp
                         && entry.typedefOwnerModName == srcModp->name()) {
                         UASSERT_OBJ(!entry.cellPath.empty(), entry.refp,
                                     "cellPath is empty in entry matched via typedefOwnerModName");
-                        const string lastComp
-                            = V3LinkDotIfaceCapture::lastPathComponent(entry.cellPath);
+                        // Split cellPath into parent portion and last component
+                        const string& cp = entry.cellPath;
+                        const size_t lastDot = cp.rfind('.');
+                        const string parentPath = (lastDot == string::npos) ? "" : cp.substr(0, lastDot);
+                        const string lastComp = (lastDot == string::npos) ? cp : cp.substr(lastDot + 1);
+                        // Last component must match the cell name being cloned
                         if (lastComp != cloneCellp->name()) {
-                            UINFO(9, "iface capture skipping: cellPath='" << entry.cellPath
+                            UINFO(9, "iface capture skipping (lastComp mismatch): cellPath='"
+                                      << cp << "' cloneCellPath='" << entry.cloneCellPath
                                       << "' lastComp='" << lastComp
                                       << "' != cloneCellp='" << cloneCellp->name() << "'" << endl);
                             return;
                         }
-                    }
-
-                    // Entries must have exactly one of typedefp or paramTypep
-                    UASSERT_OBJ(!entry.typedefp || !entry.paramTypep, entry.refp,
-                                "entry has BOTH typedefp='" << entry.typedefp->name()
-                                << "' AND paramTypep='" << entry.paramTypep->name() << "'");
-
-                    // Handle TYPEDEF references
-                    if (AstTypedef* const origTypedefp = entry.typedefp) {
-                        AstTypedef* targetTypedefp = nullptr;
-                        const string& typedefName = origTypedefp->name();
-
-                        // Search ifaceRefRefs (port connections)
-                        for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
-                            const AstIfaceRefDType* const portIrefp = it->first;
-                            AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
-                            if (!pinIfacep) continue;
-
-                            if (entry.ifacePortVarp) {
-                                AstNodeDType* const portDTypep = entry.ifacePortVarp->subDTypep();
-                                AstIfaceRefDType* entryPortIrefp = VN_CAST(portDTypep, IfaceRefDType);
-                                if (!entryPortIrefp && arraySubDTypep(portDTypep)) {
-                                    entryPortIrefp
-                                        = VN_CAST(arraySubDTypep(portDTypep), IfaceRefDType);
+                        // If there's a parent portion, walk it from ownerModp
+                        // and verify it resolves to m_modp
+                        if (!parentPath.empty()) {
+                            AstNodeModule* resolvedParentp = entry.ownerModp;
+                            string remaining = parentPath;
+                            while (!remaining.empty() && resolvedParentp) {
+                                string comp;
+                                const size_t dot = remaining.find('.');
+                                if (dot == string::npos) {
+                                    comp = remaining;
+                                    remaining.clear();
+                                } else {
+                                    comp = remaining.substr(0, dot);
+                                    remaining = remaining.substr(dot + 1);
                                 }
-                                if (entryPortIrefp != portIrefp) continue;
-                            }
-
-                            for (AstNode* stmtp = pinIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                                    if (tdp->name() == typedefName) {
-                                        targetTypedefp = tdp;
-                                        break;
+                                AstNodeModule* nextModp = nullptr;
+                                for (AstNode* sp = resolvedParentp->stmtsp(); sp;
+                                     sp = sp->nextp()) {
+                                    // Check cells (e.g. "tlb_io" cell)
+                                    if (AstCell* const cp2 = VN_CAST(sp, Cell)) {
+                                        if (cp2->name() == comp && cp2->modp()) {
+                                            nextModp = cp2->modp();
+                                            break;
+                                        }
+                                    }
+                                    // Check interface port variables (e.g. "cca_io" port)
+                                    if (AstVar* const vp = VN_CAST(sp, Var)) {
+                                        if (vp->name() == comp && vp->isIfaceRef()) {
+                                            AstIfaceRefDType* const irefp
+                                                = VN_CAST(vp->subDTypep(), IfaceRefDType);
+                                            if (irefp && irefp->ifaceViaCellp()) {
+                                                nextModp = irefp->ifaceViaCellp();
+                                                break;
+                                            }
+                                        }
                                     }
                                 }
+                                resolvedParentp = nextModp;
                             }
-                            if (targetTypedefp) break;
-                        }
-
-                        UINFO(9, "iface capture after ifaceRefRefs search: targetTypedefp="
-                                  << (targetTypedefp ? targetTypedefp->name() : "<null>")
-                                  << " for typedef '" << typedefName << "'" << endl);
-
-                        // If we're cloning the interface that owns the typedef,
-                        // the typedef is in newModp itself.
-                        if (!targetTypedefp && newModp != srcModp
-                            && entry.typedefOwnerModName == srcModp->name()) {
-                            for (AstNode* stmtp = newModp->stmtsp(); stmtp;
-                                 stmtp = stmtp->nextp()) {
-                                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                                    if (tdp->name() == typedefName) {
-                                        targetTypedefp = tdp;
-                                        UINFO(9, "iface capture found typedef '"
-                                                  << typedefName << "' in newModp "
-                                                  << newModp->name() << endl);
-                                        break;
-                                    }
-                                }
+                            // Path must resolve — null means broken cellPath
+                            UASSERT_OBJ(resolvedParentp, entry.refp,
+                                        "cellPath parent walk failed: cellPath='"
+                                        << cp << "' parentPath='" << parentPath
+                                        << "' owner=" << entry.ownerModp->name()
+                                        << " — path component not found");
+                            if (resolvedParentp != m_modp) {
+                                UINFO(9, "iface capture skipping (parent mismatch): cellPath='"
+                                          << cp << "' cloneCellPath='" << entry.cloneCellPath
+                                          << "' parentPath='" << parentPath
+                                          << "' resolved to " << resolvedParentp->name()
+                                          << " but m_modp=" << m_modp->name() << endl);
+                                return;
                             }
                         }
-
-                        // Last resort: clonep() (one-shot, may be null)
-                        if (!targetTypedefp) {
-                            targetTypedefp = origTypedefp->clonep();
-                            UINFO(9, "iface capture fallback to clonep(): "
-                                      << (targetTypedefp ? targetTypedefp->name() : "<null>")
-                                      << endl);
-                        }
-
-                        if (!targetTypedefp) {
-                            UINFO(1, "iface capture WARNING: all typedef search paths"
-                                      " failed for '" << typedefName
-                                      << "' ref='" << entry.refp->name()
-                                      << "' cellName='" << entry.cellPath
-                                      << "' srcModp=" << srcModp->name()
-                                      << " newModp=" << newModp->name()
-                                      << " — typedef will NOT be rebound" << endl);
-                        }
-
-                        UINFO(9, "iface capture FINAL targetTypedefp="
-                                  << (targetTypedefp ? targetTypedefp->name() : "<null>")
-                                  << " for refp=" << entry.refp->name()
-                                  << " cellName='" << entry.cellPath << "'"
-                                  << " in srcModp=" << srcModp->name()
-                                  << " -> newModp=" << newModp->name() << endl);
-
-                        if (targetTypedefp) {
-                            V3LinkDotIfaceCapture::replaceTypedef(entry.refp, entry.cellPath,
-                                                                  targetTypedefp);
-                        }
-                    }
-                    // Handle PARAMTYPEDTYPE references
-                    else if (AstParamTypeDType* const origParamTypep = entry.paramTypep) {
-                        AstParamTypeDType* targetParamTypep = nullptr;
-                        const string& paramTypeName = origParamTypep->name();
-
-                        // First try ifaceRefRefs (for port connections)
-                        for (auto it = ifaceRefRefs.cbegin(); it != ifaceRefRefs.cend(); ++it) {
-                            const AstIfaceRefDType* const portIrefp = it->first;
-                            AstNodeModule* const pinIfacep = it->second->ifaceViaCellp();
-                            if (!pinIfacep) continue;
-
-                            if (entry.ifacePortVarp) {
-                                AstNodeDType* const portDTypep = entry.ifacePortVarp->subDTypep();
-                                AstIfaceRefDType* entryPortIrefp = VN_CAST(portDTypep, IfaceRefDType);
-                                if (!entryPortIrefp && arraySubDTypep(portDTypep)) {
-                                    entryPortIrefp
-                                        = VN_CAST(arraySubDTypep(portDTypep), IfaceRefDType);
-                                }
-                                if (entryPortIrefp != portIrefp) continue;
-                            }
-
-                            for (AstNode* stmtp = pinIfacep->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                                if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
-                                    if (ptdp->name() == paramTypeName) {
-                                        targetParamTypep = ptdp;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (targetParamTypep) break;
-                        }
-
-                        // If the PARAMTYPEDTYPE is in the interface being cloned,
-                        // search newModp directly
-                        if (!targetParamTypep
-                            && entry.typedefOwnerModName == srcModp->name()) {
-                            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                                if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
-                                    if (ptdp->name() == paramTypeName) {
-                                        targetParamTypep = ptdp;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check if PARAMTYPEDTYPE is a statement of srcModp
-                        bool paramTypeIsSrcModStmt = false;
-                        for (AstNode* stmtp = srcModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                            if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
-                                if (ptdp->name() == paramTypeName) {
-                                    paramTypeIsSrcModStmt = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Skip replaceParamType if PIN processing will assign its type
-                        bool hasPin = false;
-                        if (paramTypeIsSrcModStmt
-                            && entry.typedefOwnerModName == srcModp->name()
-                            && cloneCellp) {
-                            for (AstPin* pinp = cloneCellp->paramsp(); pinp;
-                                 pinp = VN_AS(pinp->nextp(), Pin)) {
-                                if (pinp->modPTypep()
-                                    && pinp->modPTypep()->name() == paramTypeName) {
-                                    hasPin = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (paramTypeIsSrcModStmt
-                            && entry.typedefOwnerModName == srcModp->name()
-                            && hasPin) {
-                            return;  // Skip - PIN processing will assign its type
-                        }
-
-                        // Last resort: clonep()
-                        if (!targetParamTypep) targetParamTypep = origParamTypep->clonep();
-
-                        if (targetParamTypep) {
-                            V3LinkDotIfaceCapture::replaceParamType(entry.refp, entry.cellPath,
-                                                                    targetParamTypep);
-                        }
+                        UINFO(9, "iface capture matched: cellPath='" << cp
+                                  << "' cloneCellPath='" << entry.cloneCellPath
+                                  << "' parentPath='" << parentPath
+                                  << "' -> m_modp=" << m_modp->name() << endl);
                     }
 
-                    if (!entry.typedefp && !entry.paramTypep) {
-                        UINFO(1, "iface capture WARNING: entry has neither typedefp nor paramTypep"
-                                  " refp='" << entry.refp->name()
-                                  << "' cellPath='" << entry.cellPath
-                                  << "' ownerModp=" << (entry.ownerModp ? entry.ownerModp->name() : "<null>")
-                                  << " — no rebinding action taken" << endl);
-                    }
-
-                    // Propagate to cloned RefDType in new module
+                    // Phase 2: register clone entry in the IfaceCapture ledger.
+                    // Ledger-only — no target lookup or AST mutation here.
+                    // Cell pointers in newModp are still stale (pointing to
+                    // template interfaces).  Target resolution happens later
+                    // in finalizeIfaceCapture (Phase 3) after all clones are
+                    // wired up.  See V3LinkDotIfaceCapture.h ARCHITECTURE.
                     if (AstRefDType* const clonedRefp = entry.refp->clonep()) {
-                        V3LinkDotIfaceCapture::propagateClone(entry.refp, clonedRefp,
-                                                              entry.cellPath);
+                        const string cloneCP
+                            = cloneCellp ? cloneCellp->name() : string{};
+                        const V3LinkDotIfaceCapture::TemplateKey tkey{
+                            entry.ownerModp ? entry.ownerModp->name() : "",
+                            entry.refp->name(), entry.cellPath};
+                        V3LinkDotIfaceCapture::propagateClone(
+                            tkey, clonedRefp, cloneCP);
                     }
                 });
         }

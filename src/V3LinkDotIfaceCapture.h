@@ -1,10 +1,41 @@
 // -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
 // DESCRIPTION: Interface typedef capture helper.
-//   Keyed by (templateRefp, cellPath) so each clone gets its own entry.
-//   No pointer-chasing disambiguation — cellPath strings are stable,
-//   hierarchical, and exact.  V3Param clones create new entries;
-//   replaceTypedef is a direct lookup.
+//
+// ARCHITECTURE — Separation of Concerns (do not change without reading):
+//
+//   The IfaceCapture system has three phases with strict responsibilities:
+//
+//   1. CAPTURE (V3LinkDot, primary pass):
+//      add() / addParamType() / addTypedef() record template entries.
+//      Template entries store the REFDTYPE, its cellPath, and the
+//      original paramTypep / typedefp from the template module.
+//      Template entries have cloneCellPath = "".
+//
+//   2. CLONE REGISTRATION (V3Param, deepCloneModule):
+//      propagateClone() creates clone entries in the ledger.
+//      ** LEDGER-ONLY — no target lookup, no AST mutation. **
+//      At this point the cloned module's cells still reference template
+//      interface modules (cell->modp() is stale).  Any attempt to walk
+//      cellPath here finds the wrong module.  Clone entries store the
+//      cloned REFDTYPE and cloneCellPath but clear paramTypep/typedefp
+//      so that stale template pointers are never carried forward.
+//
+//   3. TARGET RESOLUTION (finalizeIfaceCapture, after V3Param):
+//      Runs after all cloning is complete and cell pointers are wired
+//      to the correct interface clones.  For each entry, walks cellPath
+//      starting from the entry's owner module (using findOwnerModule(refp)
+//      for clone entries) to find the correct target module, then locates
+//      the PARAMTYPEDTYPE / TYPEDEF by name and applies it to the REFDTYPE.
+//      ** This is the ONLY place that resolves targets and mutates AST. **
+//
+//   KEY INVARIANT: The path {ownerModName, refName, cellPath, cloneCellPath}
+//   is the sole identity.  No clonep(), no pointer matching.  The path IS
+//   the disambiguation.
+//
+//   Template entries have cloneCellPath = ""; clone entries get it set by
+//   propagateClone.  TemplateKey (ownerModName, refName, cellPath) matches
+//   all entries regardless of cloneCellPath — used for propagation and debug.
 //
 // Code available from: https://verilator.org
 //
@@ -35,31 +66,59 @@ class V3LinkDotIfaceCapture final {
 public:
     enum class CaptureType { IFACE, CLASS };
 
-    // Composite map key: (template RefDType pointer, hierarchical cell path).
-    // Each clone of the same template RefDType gets its own entry because
-    // the cloned RefDType pointer differs.  The cellPath disambiguates
-    // entries that reference through different interface instances.
-    // cellPath is the dot-separated path from the owning module to the
-    // interface cell, e.g. "a_inst", "wif.a_inst", "outer.mid.inner".
+    // Path-based map key: no pointers, only stable strings.
+    // {ownerModName, refName, cellPath, cloneCellPath} uniquely identifies
+    // every captured REFDTYPE.  You cannot have two typedefs with the same
+    // name in the same module, so this tuple is unique.
     struct CaptureKey final {
-        const AstRefDType* templateRefp = nullptr;
-        string cellPath;  // Hierarchical, e.g. "wif.a_inst" — stable, never mutated
+        string ownerModName;   // Module containing the REFDTYPE (e.g. "cca_xbar")
+        string refName;        // REFDTYPE name (e.g. "r_chan_t")
+        string cellPath;       // Template path (e.g. "cca_io.tlb_io")
+        string cloneCellPath;  // Instance path (e.g. "xbar1"), empty for template
         bool operator==(const CaptureKey& o) const {
-            return templateRefp == o.templateRefp && cellPath == o.cellPath;
+            return ownerModName == o.ownerModName && refName == o.refName
+                   && cellPath == o.cellPath && cloneCellPath == o.cloneCellPath;
         }
     };
     struct CaptureKeyHash final {
         size_t operator()(const CaptureKey& k) const {
-            size_t h = std::hash<const void*>{}(k.templateRefp);
+            size_t h = std::hash<string>{}(k.ownerModName);
+            h ^= std::hash<string>{}(k.refName) + 0x9e3779b9 + (h << 6) + (h >> 2);
             h ^= std::hash<string>{}(k.cellPath) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<string>{}(k.cloneCellPath) + 0x9e3779b9 + (h << 6) + (h >> 2);
             return h;
         }
     };
 
+    // Template key: matches ALL entries regardless of cloneCellPath.
+    // Used for propagateClone and debug searches.
+    struct TemplateKey final {
+        string ownerModName;
+        string refName;
+        string cellPath;
+        bool operator==(const TemplateKey& o) const {
+            return ownerModName == o.ownerModName && refName == o.refName
+                   && cellPath == o.cellPath;
+        }
+    };
+    struct TemplateKeyHash final {
+        size_t operator()(const TemplateKey& k) const {
+            size_t h = std::hash<string>{}(k.ownerModName);
+            h ^= std::hash<string>{}(k.refName) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<string>{}(k.cellPath) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+    static TemplateKey templateKeyOf(const CaptureKey& k) {
+        return {k.ownerModName, k.refName, k.cellPath};
+    }
+
     struct CapturedEntry final {
         CaptureType captureType = CaptureType::IFACE;
         AstRefDType* refp = nullptr;
-        string cellPath;  // Hierarchical path (e.g. "wif.a_inst") — immutable key component
+        string cellPath;  // Template path (e.g. "cca_io.tlb_io") — immutable key component
+        string cloneCellPath;  // Instance-specific path (e.g. "cca_io1.tlb_io") — set by
+                               // propagateClone when V3Param clones; empty for original entries
         AstClass* origClassp = nullptr;  // For CLASS captures
         // Module where the RefDType lives
         AstNodeModule* ownerModp = nullptr;
@@ -128,22 +187,33 @@ public:
                              AstParamTypeDType* paramTypep,
                              const string& paramTypeOwnerModName,
                              AstVar* ifacePortVarp);
-    static const CapturedEntry* find(const AstRefDType* refp, const string& cellPath);
-    // Search all entries for a given refp regardless of cellPath (for resolve-pass checks)
-    static const CapturedEntry* findAny(const AstRefDType* refp);
-    static bool eraseAll(const AstRefDType* refp);
+    // Exact lookup by full key
+    static const CapturedEntry* find(const CaptureKey& key);
+    // Lookup by template key (returns first match, for compat)
+    static const CapturedEntry* findByTemplate(const TemplateKey& tkey);
+    // Iterate all entries matching a template key (all clones + template)
+    static void forEachAtPath(const TemplateKey& tkey,
+                              const std::function<void(CapturedEntry&)>& fn);
+    static bool erase(const CaptureKey& key);
+    // Erase all entries matching a template key
+    static bool eraseByTemplate(const TemplateKey& tkey);
     static void forEach(const std::function<void(const CapturedEntry&)>& fn);
     static void forEachOwned(const AstNodeModule* ownerModp,
                              const std::function<void(const CapturedEntry&)>& fn);
-    static bool replaceRef(const AstRefDType* oldRefp, AstRefDType* newRefp,
-                           const string& cellPath);
-    static bool replaceTypedef(const AstRefDType* refp, const string& cellPath,
-                               AstTypedef* newTypedefp);
-    static bool erase(const AstRefDType* refp, const string& cellPath);
+    static bool replaceRef(const CaptureKey& oldKey, AstRefDType* newRefp);
     static std::size_t size() { return s_map.size(); }
-    // Create a new entry for a cloned RefDType, inheriting cellPath from the original
-    static void propagateClone(const AstRefDType* origRefp, AstRefDType* newRefp,
-                               const string& cellPath);
+
+    // Walk a dot-separated cell path (e.g. "cca_io.tlb_io") starting from
+    // startModp, returning the module at the end of the path.  Returns
+    // nullptr if any component cannot be resolved.
+    static AstNodeModule* followCellPath(AstNodeModule* startModp,
+                                         const string& cellPath);
+
+    // Create a new clone entry in the ledger, inheriting from the template.
+    // Ledger-only: no target lookup or AST mutation.  Target resolution
+    // happens later in finalizeIfaceCapture where cell pointers are wired up.
+    static void propagateClone(const TemplateKey& tkey, AstRefDType* newRefp,
+                               const string& cloneCellPath);
 
     static void
     captureTypedefContext(AstRefDType* refp, const char* stageLabel, int dotPos, bool dotIsFinal,
@@ -159,9 +229,6 @@ public:
         const AstNodeModule* ownerModp,
         const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
-
-    static bool replaceParamType(const AstRefDType* refp, const string& cellPath,
-                                 AstParamTypeDType* newParamTypep);
 
     // Debug: dump all captured entries
     static void dumpEntries(const string& label);
