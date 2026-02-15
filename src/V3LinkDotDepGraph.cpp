@@ -3213,29 +3213,40 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
 static void sanitizeClonedDType(AstNodeDType* cloneDTypep) {
     if (!cloneDTypep) return;
 
-    // Walk all nodes in the cloned tree
+    // Walk all nodes in the cloned tree and clear cross-links to the original AST.
+    // For ALL dtype nodes: clear virtRefDTypep so V3Width uses childDTypep
+    // (the cloned child) instead of refDTypep (which points to the original AST).
+    // For RefDType specifically: also clear typedefp and classOrPackagep.
     cloneDTypep->foreach([](AstNode* nodep) {
-        // Clear RefDType cross-links
         if (AstRefDType* const rdp = VN_CAST(nodep, RefDType)) {
-            // Clear typedefp - it points to template typedef
             if (rdp->typedefp()) {
                 UINFO(9, "DEPGRAPH: sanitize clearing typedefp on RefDType '"
                           << rdp->name() << "'" << endl);
                 rdp->typedefp(nullptr);
             }
-            // Clear classOrPackagep - it points to template module/package
             if (rdp->classOrPackagep()) {
                 UINFO(9, "DEPGRAPH: sanitize clearing classOrPackagep on RefDType '"
                           << rdp->name() << "'" << endl);
                 rdp->classOrPackagep(nullptr);
             }
-            // Clear refDTypep - it points to template tree nodes (ParamTypeDType, etc.)
-            // ParamSubstVisitor will set it to our resolved type later
             if (rdp->refDTypep()) {
                 UINFO(9, "DEPGRAPH: sanitize clearing refDTypep on RefDType '"
                           << rdp->name() << "' was pointing to "
                           << rdp->refDTypep()->prettyTypeName() << endl);
                 rdp->refDTypep(nullptr);
+            }
+            return;
+        }
+        // For all other dtype nodes: clear virtRefDTypep if set.
+        // After cloneTree, refDTypep cross-references point to the original AST.
+        // V3Width would follow these and corrupt the original by setting refDTypep
+        // on nodes that still have childDTypep (violating the XOR invariant).
+        // Clearing forces V3Width to use childDTypep (the cloned child) instead.
+        if (AstNodeDType* const dtp = VN_CAST(nodep, NodeDType)) {
+            if (dtp->virtRefDTypep()) {
+                UINFO(9, "DEPGRAPH: sanitize clearing virtRefDTypep on "
+                          << dtp->prettyTypeName() << " '" << dtp->name() << "'" << endl);
+                dtp->virtRefDTypep(nullptr);
             }
         }
     });
@@ -3542,33 +3553,13 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
 
     // 4. Call V3Width and V3Const to evaluate the parameterized expressions
     // This computes widths and folds constants
-
-    // Debug: Check original struct before V3Width
-    if (AstStructDType* const origSdtp = VN_CAST(dtypep, StructDType)) {
-        for (AstMemberDType* memp = origSdtp->membersp(); memp;
-             memp = VN_AS(memp->nextp(), MemberDType)) {
-            UINFO(0, "DEPGRAPH: BEFORE V3Width orig member '" << memp->name()
-                      << "' subDTypep=" << (memp->subDTypep() ? memp->subDTypep()->prettyTypeName() : "<null>")
-                      << " ptr=" << cvtToHex(memp->subDTypep()) << endl);
-        }
-    }
-
     V3Width::widthParamsEdit(cloneDTypep);
 
-    // 3. Sanitize AGAIN after V3Width - V3Width may have set refDTypep to template nodes
+    // Sanitize AGAIN after V3Width - V3Width may have set refDTypep to template nodes
     // This is critical because V3Width follows type chains and may set refDTypep
     // to BasicDType nodes that exist in the template tree
     sanitizeClonedDType(cloneDTypep);
 
-    // Debug: Check original struct after V3Width
-    if (AstStructDType* const origSdtp = VN_CAST(dtypep, StructDType)) {
-        for (AstMemberDType* memp = origSdtp->membersp(); memp;
-             memp = VN_AS(memp->nextp(), MemberDType)) {
-            UINFO(0, "DEPGRAPH: AFTER V3Width orig member '" << memp->name()
-                      << "' subDTypep=" << (memp->subDTypep() ? memp->subDTypep()->prettyTypeName() : "<null>")
-                      << " ptr=" << cvtToHex(memp->subDTypep()) << endl);
-        }
-    }
     UINFO(5, "DEPGRAPH: " << debugName << " after V3Width, cloneDTypep="
               << cloneDTypep->prettyTypeName() << " width=" << cloneDTypep->width() << endl);
     V3Const::constifyParamsEdit(cloneDTypep);

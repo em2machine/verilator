@@ -2157,6 +2157,12 @@ class WidthVisitor final : public VNVisitor {
 
     // DTYPES
     void visit(AstNodeArrayDType* nodep) override {
+        // During DepGraph execution, V3Width processes cloned expressions that
+        // cross-reference original AST dtype nodes. Setting refDTypep here while
+        // childDTypep is still present (isExecuting guard prevents the child
+        // unlink/move to type table) would violate the XOR invariant. Skip the
+        // visit entirely; V3Param's later V3Width pass will process it normally.
+        if (V3LinkDotDepGraph::isExecuting() && !nodep->didWidth()) return;
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
 
         if (nodep->subDTypep() == nodep->basicp()) {  // Innermost dimension
@@ -8920,6 +8926,16 @@ class WidthVisitor final : public VNVisitor {
             }
         }
         if (!dtnodep->didWidth()) {
+            // During DepGraph execution, cloned trees have cross-references
+            // (via varp(), dtypep(), refDTypep()) to original AST dtype nodes.
+            // Iterating into these would trigger visit methods that set refDTypep
+            // (the childDTypep→refDTypep normalization), corrupting the original.
+            // Skip iteration — DepGraph computes widths via its own resolution.
+            if (V3LinkDotDepGraph::isExecuting()) {
+                UINFO(9, "iterateEditMoveDTypep skipping unwidthed cross-ref during "
+                          "DepGraph execution: " << dtnodep << endl);
+                return dtnodep;
+            }
             UINFO(9, "iterateEditMoveDTypep pointer iterating " << dtnodep);
             // See notes in visit(AstBracketArrayDType*)
             UASSERT_OBJ(!VN_IS(dtnodep, BracketArrayDType), parentp,
