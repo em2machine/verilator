@@ -1914,6 +1914,25 @@ private:
         iterateChildrenConst(nodep);
     }
 
+    void visit(AstGenBlock* nodep) override {
+        // Named generate blocks are part of the instance hierarchy.
+        // V3Param includes them via m_generateHierName (V3Param.cpp:2718-2719).
+        // We must include them in cellPaths to match.
+        if (!nodep->name().empty()) {
+            VL_RESTORER(m_cellPath);
+            if (m_cellPath.empty()) {
+                m_cellPath = m_modp->name() + "." + nodep->prettyName();
+            } else {
+                m_cellPath = m_cellPath + "." + nodep->prettyName();
+            }
+            UINFO(9, "DEPGRAPH: CellAssocDiscovery entering generate block '"
+                      << nodep->prettyName() << "' cellPath='" << m_cellPath << "'" << endl);
+            iterateChildrenConst(nodep);
+        } else {
+            iterateChildrenConst(nodep);
+        }
+    }
+
     void visit(AstNode* nodep) override { iterateChildrenConst(nodep); }
 
 public:
@@ -2463,6 +2482,25 @@ private:
         }
 
         iterateChildrenConst(nodep);
+    }
+
+    void visit(AstGenBlock* nodep) override {
+        // Named generate blocks are part of the instance hierarchy.
+        // V3Param includes them via m_generateHierName (V3Param.cpp:2718-2719).
+        // We must include them in cellPaths to match.
+        if (!nodep->name().empty()) {
+            VL_RESTORER(m_cellPath);
+            if (m_cellPath.empty()) {
+                m_cellPath = m_modp->name() + "." + nodep->prettyName();
+            } else {
+                m_cellPath = m_cellPath + "." + nodep->prettyName();
+            }
+            UINFO(9, "DEPGRAPH: entering generate block '"
+                      << nodep->prettyName() << "' cellPath='" << m_cellPath << "'" << endl);
+            iterateChildrenConst(nodep);
+        } else {
+            iterateChildrenConst(nodep);
+        }
     }
 
     void visit(AstRefDType* nodep) override {
