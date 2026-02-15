@@ -433,6 +433,16 @@ void V3LinkDotIfaceCapture::captureTypedefContext(
         return;
     }
 
+    // Do NOT promote value parameters (LPARAM/GPARAM) to PARAMTYPEDTYPE.
+    // A value param like 'localparam cb::cfg_t cb_cfg = '{XdatSize:$bits(cmd_beat_t)}'
+    // merely references an interface typedef in its value expression — it is NOT
+    // itself a type alias and must not be converted to a type parameter.
+    if (enclosingVarp->isParam()) {
+        UINFO(9, indentFn() << "iface capture skipping value param promotion name="
+                            << enclosingVarp->prettyName());
+        return;
+    }
+
     if (promoteVarCb && promoteVarCb(enclosingVarp, refp)) return;
     UINFO(9, indentFn() << "iface capture failed to convert owner var name="
                         << enclosingVarp->prettyName());
@@ -618,31 +628,12 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     // Helper: fix a single REFDTYPE's pointers if they point to dead modules.
     // containingModp is the live module that contains this REFDTYPE — used to
     // walk the cell hierarchy for context-aware clone resolution.
+    // Fix typedefp FIRST, then refDTypep — this allows refDTypep to be derived
+    // from the fixed typedef's subDTypep() when the name-based search fails
+    // (e.g. for BASICDTYPE nodes that aren't top-level module statements).
     auto fixDeadRefs = [&](AstRefDType* refp, AstNodeModule* containingModp,
                            const char* location) -> int {
         int fixed = 0;
-
-        // Fix refDTypep pointing to dead module
-        if (refp->refDTypep()) {
-            AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
-            if (targetModp && targetModp->dead()) {
-                AstNodeModule* cloneModp = nullptr;
-                if (containingModp) {
-                    cloneModp = findCloneViaHierarchy(containingModp, targetModp, 0);
-                }
-                if (cloneModp) {
-                    const string& targetName = refp->refDTypep()->prettyName();
-                    if (AstNode* const newp = findInModule(cloneModp, targetName, false)) {
-                        UINFO(9, "iface capture finalizeCapture (" << location
-                                  << "): fixing refDTypep refp=" << refp
-                                  << " dead=" << targetModp->name()
-                                  << " -> " << cloneModp->name() << endl);
-                        refp->refDTypep(VN_AS(newp, NodeDType));
-                        ++fixed;
-                    }
-                }
-            }
-        }
 
         // Fix typedefp pointing to dead module
         if (refp->typedefp()) {
@@ -662,6 +653,98 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                         refp->typedefp(VN_AS(newp, Typedef));
                         ++fixed;
                     }
+                }
+            }
+        }
+
+        // Fix refDTypep pointing to dead module
+        if (refp->refDTypep()) {
+            AstNodeModule* const targetModp = findOwnerModule(refp->refDTypep());
+            if (targetModp && targetModp->dead()) {
+                AstNodeModule* cloneModp = nullptr;
+                if (containingModp) {
+                    cloneModp = findCloneViaHierarchy(containingModp, targetModp, 0);
+                }
+                bool foundByName = false;
+                if (cloneModp) {
+                    const string& targetName = refp->refDTypep()->prettyName();
+                    if (AstNode* const newp = findInModule(cloneModp, targetName, false)) {
+                        UINFO(9, "iface capture finalizeCapture (" << location
+                                  << "): fixing refDTypep refp=" << refp
+                                  << " dead=" << targetModp->name()
+                                  << " -> " << cloneModp->name() << endl);
+                        refp->refDTypep(VN_AS(newp, NodeDType));
+                        ++fixed;
+                        foundByName = true;
+                    }
+                }
+                // If name-based search failed, try to derive refDTypep from
+                // the already-fixed typedefp chain.  The typedefp was fixed
+                // above to point to the clone's typedef, so its subDTypep()
+                // returns a live dtype (type-table entry or clone-owned).
+                // This avoids setting refDTypep to nullptr which would force
+                // V3Width to re-walk the dtype tree under TYPETABLE where
+                // module provenance is lost, triggering spurious warnings.
+                if (!foundByName) {
+                    AstNodeDType* derivedp = nullptr;
+                    if (refp->typedefp() && refp->typedefp()->subDTypep()) {
+                        derivedp = refp->typedefp()->subDTypep();
+                        AstNodeModule* const derivedOwnerp
+                            = findOwnerModule(derivedp);
+                        if (derivedOwnerp && derivedOwnerp->dead()) {
+                            derivedp = nullptr;
+                        }
+                    }
+                    if (derivedp) {
+                        UINFO(9, "iface capture finalizeCapture (" << location
+                                  << "): deriving refDTypep from typedefp refp="
+                                  << refp << " dead=" << targetModp->name()
+                                  << " derived=" << derivedp << endl);
+                        refp->refDTypep(derivedp);
+                    } else {
+                        UINFO(9, "iface capture finalizeCapture (" << location
+                                  << "): clearing dead refDTypep refp=" << refp
+                                  << " dead=" << targetModp->name() << endl);
+                        refp->refDTypep(nullptr);
+                    }
+                    ++fixed;
+                }
+            }
+        }
+
+        // Fix base-class dtypep() — V3Broken checks this pointer, and V3Width
+        // may have set it to a node in the dead template module.  Derive from
+        // the (already fixed) typedefp chain when possible.
+        if (refp->dtypep()) {
+            AstNodeModule* const dtOwnerp = findOwnerModule(refp->dtypep());
+            if (dtOwnerp && dtOwnerp->dead()) {
+                AstNodeDType* newDtp = nullptr;
+                // Try to derive from the fixed typedef's subDTypep
+                if (refp->typedefp() && refp->typedefp()->subDTypep()) {
+                    newDtp = refp->typedefp()->subDTypep();
+                    AstNodeModule* const newDtOwnerp = findOwnerModule(newDtp);
+                    if (newDtOwnerp && newDtOwnerp->dead()) newDtp = nullptr;
+                }
+                // Try refDTypep if we just fixed it
+                if (!newDtp && refp->refDTypep()) {
+                    newDtp = refp->refDTypep();
+                    AstNodeModule* const newDtOwnerp = findOwnerModule(newDtp);
+                    if (newDtOwnerp && newDtOwnerp->dead()) newDtp = nullptr;
+                }
+                if (newDtp) {
+                    UINFO(9, "iface capture finalizeCapture (" << location
+                              << "): fixing dtypep refp=" << refp
+                              << " dead=" << dtOwnerp->name()
+                              << " -> " << newDtp << endl);
+                    refp->dtypep(newDtp);
+                    ++fixed;
+                } else {
+                    // Last resort: clear dtypep to avoid dangling pointer
+                    UINFO(9, "iface capture finalizeCapture (" << location
+                              << "): clearing dead dtypep refp=" << refp
+                              << " dead=" << dtOwnerp->name() << endl);
+                    refp->dtypep(nullptr);
+                    ++fixed;
                 }
             }
         }
@@ -703,12 +786,17 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 // a cell hierarchy leading to the dead target
                 AstNodeModule* containingModp = nullptr;
                 AstNodeModule* deadTargetModp = nullptr;
+                // Check BOTH typedefp and refDTypep for dead owners.
+                // Either (or both) may point to a dead module.
                 if (refp->typedefp()) {
-                    deadTargetModp = findOwnerModule(refp->typedefp());
-                } else if (refp->refDTypep()) {
-                    deadTargetModp = findOwnerModule(refp->refDTypep());
+                    AstNodeModule* const tdOwnerp = findOwnerModule(refp->typedefp());
+                    if (tdOwnerp && tdOwnerp->dead()) deadTargetModp = tdOwnerp;
                 }
-                if (deadTargetModp && deadTargetModp->dead()) {
+                if (!deadTargetModp && refp->refDTypep()) {
+                    AstNodeModule* const rdOwnerp = findOwnerModule(refp->refDTypep());
+                    if (rdOwnerp && rdOwnerp->dead()) deadTargetModp = rdOwnerp;
+                }
+                if (deadTargetModp) {
                     // Search all live modules for one that has a cell hierarchy
                     // leading to a clone of the dead target
                     for (AstNode* mnodep = v3Global.rootp()->modulesp(); mnodep;

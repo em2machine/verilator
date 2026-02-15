@@ -40,6 +40,7 @@ bool V3LinkDotDepGraph::s_enabled = false;
 bool V3LinkDotDepGraph::s_executing = false;
 std::unordered_map<AstRefDType*, std::string> V3LinkDotDepGraph::s_refDTypeDotPathRegistry;
 std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_builtModules;
+std::unordered_set<AstNodeModule*> V3LinkDotDepGraph::s_parameterizedModules;
 static std::unordered_map<AstRefDType*, AstTypedef*> s_refDTypeScopedTypedefs;
 static std::unordered_map<AstTypedef*, AstTypedef*> s_typedefScopedTypedefs;
 
@@ -434,10 +435,11 @@ static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& pr
     // Print this node with cellPath qualifier if present
     const string connector = isLast ? "└── " : "├── ";
     const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
+    const string addrStr = nodep->nodep ? (" <" + AstNode::nodeAddr(nodep->nodep) + ">") : "";
     UINFO(3, "DEPGRAPH: " << std::setw(4) << thisLine << ": " << prefix << connector
               << "[" << nodeTypeName(nodep->nodeType) << "] "
               << V3LinkDotDepGraph::nodeName(nodep) << "@" << V3LinkDotDepGraph::nodeOwnerName(nodep)
-              << cellQualifier
+              << addrStr << cellQualifier
               << " (pending=" << nodep->pendingDeps
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " width=" << nodep->resolvedWidth << ")"
@@ -842,6 +844,7 @@ void V3LinkDotDepGraph::reset() {
     s_clonedTypes.clear();
     s_iterationCount = 0;
     s_builtModules.clear();
+    s_parameterizedModules.clear();
 }
 
 void V3LinkDotDepGraph::resetAll() {
@@ -1001,6 +1004,20 @@ V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::findOrCreateNode(AstNode* nodep, 
     depNodep->nodeType = type;
     depNodep->ownerModp = ownerModp;
     depNodep->cellPath = cellPath;
+
+    // Track parameterized modules: any module with a cell-context DepNode
+    // (non-empty cellPath) is instantiated with specific parameter values
+    // and will be cloned by V3Param.
+    if (!cellPath.empty() && ownerModp) {
+        const bool inserted = s_parameterizedModules.insert(ownerModp).second;
+        UINFO(9, "DEPGRAPH: parameterized-mark "
+                      << (inserted ? "insert" : "seen")
+                      << " mod='" << ownerModp->name() << "'"
+                      << " someInstanceName='" << ownerModp->someInstanceName() << "'"
+                      << " cellPath='" << cellPath << "'"
+                      << " nodeType=" << static_cast<int>(type)
+                      << endl);
+    }
 
     // Capture initial width from AST during build phase
     // This is the only time we read from AST - resolution uses only DepNode state
@@ -3132,6 +3149,14 @@ void V3LinkDotDepGraph::build(AstNetlist* netlistp) {
     };
     recomputePendingDeps();
     UINFO(5, "DEPGRAPH: built " << s_allNodes.size() << " nodes" << endl);
+    UINFO(5, "DEPGRAPH: parameterized module set size=" << s_parameterizedModules.size()
+                  << endl);
+    for (AstNodeModule* const modp : s_parameterizedModules) {
+        if (!modp) continue;
+        UINFO(9, "DEPGRAPH: parameterized module in set mod='" << modp->name()
+                      << "' someInstanceName='" << modp->someInstanceName() << "'"
+                      << endl);
+    }
     dumpGraph("after-build");
     dumpGraphDepsTree("after-build");
     dumpGraphDependentsTree("after-build");
@@ -3736,19 +3761,57 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         // Special case: PATTERN values need dtype set before V3Width can process them
         if (AstPattern* const patp = VN_CAST(nodep->initialValuep, Pattern)) {
             AstVar* const varp = VN_CAST(nodep->nodep, Var);
-            if (varp && varp->dtypep()) {
-                // Clone the pattern and set its dtype
+            // Use subDTypep() — m_dtypep may be null while childDTypep
+            // (the REFDTYPE child) is already linked by LinkDot.
+            AstNodeDType* const varDTypep = varp ? varp->subDTypep() : nullptr;
+            if (varp && varDTypep) {
+                // 1. Collect resolved values from dependencies for substitution
+                std::vector<std::pair<AstNode*, AstNode*>> substitutions;
+                std::set<DepNode*> visited;
+                std::function<void(DepNode*)> collectDeps = [&](DepNode* depp) {
+                    if (!depp || !depp->resolved || visited.count(depp)) return;
+                    visited.insert(depp);
+                    if (depp->resolvedValuep && depp->nodep) {
+                        substitutions.push_back({depp->nodep, depp->resolvedValuep});
+                    }
+                    for (DepNode* const transDepp : depp->dependsOn) {
+                        collectDeps(transDepp);
+                    }
+                };
+                for (DepNode* const depp : nodep->dependsOn) {
+                    collectDeps(depp);
+                }
+
+                // 2. Clone the pattern (sets clonep() on all original nodes)
                 AstPattern* const clonePatp = patp->cloneTree(false);
-                clonePatp->dtypep(varp->dtypep());
-                // Process through V3Width to convert to ConsPackUOrStruct
-                V3Width::widthParamsEdit(clonePatp);
-                V3Const::constifyParamsEdit(clonePatp);
-                nodep->resolvedValuep = clonePatp;
-                if (clonePatp->dtypep()) {
-                    nodep->resolvedWidth = clonePatp->dtypep()->width();
+
+                // 3. Substitute resolved dependency values into the clone
+                // This replaces e.g. ATTROF($bits(cmd_beat_t)) with CONST(512)
+                for (const auto& subst : substitutions) {
+                    AstNode* const clonedNodep = subst.first->clonep();
+                    if (clonedNodep) {
+                        AstNode* const newValuep = subst.second->cloneTree(false);
+                        UINFO(9, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                                  << "' PATTERN substituting "
+                                  << clonedNodep->typeName() << " -> "
+                                  << newValuep->typeName() << endl);
+                        clonedNodep->replaceWith(newValuep);
+                        VL_DO_DANGLING(clonedNodep->deleteTree(), clonedNodep);
+                    }
+                }
+
+                // 4. Set dtype and process through V3Width/V3Const
+                // widthParamsEdit/constifyParamsEdit may replace the node
+                // (e.g. PATTERN -> ConsPackUOrStruct), so capture returns.
+                clonePatp->dtypep(varDTypep);
+                AstNode* resultExprp = V3Width::widthParamsEdit(clonePatp);
+                V3Const::constifyParamsEdit(resultExprp);
+                nodep->resolvedValuep = resultExprp;
+                if (resultExprp->dtypep()) {
+                    nodep->resolvedWidth = resultExprp->dtypep()->width();
                 }
                 UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
-                          << "' processed PATTERN -> " << clonePatp->typeName() << endl);
+                          << "' processed PATTERN -> " << resultExprp->typeName() << endl);
             } else {
                 // No dtype available - use as-is (will likely fail later)
                 nodep->resolvedValuep = nodep->initialValuep;
@@ -4136,6 +4199,27 @@ static void finalizeParam(V3LinkDotDepGraph::DepNode* nodep) {
     // NOTE: Do NOT modify varp->dtypep()->widthForce() here - V3Width handles this
 }
 
+//======================================================================
+// Public query APIs
+
+bool V3LinkDotDepGraph::isParameterized(const AstNodeModule* modp) {
+    if (!s_enabled || !modp) return false;
+    const bool result = s_parameterizedModules.count(const_cast<AstNodeModule*>(modp)) > 0;
+    UINFO(9, "DEPGRAPH: isParameterized mod='" << modp->name()
+                  << "' someInstanceName='" << modp->someInstanceName()
+                  << "' -> " << (result ? "true" : "false") << endl);
+    return result;
+}
+
+const V3LinkDotDepGraph::DepNode* V3LinkDotDepGraph::lookupResolved(
+    const std::string& name, AstNodeModule* ownerModp,
+    NodeType nodeType, const std::string& cellPath) {
+    if (!s_enabled) return nullptr;
+    DepNode* const dnp = findByNameAndOwner(name, ownerModp, nodeType, cellPath);
+    if (!dnp || !dnp->resolved) return nullptr;
+    return dnp;
+}
+
 // NOTE: We intentionally do NOT replace AstAttrOf nodes in finalizeAST.
 // The AstAttrOf's fromp() child (AstRefDType) may be referenced by the
 // IfaceCapture ledger.  Deleting the tree would leave dangling pointers.
@@ -4468,10 +4552,11 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
         if (!nodep->resolvedValuep) continue;
 
         // Only apply fully constant values. Non-constant resolved values
-        // (e.g., PATTERNs) may contain broken references that fold to zero.
-        // Leave those alone so V3Param can fold the original expression
-        // using the clone's already-set GPARAM values.
-        if (!VN_IS(nodep->resolvedValuep, Const)) {
+        // (e.g., unprocessed PATTERNs) may contain broken references.
+        // ConsPackUOrStruct is what V3Width produces from a PATTERN and is
+        // fully constant, so accept it alongside Const.
+        if (!VN_IS(nodep->resolvedValuep, Const)
+            && !VN_IS(nodep->resolvedValuep, ConsPackUOrStruct)) {
             UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
                       << "' (instance) SKIPPED non-const type=" << nodep->resolvedValuep->typeName() << endl);
             continue;
@@ -4503,7 +4588,8 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
         if (appliedNames.count(srcVarp->name())) continue;  // Already set by instance match
 
         // Only apply fully constant values (same reason as pass 1)
-        if (!VN_IS(nodep->resolvedValuep, Const)) {
+        if (!VN_IS(nodep->resolvedValuep, Const)
+            && !VN_IS(nodep->resolvedValuep, ConsPackUOrStruct)) {
             UINFO(5, "DEPGRAPH: applyResolvedToClone LPARAM '" << srcVarp->name()
                       << "' (template) SKIPPED non-const type=" << nodep->resolvedValuep->typeName() << endl);
             continue;
@@ -4521,7 +4607,83 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
         ++appliedCount;
     }
 
-    UINFO(5, "DEPGRAPH: applyResolvedToClone applied " << appliedCount << " values" << endl);
+    UINFO(5, "DEPGRAPH: applyResolvedToClone applied " << appliedCount << " LPARAM values" << endl);
+
+    // Pass 3: Fold parameter expressions inside the clone's typedef subtrees.
+    // After Pass 1/2 set GPARAM/LPARAM values on the clone, expressions like
+    // cfg.DDNumStuffThreads-1 inside RANGE nodes can be folded to constants.
+    // Without this, V3Width's widthParamsEdit moves PACKARRAYDTYPEs to the
+    // type table with unresolved RANGE expressions (e.g., [-1:0] instead of
+    // [7:0]), causing spurious ASCRANGE warnings.
+    //
+    // We substitute parameter values into the clone's typedef subtrees using
+    // ParamSubstVisitor (same mechanism as DepGraph resolution), then fold
+    // with V3Const.  This uses only the clone's own parameter values — we
+    // NEVER clone or copy nodes from the DepGraph shadow AST.
+    int typedefApplied = 0;
+
+    // Build a ParamSubstVisitor with the clone's resolved GPARAM values
+    ParamSubstVisitor substVisitor;
+    for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        if (AstVar* const varp = VN_CAST(stmtp, Var)) {
+            if (varp->isGParam() && varp->valuep()) {
+                substVisitor.addParam(varp->name(), varp->valuep());
+                UINFO(5, "DEPGRAPH: applyResolvedToClone Pass 3 param '"
+                          << varp->name() << "' = " << varp->valuep()->typeName() << endl);
+            }
+        }
+    }
+
+    // Walk each typedef in the clone and substitute+fold parameter expressions
+    for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+        AstTypedef* const tdp = VN_CAST(stmtp, Typedef);
+        if (!tdp || !tdp->childDTypep()) continue;
+
+        // Check if this typedef has any RANGE nodes with parameter references
+        bool hasRanges = false;
+        tdp->childDTypep()->foreach([&](AstRange*) { hasRanges = true; });
+        if (!hasRanges) continue;
+
+        UINFO(9, "DEPGRAPH: applyResolvedToClone TYPEDEF '" << tdp->name()
+                  << "' pre-fold ranges:" << endl);
+        tdp->childDTypep()->foreach([&](AstRange* rangep) {
+            UINFO(9, "DEPGRAPH:   RANGE <" << AstNode::nodeAddr(rangep)
+                      << "> back=" << (rangep->backp() ? rangep->backp()->typeName() : "<null>")
+                      << " left=" << (rangep->leftp() ? rangep->leftp()->typeName() : "<null>")
+                      << " right=" << (rangep->rightp() ? rangep->rightp()->typeName() : "<null>")
+                      << endl);
+        });
+
+        // Substitute parameter values in the typedef's dtype subtree
+        substVisitor.substitute(tdp->childDTypep());
+
+        // Fold the substituted expressions to constants
+        tdp->childDTypep()->foreach([](AstRange* rangep) {
+            if (rangep->leftp()) {
+                V3Const::constifyParamsEdit(rangep->leftp());
+            }
+            if (rangep->rightp()) {
+                V3Const::constifyParamsEdit(rangep->rightp());
+            }
+        });
+
+        UINFO(9, "DEPGRAPH: applyResolvedToClone TYPEDEF '" << tdp->name()
+                  << "' post-fold ranges:" << endl);
+        tdp->childDTypep()->foreach([&](AstRange* rangep) {
+            UINFO(9, "DEPGRAPH:   RANGE <" << AstNode::nodeAddr(rangep)
+                      << "> back=" << (rangep->backp() ? rangep->backp()->typeName() : "<null>")
+                      << " left=" << (rangep->leftp() ? rangep->leftp()->typeName() : "<null>")
+                      << " right=" << (rangep->rightp() ? rangep->rightp()->typeName() : "<null>")
+                      << " leftNode=" << (rangep->leftp() ? AstNode::nodeAddr(rangep->leftp()) : "<null>")
+                      << " rightNode=" << (rangep->rightp() ? AstNode::nodeAddr(rangep->rightp()) : "<null>")
+                      << endl);
+        });
+
+        ++typedefApplied;
+        UINFO(5, "DEPGRAPH: applyResolvedToClone TYPEDEF '" << tdp->name()
+                  << "' parameter expressions folded" << endl);
+    }
+    UINFO(5, "DEPGRAPH: applyResolvedToClone applied " << typedefApplied << " TYPEDEF fixes" << endl);
 }
 
 //======================================================================
@@ -4562,7 +4724,9 @@ void V3LinkDotDepGraph::dumpNode(const DepNode* nodep) {
         extra = " cell=" + nodep->cellName;
     }
 
+    const string addrStr = nodep->nodep ? (" <" + AstNode::nodeAddr(nodep->nodep) + ">") : "";
     UINFO(5, "DEPGRAPH:   " << nodeTypeName(nodep->nodeType) << " '" << nodeName(nodep) << "'"
+              << addrStr
               << " resolved=" << (nodep->resolved ? "Y" : "N")
               << " iter=" << nodep->resolvedIteration
               << extra
@@ -4660,7 +4824,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
                         valStr = formatConstValue(constp);
                     }
                 }
-                items.push_back({"", "GPARAM " + varp->name() + valStr + resolved});
+                items.push_back({"", "GPARAM " + varp->name() + " <" + AstNode::nodeAddr(varp) + ">" + valStr + resolved});
             } else if (varp->isParam()) {
                 const DepNode* const dnp = find(varp);
                 string resolved = dnp ? (dnp->resolved ? " [resolved]" : " [pending]") : "";
@@ -4671,7 +4835,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
                         valStr = formatConstValue(constp);
                     }
                 }
-                items.push_back({"", "LPARAM " + varp->name() + valStr + resolved});
+                items.push_back({"", "LPARAM " + varp->name() + " <" + AstNode::nodeAddr(varp) + ">" + valStr + resolved});
             }
         } else if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
             const DepNode* const dnp = find(tdp);
@@ -4683,12 +4847,12 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
                     widthStr = " [w" + std::to_string(dtypep->width()) + "]";
                 }
             }
-            items.push_back({"", "TYPEDEF " + tdp->name() + widthStr + resolved});
+            items.push_back({"", "TYPEDEF " + tdp->name() + " <" + AstNode::nodeAddr(tdp) + ">" + widthStr + resolved});
         } else if (AstParamTypeDType* const ptdp = VN_CAST(stmtp, ParamTypeDType)) {
             const DepNode* const dnp = find(ptdp);
             string resolved = dnp ? (dnp->resolved ? " [resolved]" : " [pending]") : "";
             string targetStr = formatParamTypeResolution(ptdp, dnp);
-            items.push_back({"", "PARAMTYPE " + ptdp->name() + resolved + targetStr});
+            items.push_back({"", "PARAMTYPE " + ptdp->name() + " <" + AstNode::nodeAddr(ptdp) + ">" + resolved + targetStr});
         }
     }
 
@@ -4697,7 +4861,8 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
         if (!dnp || dnp->nodeType != NodeType::REFDTYPE) continue;
         if (dnp->ownerModp != modp) continue;
         string suffix = formatRefDTypeResolution(dnp);
-        items.push_back({"", "REFDTYPE " + nodeName(dnp) + suffix});
+        const string rdAddr = dnp->nodep ? (" <" + AstNode::nodeAddr(dnp->nodep) + ">") : "";
+        items.push_back({"", "REFDTYPE " + nodeName(dnp) + rdAddr + suffix});
     }
 
     // Print items

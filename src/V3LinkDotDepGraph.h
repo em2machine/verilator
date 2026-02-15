@@ -110,6 +110,7 @@ private:
     static bool s_executing;                 // Are we currently in DepGraph execution?
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
+    static std::unordered_set<AstNodeModule*> s_parameterizedModules;  // Modules with cell-context DepNodes
 
     // Forward declare visitor classes as friends
     friend class DepExprVisitor;
@@ -175,14 +176,6 @@ public:
     // Call this after V3Param finishes to avoid dangling pointers in type table
     static void cleanupClonedTypes();
 
-    // Apply resolved LPARAM values to a cloned module for a specific cell context
-    // Called by V3Param after cloning a module for a cell
-    // srcModp: the template module that was cloned
-    // newModp: the cloned module
-    // cellPath: the hierarchical path to the cell (e.g., "t.u_sub8")
-    static void applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
-                                     const std::string& cellPath);
-
     // Register cell association for interface port -> connected interface instance
     // portPath: hierarchical path to the interface port (e.g., "t.u_subA.io")
     // ifaceCellPath: hierarchical path to the connected interface instance (e.g., "t.subA_io")
@@ -218,6 +211,30 @@ public:
     // Returns the resolved constant value, or nullptr if not resolved.
     // Used by V3Width to get DepGraph-computed $bits() values.
     static AstConst* getResolvedAttrOf(const AstAttrOf* nodep);
+
+    // Query whether a module/interface is parameterized (has cell-context
+    // DepNodes with non-empty cellPath).  A parameterized template will be
+    // cloned by V3Param — its default-parameter types are placeholders and
+    // should not trigger warnings (e.g., ASCRANGE) during width evaluation.
+    // This is a definitive, O(1) query backed by shadow state built during
+    // DepGraph construction.
+    static bool isParameterized(const AstNodeModule* modp);
+
+    // Generic database lookup: find a resolved DepNode by name, owner module,
+    // node type, and cell path.  Returns nullptr if not found or not resolved.
+    // This is the primary external API for querying the DepGraph's resolved state.
+    // Callers outside DepGraph (e.g., V3Param, V3Width) use this to retrieve
+    // per-cell-context resolved values without needing internal DepGraph knowledge.
+    static const DepNode* lookupResolved(const std::string& name,
+                                         AstNodeModule* ownerModp,
+                                         NodeType nodeType,
+                                         const std::string& cellPath);
+
+    // Apply all resolved state from the DepGraph to a cloned module.
+    // This applies LPARAM values AND typedef/struct/union resolved widths.
+    // Called by V3Param after cloning a module, before V3Width runs on the clone.
+    static void applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
+                                     const std::string& cellPath);
 
     // Statistics
     static std::size_t size() { return s_allNodes.size(); }
