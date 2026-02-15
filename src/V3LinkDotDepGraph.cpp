@@ -3782,38 +3782,67 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                     collectDeps(depp);
                 }
 
-                // 2. Clone the pattern (sets clonep() on all original nodes)
-                AstPattern* const clonePatp = patp->cloneTree(false);
+                // Only constify PATTERNs that have actual resolved dependencies
+                // to substitute. PATTERNs with only literal constants (no deps)
+                // don't need DepGraph intervention — V3Param handles them.
+                // Calling widthParamsEdit during DepGraph execution on such
+                // PATTERNs produces wrong results (AST not fully set up).
+                if (!substitutions.empty()) {
+                    // 2. Clone the pattern (sets clonep() on all original nodes)
+                    AstPattern* const clonePatp = patp->cloneTree(false);
 
-                // 3. Substitute resolved dependency values into the clone
-                // This replaces e.g. ATTROF($bits(cmd_beat_t)) with CONST(512)
-                for (const auto& subst : substitutions) {
-                    AstNode* const clonedNodep = subst.first->clonep();
-                    if (clonedNodep) {
-                        AstNode* const newValuep = subst.second->cloneTree(false);
-                        UINFO(9, "DEPGRAPH: LPARAM '" << nodeName(nodep)
-                                  << "' PATTERN substituting "
-                                  << clonedNodep->typeName() << " -> "
-                                  << newValuep->typeName() << endl);
-                        clonedNodep->replaceWith(newValuep);
-                        VL_DO_DANGLING(clonedNodep->deleteTree(), clonedNodep);
+                    // 3. Substitute resolved dependency values into the clone
+                    // This replaces e.g. ATTROF($bits(cmd_beat_t)) with CONST(512)
+                    for (const auto& subst : substitutions) {
+                        AstNode* const clonedNodep = subst.first->clonep();
+                        if (clonedNodep) {
+                            AstNode* const newValuep = subst.second->cloneTree(false);
+                            UINFO(9, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                                      << "' PATTERN substituting "
+                                      << clonedNodep->typeName() << " -> "
+                                      << newValuep->typeName() << endl);
+                            clonedNodep->replaceWith(newValuep);
+                            VL_DO_DANGLING(clonedNodep->deleteTree(), clonedNodep);
+                        }
                     }
-                }
 
-                // 4. Set dtype and process through V3Width/V3Const
-                // widthParamsEdit/constifyParamsEdit may replace the node
-                // (e.g. PATTERN -> ConsPackUOrStruct), so capture returns.
-                clonePatp->dtypep(varDTypep);
-                AstNode* resultExprp = V3Width::widthParamsEdit(clonePatp);
-                V3Const::constifyParamsEdit(resultExprp);
-                nodep->resolvedValuep = resultExprp;
-                if (resultExprp->dtypep()) {
-                    nodep->resolvedWidth = resultExprp->dtypep()->width();
+                    // 4. Set dtype and process through V3Width/V3Const
+                    // widthParamsEdit/constifyParamsEdit may replace the node
+                    // (e.g. PATTERN -> ConsPackUOrStruct), so capture returns.
+                    clonePatp->dtypep(varDTypep);
+                    AstNode* resultExprp = V3Width::widthParamsEdit(clonePatp);
+                    V3Const::constifyParamsEdit(resultExprp);
+
+                    // Only store if constification produced a proper constant.
+                    // If widthParamsEdit produced something unexpected (e.g. CONCAT),
+                    // discard and fall back to original PATTERN.
+                    if (VN_IS(resultExprp, Const)
+                        || VN_IS(resultExprp, ConsPackUOrStruct)) {
+                        nodep->resolvedValuep = resultExprp;
+                        if (resultExprp->dtypep()) {
+                            nodep->resolvedWidth = resultExprp->dtypep()->width();
+                        }
+                        UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                                  << "' processed PATTERN -> "
+                                  << resultExprp->typeName() << endl);
+                    } else {
+                        UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                                  << "' PATTERN constification produced "
+                                  << resultExprp->typeName()
+                                  << ", falling back to as-is" << endl);
+                        resultExprp->deleteTree();
+                        nodep->resolvedValuep = nodep->initialValuep;
+                    }
+                } else {
+                    // No substitutions needed — use original PATTERN as-is.
+                    // V3Param will constify it with fully available types.
+                    nodep->resolvedValuep = nodep->initialValuep;
+                    UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
+                              << "' PATTERN has no deps to substitute, using as-is"
+                              << endl);
                 }
-                UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
-                          << "' processed PATTERN -> " << resultExprp->typeName() << endl);
             } else {
-                // No dtype available - use as-is (will likely fail later)
+                // No dtype available - use as-is
                 nodep->resolvedValuep = nodep->initialValuep;
                 UINFO(5, "DEPGRAPH: LPARAM '" << nodeName(nodep)
                           << "' PATTERN has no dtype, using as-is" << endl);
