@@ -2,6 +2,11 @@
 // This reproduces the error where a REFDTYPE in a parameter expression
 // is not properly linked to its type after DepGraph resolution
 
+// verilog_format: off
+`define stop $stop
+`define checkd(gotv,expv) do if ((gotv) !== (expv)) begin $write("%%Error: %s:%0d:  got=%0d exp=%0d (%s !== %s)\n", `__FILE__,`__LINE__, (gotv), (expv), `"gotv`", `"expv`"); `stop; end while(0);
+// verilog_format: on
+
 package Include;
     typedef logic [11:0] mbox_addr_t;
 endpackage
@@ -24,6 +29,9 @@ module mbox #(parameter int WIDTH = 0);
 
     initial begin
         $display("TAG_ZERO = %b", TAG_ZERO);
+        `checkd($bits(TAG_ZERO), 17);
+        $write("*-* All Finished *-*\n");
+        $finish;
     end
 endmodule
 

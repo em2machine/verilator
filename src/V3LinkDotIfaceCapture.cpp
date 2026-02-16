@@ -46,6 +46,9 @@ AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep) {
 
 AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
     for (AstNode* curp = nodep; curp; curp = curp->backp()) {
+        // Guard against corrupted backp() chains (e.g. freed memory,
+        // low addresses like 0x1) from nodes unlinked by linkDotParamed.
+        if (reinterpret_cast<uintptr_t>(curp) < 0x1000) return nullptr;
         if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
     }
     return nullptr;
@@ -1084,20 +1087,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
         // For clone entries the stored ownerModp is the template (stale cells).
         // Use the actual module containing the REFDTYPE — its cells are wired
         // to the correct interface clones by this point.
-        // Guard: if refp was unlinked from the AST (e.g. by V3LinkDot::linkDotParamed),
-        // its backp() chain may be invalid (null or corrupted).  Skip such entries.
-        if (!entry.cloneCellPath.empty()) {
-            bool valid = true;
-            for (AstNode* bp = refp->backp(); bp; bp = bp->backp()) {
-                // Detect obviously invalid pointers (freed memory, low addresses)
-                if (reinterpret_cast<uintptr_t>(bp) < 0x1000) {
-                    valid = false;
-                    break;
-                }
-                if (VN_IS(bp, NodeModule)) break;  // Reached a module — chain is valid
-            }
-            if (!valid || !refp->backp()) return;
-        }
+        // findOwnerModule handles corrupted backp() chains gracefully.
         AstNodeModule* const ownerModp
             = !entry.cloneCellPath.empty() ? findOwnerModule(refp) : entry.ownerModp;
         if (!ownerModp || ownerModp->dead() || VN_IS(ownerModp, Package)) return;

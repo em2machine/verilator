@@ -832,14 +832,29 @@ class ParamProcessor final {
                             entry.refp->name(), entry.cellPath};
                         V3LinkDotIfaceCapture::propagateClone(
                             tkey, clonedRefp, cloneCP);
-                    } else if (entry.ownerModp != srcModp
-                               && !entry.ownerModp->hasGParam()) {
-                        // The REFDTYPE lives in a non-parameterized parent module
-                        // (not inside the cloned class/iface), so clonep() is null
-                        // and the owner won't be cloned later.  Directly retarget
-                        // its pointers from the template to the clone.
-                        // If the owner HAS gparams, it will be cloned later and
-                        // the propagateClone path above handles the cloned REFDTYPE.
+                    } else if (entry.ownerModp != srcModp) {
+                        // The REFDTYPE lives in a parent module (not inside the
+                        // cloned class/iface), so clonep() is null.
+                        // Check the ACTUAL owner (via backp() chain) — the stored
+                        // ownerModp may be stale (pointing to the template even
+                        // though the REFDTYPE now lives in a clone).
+                        AstNodeModule* const actualOwnerp
+                            = V3LinkDotIfaceCapture::findOwnerModule(entry.refp);
+                        UINFO(9, "iface capture direct retarget check: refp="
+                                  << entry.refp->name()
+                                  << " ownerModp=" << entry.ownerModp->name()
+                                  << " actualOwnerp=" << (actualOwnerp ? actualOwnerp->name() : "<null>")
+                                  << " actualHasGParam=" << (actualOwnerp ? actualOwnerp->hasGParam() : false)
+                                  << " srcModp=" << srcModp->name()
+                                  << " clonep=" << (entry.refp->clonep() ? "set" : "null")
+                                  << endl);
+                        if (actualOwnerp && actualOwnerp->hasGParam()) {
+                            // Owner will be cloned later; propagateClone handles it
+                            UINFO(9, "iface capture direct retarget SKIP (actualOwner hasGParam): "
+                                      << actualOwnerp->name() << endl);
+                            return;
+                        }
+                        // Owner won't be cloned — directly retarget now.
                         if (entry.refp->typedefp()) {
                             const string& tdName = entry.refp->typedefp()->name();
                             for (AstNode* sp = newModp->stmtsp(); sp;
@@ -857,6 +872,44 @@ class ParamProcessor final {
                                         }
                                         break;
                                     }
+                                }
+                            }
+                        }
+                    }
+                });
+
+            // Second pass: retarget clone entries whose typedef owner
+            // matches the module being cloned.  Clone entries (non-empty
+            // cloneCellPath) are skipped by forEachOwned above, but their
+            // refp lives in a clone module that won't be cloned again.
+            // They need direct retargeting NOW.
+            const string srcName = srcModp->name();
+            V3LinkDotIfaceCapture::forEach(
+                [&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
+                    if (!entry.refp) return;
+                    if (entry.cloneCellPath.empty()) return;  // template entry, handled above
+                    if (entry.typedefOwnerModName != srcName) return;
+                    // Verify the actual owner won't be cloned later
+                    AstNodeModule* const actualOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(entry.refp);
+                    if (!actualOwnerp || actualOwnerp->hasGParam()) return;
+                    if (entry.refp->typedefp()) {
+                        const string& tdName = entry.refp->typedefp()->name();
+                        for (AstNode* sp = newModp->stmtsp(); sp;
+                             sp = sp->nextp()) {
+                            if (AstTypedef* const tdp = VN_CAST(sp, Typedef)) {
+                                if (tdp->name() == tdName) {
+                                    UINFO(9, "iface capture clone-entry retarget: "
+                                              << entry.refp->name()
+                                              << " cloneCellPath='" << entry.cloneCellPath
+                                              << "' actualOwner=" << actualOwnerp->name()
+                                              << " -> " << newModp->name() << endl);
+                                    entry.refp->typedefp(tdp);
+                                    if (tdp->subDTypep()) {
+                                        entry.refp->refDTypep(tdp->subDTypep());
+                                        entry.refp->dtypep(tdp->subDTypep());
+                                    }
+                                    break;
                                 }
                             }
                         }
