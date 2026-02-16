@@ -832,6 +832,50 @@ class ParamProcessor final {
                             entry.refp->name(), entry.cellPath};
                         V3LinkDotIfaceCapture::propagateClone(
                             tkey, clonedRefp, cloneCP);
+                    } else if (entry.ownerModp != srcModp) {
+                        // The REFDTYPE lives in a parent module (not inside the
+                        // cloned class), so clonep() is null.  Directly retarget
+                        // its pointers from the template class to the clone.
+                        const string& refName = entry.refp->name();
+                        // Search newModp for a typedef with matching name
+                        if (entry.refp->typedefp()) {
+                            const string& tdName = entry.refp->typedefp()->name();
+                            for (AstNode* sp = newModp->stmtsp(); sp;
+                                 sp = sp->nextp()) {
+                                if (AstTypedef* const tdp = VN_CAST(sp, Typedef)) {
+                                    if (tdp->name() == tdName) {
+                                        UINFO(9, "iface capture direct retarget typedefp: "
+                                                  << entry.refp->name()
+                                                  << " in " << entry.ownerModp->name()
+                                                  << " -> " << newModp->name() << endl);
+                                        entry.refp->typedefp(tdp);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // Search newModp for a dtype with matching name and type
+                        if (entry.refp->refDTypep()) {
+                            const string& rdName
+                                = entry.refp->refDTypep()->prettyName();
+                            const VNType rdType = entry.refp->refDTypep()->type();
+                            for (AstNode* sp = newModp->stmtsp(); sp;
+                                 sp = sp->nextp()) {
+                                if (AstNodeDType* const dtp
+                                        = VN_CAST(sp, NodeDType)) {
+                                    if (dtp->prettyName() == rdName
+                                        && dtp->type() == rdType) {
+                                        UINFO(9, "iface capture direct retarget refDTypep: "
+                                                  << entry.refp->name()
+                                                  << " in " << entry.ownerModp->name()
+                                                  << " -> " << newModp->name() << endl);
+                                        entry.refp->refDTypep(dtp);
+                                        entry.refp->dtypep(dtp);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 });
         }
