@@ -890,34 +890,6 @@ class ParamProcessor final {
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
-        // Assign parameters to the constants specified
-        // DOES clone() so must be finished with module clonep() before here
-        for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
-            if (pinp->exprp()) {
-                if (AstVar* const modvarp = pinp->modVarp()) {
-                    AstNode* const newp = pinp->exprp();  // Const or InitArray
-                    AstConst* const exprp = VN_CAST(newp, Const);
-                    AstConst* const origp = VN_CAST(modvarp->valuep(), Const);
-                    const bool overridden
-                        = !(origp && ParameterizedHierBlocks::areSame(exprp, origp));
-                    // Remove any existing parameter
-                    if (modvarp->valuep()) modvarp->valuep()->unlinkFrBack()->deleteTree();
-                    // Set this parameter to value requested by cell
-                    UINFO(9, "       set param " << modvarp << " = " << newp);
-                    modvarp->valuep(newp->cloneTree(false));
-                    modvarp->overriddenParam(overridden);
-                } else if (AstParamTypeDType* const modptp = pinp->modPTypep()) {
-                    AstNodeDType* const dtypep = VN_AS(pinp->exprp(), NodeDType);
-                    UASSERT_OBJ(dtypep, pinp, "unlinked param dtype");
-                    if (modptp->childDTypep()) modptp->childDTypep()->unlinkFrBack()->deleteTree();
-                    // Set this parameter to value requested by cell
-                    modptp->childDTypep(dtypep->cloneTree(false));
-                    // Later V3LinkDot will convert the ParamDType to a Typedef
-                    // Not done here as may be localparams, etc, that also need conversion
-                }
-            }
-        }
-
         // Fix cross-module REFDTYPE pointers in newModp using cell hierarchy.
         //
         // After cloneTree, some REFDTYPEs in newModp may have typedefp/refDTypep
