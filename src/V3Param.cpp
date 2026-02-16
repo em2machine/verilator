@@ -765,19 +765,24 @@ class ParamProcessor final {
                                     comp = remaining.substr(0, dot);
                                     remaining = remaining.substr(dot + 1);
                                 }
+                                const size_t braPos = comp.find("__BRA__");
+                                const string compBase
+                                    = (braPos == string::npos) ? comp : comp.substr(0, braPos);
                                 AstNodeModule* nextModp = nullptr;
                                 for (AstNode* sp = resolvedParentp->stmtsp(); sp;
                                      sp = sp->nextp()) {
                                     // Check cells (e.g. "tlb_io" cell)
                                     if (AstCell* const cp2 = VN_CAST(sp, Cell)) {
-                                        if (cp2->name() == comp && cp2->modp()) {
+                                        if ((cp2->name() == comp || cp2->name() == compBase)
+                                            && cp2->modp()) {
                                             nextModp = cp2->modp();
                                             break;
                                         }
                                     }
                                     // Check interface port variables (e.g. "cca_io" port)
                                     if (AstVar* const vp = VN_CAST(sp, Var)) {
-                                        if (vp->name() == comp && vp->isIfaceRef()) {
+                                        if ((vp->name() == comp || vp->name() == compBase)
+                                            && vp->isIfaceRef()) {
                                             AstIfaceRefDType* const irefp
                                                 = VN_CAST(vp->subDTypep(), IfaceRefDType);
                                             if (irefp && irefp->ifaceViaCellp()) {
