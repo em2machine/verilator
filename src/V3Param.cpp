@@ -1847,109 +1847,12 @@ class ParamProcessor final {
     }
     AstNodeModule* classRefDeparam(AstClassRefDType* nodep, AstNodeModule* srcModp) {
         resolveDefaultParams(nodep);
-
-        // Check for self-reference pattern: typedef c1#(REQ, RSP) this_type inside class c1
-        // When processing inside a specialized c1 class, the ClassRefDType should point to
-        // the owner class, not create an intermediate specialization.
-        if (m_modp && VN_IS(m_modp, Class)) {
-            AstClass* ownerClassp = const_cast<AstClass*>(VN_AS(m_modp, Class));
-            // Check if srcModp is the same base class as the owner
-            const string ownerOrigName = ownerClassp->origName().empty()
-                                             ? ownerClassp->name()
-                                             : ownerClassp->origName();
-            const string srcOrigName = srcModp->origName().empty()
-                                           ? srcModp->name()
-                                           : srcModp->origName();
-            // Extract base name (before __) for specialized classes
-            string ownerBaseName = ownerOrigName;
-            const size_t ownerPos = ownerBaseName.find("__");
-            if (ownerPos != string::npos) ownerBaseName = ownerBaseName.substr(0, ownerPos);
-            string srcBaseName = srcOrigName;
-            const size_t srcPos = srcBaseName.find("__");
-            if (srcPos != string::npos) srcBaseName = srcBaseName.substr(0, srcPos);
-
-            if (ownerBaseName == srcBaseName) {
-                // Check if all parameters are the owner's own type parameters
-                bool allOwnParams = true;
-                for (AstPin* pinp = nodep->paramsp(); pinp && allOwnParams;
-                     pinp = VN_AS(pinp->nextp(), Pin)) {
-                    if (AstRefDType* const refp = VN_CAST(pinp->exprp(), RefDType)) {
-                        if (AstParamTypeDType* const ptdp
-                            = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
-                            // Check if this PARAMTYPEDTYPE belongs to the owner class
-                            AstNodeModule* const ptdOwnerp
-                                = V3LinkDotDepGraph::findOwnerModule(ptdp);
-                            if (ptdOwnerp != m_modp) allOwnParams = false;
-                        } else {
-                            allOwnParams = false;
-                        }
-                    } else {
-                        allOwnParams = false;
-                    }
-                }
-                if (allOwnParams) {
-                    // This is a self-reference - use the owner class directly
-                    UINFO(5, "classRefDeparam: self-reference pattern detected in "
-                              << ownerClassp->name() << ", using owner class" << endl);
-                    nodep->classp(ownerClassp);
-                    nodep->classOrPackagep(ownerClassp);
-                    // Delete the parameters - they're not needed for self-reference
-                    if (nodep->paramsp()) nodep->paramsp()->unlinkFrBackWithNext()->deleteTree();
-                    return ownerClassp;
-                }
-            }
-        }
-
         AstNodeModule* const newModp
             = nodeDeparamCommon(nodep, srcModp, nodep->paramsp(), nullptr, false);
         if (!newModp) return nullptr;
-        AstClass* const oldClassp = nodep->classp();
         AstClass* const newClassp = VN_AS(newModp, Class);
         nodep->classp(newClassp);  // Might be unchanged if not cloned (newModp == srcModp)
         nodep->classOrPackagep(newClassp);
-
-        if (oldClassp && newClassp && oldClassp != newClassp && m_modp) {
-            std::unordered_map<string, AstTypedef*> memberTypedefs;
-            for (AstNode* stmtp = newClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                    memberTypedefs.emplace(tdp->name(), tdp);
-                }
-            }
-
-            class RefDTypeRetargetVisitor final : public VNVisitor {
-                const AstClass* m_oldClassp;
-                AstClass* m_newClassp;
-                const std::unordered_map<string, AstTypedef*>& m_memberTypedefs;
-
-                void visit(AstRefDType* refp) override {
-                    if (refp->classOrPackagep() == m_oldClassp) {
-                        auto it = m_memberTypedefs.find(refp->name());
-                        if (it != m_memberTypedefs.end() && refp->typedefp() != it->second) {
-                            refp->typedefp(it->second);
-                            refp->classOrPackagep(m_newClassp);
-                            UINFO(5, "classRefDeparam: retarget refdtype name=" << refp->name()
-                                                                                << " ref=" << refp
-                                                                                << " typedef=" << it->second
-                                                                                << " class=" << m_newClassp << endl);
-                        }
-                    }
-                    iterateChildren(refp);
-                }
-                void visit(AstNode* nodep) override { iterateChildren(nodep); }
-
-            public:
-                RefDTypeRetargetVisitor(const AstClass* oldClassp, AstClass* newClassp,
-                                        const std::unordered_map<string, AstTypedef*>& memberTypedefs,
-                                        const AstNodeModule* ownerModp)
-                    : m_oldClassp(oldClassp)
-                    , m_newClassp(newClassp)
-                    , m_memberTypedefs(memberTypedefs) {
-                    if (ownerModp) iterate(const_cast<AstNodeModule*>(ownerModp));
-                }
-            } visitor{oldClassp, newClassp, memberTypedefs, m_modp};
-            (void)visitor;
-        }
-
         return newClassp;
     }
 

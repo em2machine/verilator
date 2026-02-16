@@ -9510,14 +9510,23 @@ AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
     {
         const AstNodeModule* ownerModp = nullptr;
         string ancestry;
+        static constexpr int kMaxAncestryDepth = 10;
+        int ancestryDepth = 0;
+        bool ancestryTruncated = false;
         for (AstNode* ap = nodep; ap; ap = ap->backp()) {
-            if (!ancestry.empty()) ancestry += "<-";
-            ancestry += ap->typeName();
+            if (ancestryDepth < kMaxAncestryDepth) {
+                if (!ancestry.empty()) ancestry += "<-";
+                ancestry += ap->typeName();
+            } else {
+                ancestryTruncated = true;
+            }
+            ++ancestryDepth;
             if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
                 ownerModp = modp;
                 break;
             }
         }
+        if (ancestryTruncated) ancestry += "<-...<truncated>";
         UINFO(9, "widthParamsEdit ENTER <" << AstNode::nodeAddr(nodep) << ">"
                                              << " type=" << nodep->typeName()
                                              << " ownerMod="
