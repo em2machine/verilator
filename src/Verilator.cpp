@@ -157,11 +157,10 @@ static void process() {
         // Convert parseref's to varrefs, and other directly post parsing fixups
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
-        // Enable both DepGraph (for value resolution) and IfaceCapture (for AST pointer fixup)
-        // DepGraph resolves parameter values in dependency order
-        // IfaceCapture remaps typedef pointers when modules are cloned
+        // Keep IfaceCapture enabled for AST pointer fixups.
+        // DepGraph is default-off and enabled only with --enable-depgraph.
         V3LinkDotIfaceCapture::enable(true);
-        V3LinkDotDepGraph::enable(true);
+        V3LinkDotDepGraph::enable(v3Global.opt.enableDepGraph());
 
         // Cross-link dotted hierarchical references
         V3LinkDot::linkDotPrimary(v3Global.rootp());
@@ -186,7 +185,7 @@ static void process() {
         V3Param::param(v3Global.rootp());
 
         // Cleanup cloned types from DepGraph resolution after V3Param completes
-        V3LinkDotDepGraph::cleanupClonedTypes();
+        if (V3LinkDotDepGraph::enabled()) V3LinkDotDepGraph::cleanupClonedTypes();
 
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs

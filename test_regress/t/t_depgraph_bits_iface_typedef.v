@@ -69,6 +69,7 @@ module top;
     );
 
     initial begin
-        $display("Test passed");
+      $write("*-* All Finished *-*\n");
+      $finish;
     end
 endmodule

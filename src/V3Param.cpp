@@ -2961,35 +2961,40 @@ public:
 void V3Param::param(AstNetlist* rootp) {
     UINFO(2, __FUNCTION__ << ":");
 
-    // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
-    //
-    // Keep s_executing=true for the entire flow (build, resolve, finalizeAST, V3Param).
-    // This prevents V3Width::iterateEditMoveDTypep from moving child dtypes to the
-    // global type table. Without this, widthParamsEdit calls during V3Param cloning
-    // would move BASICDTYPE children out of template VARs, causing cloneTree() to
-    // produce clones with dangling dtypep() pointers to the deleted template nodes.
-    V3LinkDotDepGraph::setExecuting(true);
+    if (V3LinkDotDepGraph::enabled()) {
+        // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
+        //
+        // Keep s_executing=true for the entire flow (build, resolve, finalizeAST, V3Param).
+        // This prevents V3Width::iterateEditMoveDTypep from moving child dtypes to the
+        // global type table. Without this, widthParamsEdit calls during V3Param cloning
+        // would move BASICDTYPE children out of template VARs, causing cloneTree() to
+        // produce clones with dangling dtypep() pointers to the deleted template nodes.
+        V3LinkDotDepGraph::setExecuting(true);
 
-    // Phase 1: Build complete dependency graph
-    // This captures ALL cells, params, types, $bits() expressions
-    UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
-    V3LinkDotDepGraph::build(rootp);
-    V3LinkDotIfaceCapture::dumpEntries("after DepGraph build");
+        // Phase 1: Build complete dependency graph
+        // This captures ALL cells, params, types, $bits() expressions
+        UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
+        V3LinkDotDepGraph::build(rootp);
+        V3LinkDotIfaceCapture::dumpEntries("after DepGraph build");
 
-    // Phase 2: Resolve all dependencies in topological order
-    // This computes all constants by propagating through dependency chains
-    UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
-    const int depSteps = V3LinkDotDepGraph::resolve();
-    UINFO(2, "DEPGRAPH: Resolved " << depSteps << " nodes" << endl);
+        // Phase 2: Resolve all dependencies in topological order
+        // This computes all constants by propagating through dependency chains
+        UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
+        const int depSteps = V3LinkDotDepGraph::resolve();
+        UINFO(2, "DEPGRAPH: Resolved " << depSteps << " nodes" << endl);
 
-    // Phase 3: Back-annotate resolved constants to AST
-    // This replaces expressions like $bits(var) with their computed constant values
-    UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
-    V3LinkDotDepGraph::finalizeAST();
+        // Phase 3: Back-annotate resolved constants to AST
+        // This replaces expressions like $bits(var) with their computed constant values
+        UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
+        V3LinkDotDepGraph::finalizeAST();
 
-    // DepGraph flow complete - turn off execution flag so V3Param's
-    // widthParamsEdit calls can move child dtypes to the type table normally.
-    V3LinkDotDepGraph::setExecuting(false);
+        // DepGraph flow complete - turn off execution flag so V3Param's
+        // widthParamsEdit calls can move child dtypes to the type table normally.
+        V3LinkDotDepGraph::setExecuting(false);
+    } else {
+        UINFO(2, "DEPGRAPH: disabled by default (use --enable-depgraph), "
+                 "skipping build/resolve/finalize" << endl);
+    }
 
     // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
     UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
