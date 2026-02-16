@@ -742,8 +742,11 @@ class ParamProcessor final {
                         const size_t lastDot = cp.rfind('.');
                         const string parentPath = (lastDot == string::npos) ? "" : cp.substr(0, lastDot);
                         const string lastComp = (lastDot == string::npos) ? cp : cp.substr(lastDot + 1);
+                        const size_t lastBraPos = lastComp.find("__BRA__");
+                        const string lastCompBase =
+                            (lastBraPos == string::npos) ? lastComp : lastComp.substr(0, lastBraPos);
                         // Last component must match the cell name being cloned
-                        if (lastComp != cloneCellp->name()) {
+                        if (lastComp != cloneCellp->name() && lastCompBase != cloneCellp->name()) {
                             UINFO(9, "iface capture skipping (lastComp mismatch): cellPath='"
                                       << cp << "' cloneCellPath='" << entry.cloneCellPath
                                       << "' lastComp='" << lastComp

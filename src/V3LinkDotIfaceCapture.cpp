@@ -26,6 +26,24 @@ V3LinkDotIfaceCapture::LocalparamMap V3LinkDotIfaceCapture::s_localparamMap{};
 bool V3LinkDotIfaceCapture::s_enabled = true;
 bool V3LinkDotIfaceCapture::s_explicitlyDisabled = false;
 
+namespace {
+AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep) {
+    for (AstNodeDType* curp = dtypep; curp; ) {
+        if (AstIfaceRefDType* const irefp = VN_CAST(curp, IfaceRefDType)) return irefp;
+        if (AstBracketArrayDType* const bracketp = VN_CAST(curp, BracketArrayDType)) {
+            curp = bracketp->subDTypep();
+            continue;
+        }
+        if (AstUnpackArrayDType* const unpackp = VN_CAST(curp, UnpackArrayDType)) {
+            curp = unpackp->subDTypep();
+            continue;
+        }
+        break;
+    }
+    return nullptr;
+}
+}  // namespace
+
 AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
     for (AstNode* curp = nodep; curp; curp = curp->backp()) {
         if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
@@ -228,24 +246,28 @@ AstNodeModule* V3LinkDotIfaceCapture::followCellPath(AstNodeModule* startModp,
             component = remaining.substr(0, dotPos);
             remaining = remaining.substr(dotPos + 1);
         }
+        const size_t braPos = component.find("__BRA__");
+        const string componentBase
+            = (braPos == string::npos) ? component : component.substr(0, braPos);
         AstNodeModule* nextModp = nullptr;
         for (AstNode* sp = curModp->stmtsp(); sp; sp = sp->nextp()) {
             if (AstCell* const cellp = VN_CAST(sp, Cell)) {
-                if (cellp->name() == component && cellp->modp()) {
+                if ((cellp->name() == component || cellp->name() == componentBase)
+                    && cellp->modp()) {
                     nextModp = cellp->modp();
                     break;
                 }
             }
             if (AstVar* const varp = VN_CAST(sp, Var)) {
-                if (varp->isIfaceRef() && varp->childDTypep()) {
+                if (varp->isIfaceRef() && varp->subDTypep()) {
                     string varBaseName = varp->name();
                     const size_t viftopPos = varBaseName.find("__Viftop");
                     if (viftopPos != string::npos) {
                         varBaseName = varBaseName.substr(0, viftopPos);
                     }
-                    if (varBaseName == component) {
+                    if (varBaseName == component || varBaseName == componentBase) {
                         if (AstIfaceRefDType* const irefp
-                            = VN_CAST(varp->childDTypep(), IfaceRefDType)) {
+                            = ifaceRefFromVarDType(varp->subDTypep())) {
                             AstIface* const ifacep = irefp->ifaceViaCellp();
                             if (ifacep) {
                                 nextModp = ifacep;
@@ -892,9 +914,9 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 }
                 // Follow IFACEREFDTYPE port connections
                 if (AstVar* const varp = VN_CAST(sp, Var)) {
-                    if (varp->isIfaceRef() && varp->childDTypep()) {
+                    if (varp->isIfaceRef() && varp->subDTypep()) {
                         if (AstIfaceRefDType* const irefp
-                            = VN_CAST(varp->childDTypep(), IfaceRefDType)) {
+                            = ifaceRefFromVarDType(varp->subDTypep())) {
                             AstIface* const ifacep = irefp->ifaceViaCellp();
                             if (ifacep && info.flat.insert(ifacep).second) {
                                 const string& origName = ifacep->origName().empty()
@@ -922,9 +944,9 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 if (cellp->modp() == childModp) return cellp->name();
             }
             if (AstVar* const varp = VN_CAST(sp, Var)) {
-                if (varp->isIfaceRef() && varp->childDTypep()) {
+                if (varp->isIfaceRef() && varp->subDTypep()) {
                     if (AstIfaceRefDType* const irefp
-                        = VN_CAST(varp->childDTypep(), IfaceRefDType)) {
+                        = ifaceRefFromVarDType(varp->subDTypep())) {
                         if (irefp->ifaceViaCellp() == childModp) return varp->name();
                     }
                 }
