@@ -1040,6 +1040,7 @@ class ParamProcessor final {
                 }
             });
         }
+
         // Assign parameters to the constants specified
         // DOES clone() so must be finished with module clonep() before here
         for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
@@ -1640,21 +1641,16 @@ class ParamProcessor final {
         cellInterfaceCleanup(pinsp, srcModp, longname /*ref*/, any_overrides /*ref*/,
                              ifaceRefRefs /*ref*/);
 
-        // Default params are resolved as overrides
-        // But first check if the default value is equivalent to a basic type (e.g., typedef int)
+        // Classes/modules with type parameters need specialization even when types match defaults.
+        // This is required for UVM parameterized classes. However, interfaces should NOT
+        // be specialized when type params match defaults (needed for nested interface ports).
         bool defaultsResolved = false;
-        if (!any_overrides) {
+        if (!any_overrides && !VN_IS(srcModp, Iface)) {
             for (AstPin* pinp = paramsp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
-                if (AstParamTypeDType* const modvarp = pinp->modPTypep()) {
-                    // Check if the default type parameter resolves to a basic type.
-                    // If so, don't treat it as an override - let the explicit basic type param match.
-                    // This ensures ClsTypedefParam#() with default typedef int matches ClsTypedefParam#(int).
-                    const AstNodeDType* defaultTypep = modvarp->skipRefToNonRefp();
-                    if (!VN_IS(defaultTypep, BasicDType)) {
-                        any_overrides = true;
-                        defaultsResolved = true;
-                        break;
-                    }
+                if (pinp->modPTypep()) {
+                    any_overrides = true;
+                    defaultsResolved = true;
+                    break;
                 }
             }
         }
