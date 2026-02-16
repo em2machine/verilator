@@ -130,6 +130,11 @@ public:
         string typedefOwnerModName;
         // Interface port variable for matching during cloning
         AstVar* ifacePortVarp = nullptr;
+        // Additional REFDTYPEs sharing the same key (e.g. from macro expansions
+        // that produce multiple $bits() references to the same interface typedef).
+        // The primary refp is stored above; extras are appended here so that
+        // retargeting fixes ALL of them, not just the last-writer-wins primary.
+        std::vector<AstRefDType*> extraRefps;
     };
 
     using CapturedMap = std::unordered_map<CaptureKey, CapturedEntry, CaptureKeyHash>;

@@ -864,11 +864,46 @@ class ParamProcessor final {
                                         UINFO(9, "iface capture direct retarget typedefp: "
                                                   << entry.refp->name()
                                                   << " in " << entry.ownerModp->name()
-                                                  << " -> " << newModp->name() << endl);
+                                                  << " -> " << newModp->name()
+                                                  << " (+" << entry.extraRefps.size() << " extras)"
+                                                  << endl);
                                         entry.refp->typedefp(tdp);
                                         if (tdp->subDTypep()) {
                                             entry.refp->refDTypep(tdp->subDTypep());
                                             entry.refp->dtypep(tdp->subDTypep());
+                                        }
+                                        for (AstRefDType* const xrefp : entry.extraRefps) {
+                                            xrefp->typedefp(tdp);
+                                            if (tdp->subDTypep()) {
+                                                xrefp->refDTypep(tdp->subDTypep());
+                                                xrefp->dtypep(tdp->subDTypep());
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        } else if (entry.paramTypep) {
+                            // PARAMTYPEDTYPE-based reference (e.g. $bits(wrap1.data_t))
+                            // Find the matching PARAMTYPEDTYPE in the clone by name.
+                            const string& ptName = entry.paramTypep->name();
+                            for (AstNode* sp = newModp->stmtsp(); sp;
+                                 sp = sp->nextp()) {
+                                if (AstParamTypeDType* const ptp
+                                        = VN_CAST(sp, ParamTypeDType)) {
+                                    if (ptp->name() == ptName) {
+                                        UINFO(9, "iface capture direct retarget paramTypep: "
+                                                  << entry.refp->name()
+                                                  << " in " << (actualOwnerp ? actualOwnerp->name() : "<null>")
+                                                  << " -> " << newModp->name()
+                                                  << " cellPath='" << entry.cellPath << "'"
+                                                  << " (+" << entry.extraRefps.size() << " extras)"
+                                                  << endl);
+                                        entry.refp->refDTypep(ptp);
+                                        entry.refp->dtypep(ptp);
+                                        for (AstRefDType* const xrefp : entry.extraRefps) {
+                                            xrefp->refDTypep(ptp);
+                                            xrefp->dtypep(ptp);
                                         }
                                         break;
                                     }
