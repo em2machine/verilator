@@ -2099,33 +2099,6 @@ class ParamVisitor final : public VNVisitor {
                     m_modp = modp;
                     m_ifacePortNames.clear();
                     m_ifaceInstNames.clear();
-
-                    // Deparameterize interface cells first so later module-body traversal
-                    // resolves typedef/refdtype usage against specialized interface modules,
-                    // not parameterized templates.
-                    for (AstNode* stmtp = modp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                        AstCell* const cellp = VN_CAST(stmtp, Cell);
-                        if (!cellp) continue;
-                        if (!VN_IS(cellp->modp(), Iface)) continue;
-                        if (cellp->paramsp() && cellParamsReferenceIfacePorts(cellp)) continue;
-                        AstNodeModule* const srcModp = cellp->modp();
-                        UINFO(9, "processWorkQ early-iface nodeDeparam cell='" << cellp->name()
-                                  << "' cellAddr=<" << AstNode::nodeAddr(cellp) << ">"
-                                  << " srcMod='" << (srcModp ? srcModp->name() : string("<null>"))
-                                  << "' srcSomeInstanceName='"
-                                  << (srcModp ? srcModp->someInstanceName() : string("<null>"))
-                                  << "' parentMod='" << modp->name() << "'"
-                                  << " parentSomeInstanceName='" << modp->someInstanceName()
-                                  << "'"
-                                  << endl);
-                        AstNodeModule* const newModp
-                            = m_processor.nodeDeparam(cellp, srcModp, m_modp,
-                                                      m_modp->someInstanceName());
-                        if (newModp && VN_IS(srcModp, Iface)) {
-                            logTemplateLeakRefs(modp, srcModp, "after early-iface nodeDeparam", cellp);
-                        }
-                    }
-
                     iterateChildren(modp);
                 }
             }
