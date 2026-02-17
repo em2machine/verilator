@@ -1002,79 +1002,220 @@ class ParamProcessor final {
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
-        // Fix cross-module REFDTYPE pointers in newModp using the IfaceCapture
-        // ledger's path-based entries.
+        // Fix cross-module REFDTYPE pointers in newModp.
         //
         // After cloneTree, some REFDTYPEs in newModp may have typedefp/refDTypep
         // pointing to a template module (dead) or a wrong sibling clone (live).
         // This happens because clonep() is last-writer-wins: the second clone of
         // an interface overwrites clonep() set by the first clone.
         //
-        // The fix uses the ledger's cellPath to disambiguate: each captured
-        // REFDTYPE knows which interface port it came from (e.g. "tgt_io" vs
-        // "mst_io").  We use followCellPath on the cloned module (whose
-        // interface port IfaceRefDTypes are already wired to the correct clones
-        // by the ifaceRefRefs fixup above) to resolve each REFDTYPE to the
-        // correct interface clone.  This avoids the pointer-based approach that
-        // picks the first match from the reachable set regardless of which
-        // interface port the REFDTYPE belongs to.
+        // Two-phase approach:
+        //   Phase A (path-based): For REFDTYPEs tracked in the IfaceCapture
+        //     ledger with a cellPath, use followCellPath to resolve to the
+        //     correct interface clone.  This disambiguates e.g. "tgt_io.req_t"
+        //     vs "mst_io.req_t" when both come from the same interface template.
+        //   Phase B (reachable-set fallback): For ALL remaining REFDTYPEs in
+        //     newModp whose targets point outside the reachable module set,
+        //     find the correct target by origName matching.  This handles
+        //     struct member types, nested dtypes, and other cross-module
+        //     references not tracked by the ledger.
         UASSERT_OBJ(newModp, srcModp, "newModp null before hierarchy fixup");
         if (V3LinkDotIfaceCapture::enabled()) {
-            const string cloneCP = VN_CAST(ifErrorp, Cell) ? VN_AS(ifErrorp, Cell)->name() : "";
-            const string srcName = srcModp->name();
+            // Phase A: path-based fixup using ledger entries
+            std::set<AstRefDType*> ledgerFixed;  // track which REFDTYPEs we fix via ledger
+            {
+                const string cloneCP
+                    = VN_CAST(ifErrorp, Cell) ? VN_AS(ifErrorp, Cell)->name() : "";
+                const string srcName = srcModp->name();
 
-            // Iterate clone entries that were just registered by propagateClone above.
-            // Each has a cellPath that tells us which interface port the REFDTYPE
-            // came from, so we can resolve to the correct interface clone.
-            V3LinkDotIfaceCapture::forEach(
-                [&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
-                    if (!entry.refp) return;
-                    if (entry.cloneCellPath != cloneCP) return;  // not our clone
-                    // Match entries owned by srcModp (template name)
-                    if (!entry.ownerModp || entry.ownerModp->name() != srcName) return;
-                    if (entry.cellPath.empty()) return;  // no path to resolve
+                UINFO(1, "FIXUP-A: srcName=" << srcName << " cloneCP='" << cloneCP
+                             << "' newModp=" << newModp->name() << endl);
 
-                    AstRefDType* const refp = entry.refp;
-                    AstNodeModule* const correctModp
-                        = V3LinkDotIfaceCapture::followCellPath(newModp, entry.cellPath);
-                    UINFO(9, "iface capture hierarchy fixup: "
-                                 << newModp->name() << " refp=" << refp->name() << " cellPath='"
-                                 << entry.cellPath << "' -> "
-                                 << (correctModp ? correctModp->name() : "<null>") << endl);
-                    if (!correctModp || correctModp->dead()) return;
+                V3LinkDotIfaceCapture::forEach(
+                    [&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
+                        if (!entry.refp) return;
+                        // Log entries that match srcName but may fail other filters
+                        if (entry.ownerModp && entry.ownerModp->name() == srcName) {
+                            const string& enm = srcName;
+                            if (enm.find("axi_to_axi_lite_wrap") != string::npos
+                                || enm.find("axi_dw_converter_wrap") != string::npos) {
+                                UINFO(1, "FIXUP-A-ENTRY: ref=" << entry.refp->name()
+                                             << " cellPath='" << entry.cellPath
+                                             << "' cloneCP='" << entry.cloneCellPath
+                                             << "' wantCP='" << cloneCP << "'"
+                                             << " match=" << (entry.cloneCellPath == cloneCP ? "Y" : "N")
+                                             << endl);
+                            }
+                        }
+                        if (entry.cloneCellPath != cloneCP) return;
+                        if (!entry.ownerModp || entry.ownerModp->name() != srcName) return;
+                        if (entry.cellPath.empty()) return;
 
-                    // Fix typedefp
-                    if (refp->typedefp()) {
-                        const string& tdName = refp->typedefp()->name();
-                        for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
-                            if (AstTypedef* const newTdp = VN_CAST(sp, Typedef)) {
-                                if (newTdp->name() == tdName) {
-                                    UINFO(9, "iface capture hierarchy fixup: "
-                                                 << newModp->name() << " refp=" << refp->name()
-                                                 << " typedefp -> " << correctModp->name() << endl);
-                                    refp->typedefp(newTdp);
-                                    break;
+                        AstRefDType* const refp = entry.refp;
+                        AstNodeModule* const correctModp
+                            = V3LinkDotIfaceCapture::followCellPath(newModp, entry.cellPath);
+                        UINFO(9, "iface capture path fixup: "
+                                     << newModp->name() << " refp=" << refp->name()
+                                     << " cellPath='" << entry.cellPath << "' -> "
+                                     << (correctModp ? correctModp->name() : "<null>") << endl);
+                        if (!correctModp || correctModp->dead()) return;
+
+                        bool fixed = false;
+                        if (refp->typedefp()) {
+                            const string& tdName = refp->typedefp()->name();
+                            for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstTypedef* const newTdp = VN_CAST(sp, Typedef)) {
+                                    if (newTdp->name() == tdName) {
+                                        UINFO(9, "  typedefp -> " << correctModp->name() << endl);
+                                        refp->typedefp(newTdp);
+                                        fixed = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
+                        if (refp->refDTypep()) {
+                            const string& rdName = refp->refDTypep()->name();
+                            const VNType rdType = refp->refDTypep()->type();
+                            for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
+                                    if (newDtp->name() == rdName && newDtp->type() == rdType) {
+                                        UINFO(9, "  refDTypep -> " << correctModp->name() << endl);
+                                        refp->refDTypep(newDtp);
+                                        fixed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (fixed) ledgerFixed.insert(refp);
+                    });
+            }
+
+            // Phase B: reachable-set fallback for REFDTYPEs not handled by ledger
+            std::set<AstNodeModule*> reachable;
+            reachable.insert(newModp);
+            std::function<void(AstNodeModule*)> collectReachable;
+            collectReachable = [&](AstNodeModule* modp) {
+                for (AstNode* sp = modp->stmtsp(); sp; sp = sp->nextp()) {
+                    if (AstCell* const cellp = VN_CAST(sp, Cell)) {
+                        AstNodeModule* const cellModp = cellp->modp();
+                        if (cellModp && reachable.insert(cellModp).second) {
+                            collectReachable(cellModp);
+                        }
                     }
-                    // Fix refDTypep
-                    if (refp->refDTypep()) {
+                }
+            };
+            for (const auto& pair : ifaceRefRefs) {
+                AstIface* const pinIfacep = pair.second->ifaceViaCellp();
+                if (pinIfacep && reachable.insert(pinIfacep).second) {
+                    collectReachable(pinIfacep);
+                }
+            }
+            collectReachable(newModp);
+
+            UINFO(9,
+                  "iface capture hierarchy fixup: newModp=" << newModp->name() << " reachable={");
+            for (AstNodeModule* const rModp : reachable) { UINFO(9, " " << rModp->name()); }
+            UINFO(9, " }" << endl);
+
+            // Walk only direct statement-level REFDTYPEs in newModp.
+            // Do NOT use newModp->foreach which recurses into nested type
+            // subtrees (struct members, union members, etc.) — rewriting
+            // pointers inside those can create dangling dtypep links that
+            // trigger V3Broken.
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                AstRefDType* const refp = VN_CAST(stmtp, RefDType);
+                if (!refp) continue;
+                // Skip REFDTYPEs already fixed by path-based Phase A
+                if (ledgerFixed.count(refp)) continue;
+
+                // Fix typedefp pointing outside reachable set
+                if (refp->typedefp()) {
+                    AstNodeModule* const tdOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(refp->typedefp());
+                    if (tdOwnerp && tdOwnerp != newModp && !VN_IS(tdOwnerp, Package)
+                        && reachable.find(tdOwnerp) == reachable.end()) {
+                        const string& tdName = refp->typedefp()->name();
+                        const string& wrongOrigName = tdOwnerp->origName().empty()
+                                                          ? tdOwnerp->name()
+                                                          : tdOwnerp->origName();
+                        bool found = false;
+                        for (AstNodeModule* const rModp : reachable) {
+                            if (rModp == newModp) continue;
+                            const string& rOrigName
+                                = rModp->origName().empty() ? rModp->name() : rModp->origName();
+                            if (rOrigName != wrongOrigName) continue;
+                            for (AstNode* sp = rModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstTypedef* const newTdp = VN_CAST(sp, Typedef)) {
+                                    if (newTdp->name() == tdName) {
+                                        UINFO(9, "iface capture reachable fixup: "
+                                                     << newModp->name() << " refp=" << refp->name()
+                                                     << " typedefp " << tdOwnerp->name() << " -> "
+                                                     << rModp->name() << endl);
+                                        refp->typedefp(newTdp);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (found) break;
+                        }
+                        if (!found) {
+                            UINFO(4, "iface capture hierarchy fixup WARNING: "
+                                         << newModp->name() << " refp=" << refp->name()
+                                         << " typedefp owner=" << tdOwnerp->name()
+                                         << (tdOwnerp->dead() ? " (dead)" : " (live)") << " name='"
+                                         << tdName << "' not found in reachable set"
+                                         << " (reachable.size=" << reachable.size() << ")"
+                                         << endl);
+                        }
+                    }
+                }
+                // Fix refDTypep pointing outside reachable set
+                if (refp->refDTypep()) {
+                    AstNodeModule* const rdOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(refp->refDTypep());
+                    if (rdOwnerp && rdOwnerp != newModp && !VN_IS(rdOwnerp, Package)
+                        && reachable.find(rdOwnerp) == reachable.end()) {
                         const string& rdName = refp->refDTypep()->name();
                         const VNType rdType = refp->refDTypep()->type();
-                        for (AstNode* sp = correctModp->stmtsp(); sp; sp = sp->nextp()) {
-                            if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
-                                if (newDtp->name() == rdName && newDtp->type() == rdType) {
-                                    UINFO(9, "iface capture hierarchy fixup: "
-                                                 << newModp->name() << " refp=" << refp->name()
-                                                 << " refDTypep -> " << correctModp->name() << endl);
-                                    refp->refDTypep(newDtp);
-                                    break;
+                        const string& wrongOrigName = rdOwnerp->origName().empty()
+                                                          ? rdOwnerp->name()
+                                                          : rdOwnerp->origName();
+                        bool found = false;
+                        for (AstNodeModule* const rModp : reachable) {
+                            if (rModp == newModp) continue;
+                            const string& rOrigName
+                                = rModp->origName().empty() ? rModp->name() : rModp->origName();
+                            if (rOrigName != wrongOrigName) continue;
+                            for (AstNode* sp = rModp->stmtsp(); sp; sp = sp->nextp()) {
+                                if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
+                                    if (newDtp->name() == rdName && newDtp->type() == rdType) {
+                                        UINFO(9, "iface capture reachable fixup: "
+                                                     << newModp->name() << " refp=" << refp->name()
+                                                     << " refDTypep " << rdOwnerp->name() << " -> "
+                                                     << rModp->name() << endl);
+                                        refp->refDTypep(newDtp);
+                                        found = true;
+                                        break;
+                                    }
                                 }
                             }
+                            if (found) break;
+                        }
+                        if (!found) {
+                            UINFO(4, "iface capture hierarchy fixup WARNING: "
+                                         << newModp->name() << " refp=" << refp->name()
+                                         << " refDTypep owner=" << rdOwnerp->name()
+                                         << (rdOwnerp->dead() ? " (dead)" : " (live)") << " name='"
+                                         << rdName << "' not found in reachable set"
+                                         << " (reachable.size=" << reachable.size() << ")"
+                                         << endl);
                         }
                     }
-                });
+                }
+            }
         }
 
         // Assign parameters to the constants specified

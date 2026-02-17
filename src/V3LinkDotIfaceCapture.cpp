@@ -889,6 +889,79 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                 }
                 typeTableFixed += fixDeadRefs(refp, containingModp, "type table");
             });
+
+            // Also fix AstMemberDType and other non-RefDType nodes whose
+            // dtypep() points to a dead module.  V3Broken checks dtypep()
+            // on ALL nodes, not just AstRefDType.
+            nodep->foreach([&](AstMemberDType* memberp) {
+                if (!memberp->dtypep()) return;
+                AstNodeModule* const dtOwnerp = findOwnerModule(memberp->dtypep());
+                if (!dtOwnerp || !dtOwnerp->dead()) return;
+                // Try to find the clone of the dead module
+                AstNodeModule* cloneModp = nullptr;
+                for (AstNode* mnodep = v3Global.rootp()->modulesp(); mnodep;
+                     mnodep = mnodep->nextp()) {
+                    if (AstNodeModule* const modp = VN_CAST(mnodep, NodeModule)) {
+                        if (modp->dead()) continue;
+                        AstNodeModule* const found
+                            = findCloneViaHierarchy(modp, dtOwnerp, 0);
+                        if (found) {
+                            cloneModp = found;
+                            break;
+                        }
+                    }
+                }
+                if (cloneModp) {
+                    // Find matching type by name in the clone
+                    const string& dtName = memberp->dtypep()->prettyName();
+                    for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
+                        if (AstNodeDType* const newDtp = VN_CAST(sp, NodeDType)) {
+                            if (newDtp->prettyName() == dtName) {
+                                UINFO(9, "iface capture type table MEMBERDTYPE fixup: "
+                                             << memberp->name() << " dtypep "
+                                             << dtOwnerp->name() << " -> "
+                                             << cloneModp->name() << endl);
+                                memberp->dtypep(newDtp);
+                                ++typeTableFixed;
+                                return;
+                            }
+                        }
+                    }
+                    // Try typedef children
+                    for (AstNode* sp = cloneModp->stmtsp(); sp; sp = sp->nextp()) {
+                        if (AstTypedef* const tdp = VN_CAST(sp, Typedef)) {
+                            if (tdp->subDTypep()
+                                && tdp->subDTypep()->prettyName() == dtName) {
+                                UINFO(9, "iface capture type table MEMBERDTYPE fixup (via typedef): "
+                                             << memberp->name() << " dtypep "
+                                             << dtOwnerp->name() << " -> "
+                                             << cloneModp->name() << endl);
+                                memberp->dtypep(tdp->subDTypep());
+                                ++typeTableFixed;
+                                return;
+                            }
+                        }
+                    }
+                }
+                // If we can't find the clone, try deriving from the member's
+                // subDTypep which may have been fixed already
+                if (memberp->subDTypep()) {
+                    AstNodeDType* const subDtp = memberp->subDTypep();
+                    AstNodeModule* const subOwnerp = findOwnerModule(subDtp);
+                    if (!subOwnerp || !subOwnerp->dead()) {
+                        // subDTypep is live — use it as dtypep
+                        UINFO(9, "iface capture type table MEMBERDTYPE fixup (from subDTypep): "
+                                     << memberp->name() << " dtypep "
+                                     << dtOwnerp->name() << " -> subDTypep" << endl);
+                        memberp->dtypep(subDtp);
+                        ++typeTableFixed;
+                        return;
+                    }
+                }
+                UINFO(4, "iface capture type table MEMBERDTYPE WARNING: "
+                             << memberp->name() << " dtypep points to dead "
+                             << dtOwnerp->name() << " - could not fix" << endl);
+            });
         }
     }
 
