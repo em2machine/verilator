@@ -1059,6 +1059,17 @@ class WidthVisitor final : public VNVisitor {
             }
             UASSERT_OBJ(nodep->dtypep(), nodep, "dtype wasn't set");  // by V3WidthSel
 
+            // Suppress SELRANGE in unspecialized parameterized templates where
+            // parameter-dependent widths haven't been resolved yet.
+            bool inParameterizedTemplate = false;
+            for (AstNode* ap = nodep; ap; ap = ap->backp()) {
+                if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
+                    inParameterizedTemplate
+                        = modp->hasGParam() && modp->name().find("__") == string::npos;
+                    break;
+                }
+            }
+
             if (VN_IS(nodep->lsbp(), Const) && nodep->msbConst() < nodep->lsbConst()) {
                 // Likely impossible given above width check
                 nodep->v3warn(E_UNSUPPORTED,
@@ -1071,7 +1082,7 @@ class WidthVisitor final : public VNVisitor {
                 nodep->lsbp()->replaceWith(new AstConst{nodep->lsbp()->fileline(), 0});
             }
             // We're extracting, so just make sure the expression is at least wide enough.
-            if (nodep->fromp()->width() < width) {
+            if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
                 nodep->v3warn(SELRANGE, "Extracting " << width << " bits from only "
                                                       << nodep->fromp()->width() << " bit number");
                 // Extend it.
@@ -1126,7 +1137,7 @@ class WidthVisitor final : public VNVisitor {
                 AstNodeVarRef* lrefp = AstNodeVarRef::varRefLValueRecurse(nodep);
                 if (m_doGenerate) {
                     UINFO(5, "Selection index out of range inside generate");
-                } else {
+                } else if (!inParameterizedTemplate) {
                     nodep->v3warn(SELRANGE, "Selection index out of range: "
                                                 << nodep->msbConst() << ":" << nodep->lsbConst()
                                                 << " outside " << frommsb << ":" << fromlsb);
@@ -1220,11 +1231,22 @@ class WidthVisitor final : public VNVisitor {
                 if (VN_IS(nodep->bitp(), Const)
                     && (VN_AS(nodep->bitp(), Const)->toSInt() > (frommsb - fromlsb)
                         || VN_AS(nodep->bitp(), Const)->toSInt() < 0)) {
-                    nodep->v3warn(SELRANGE,
-                                  "Selection index out of range: "
-                                      << (VN_AS(nodep->bitp(), Const)->toSInt() + fromlsb)
-                                      << " outside " << frommsb << ":" << fromlsb);
-                    UINFO(1, "    Related node: " << nodep);
+                    // Suppress in unspecialized parameterized templates
+                    bool inParameterizedTemplate = false;
+                    for (AstNode* ap = nodep; ap; ap = ap->backp()) {
+                        if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
+                            inParameterizedTemplate
+                                = modp->hasGParam() && modp->name().find("__") == string::npos;
+                            break;
+                        }
+                    }
+                    if (!inParameterizedTemplate) {
+                        nodep->v3warn(SELRANGE,
+                                      "Selection index out of range: "
+                                          << (VN_AS(nodep->bitp(), Const)->toSInt() + fromlsb)
+                                          << " outside " << frommsb << ":" << fromlsb);
+                        UINFO(1, "    Related node: " << nodep);
+                    }
                 }
                 widthCheckSized(nodep, "Extract Range", nodep->bitp(), selwidthDTypep, EXTEND_EXP,
                                 false /*NOWARN*/);
