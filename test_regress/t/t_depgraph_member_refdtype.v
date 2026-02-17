@@ -11,22 +11,22 @@
 typedef logic [7:0] byte_t;
 
 typedef struct packed {
-    byte_t a;
-    byte_t b;
+  byte_t a;
+  byte_t b;
 } pair_t;
 
 module t_depgraph_member_refdtype;
-    pair_t p;
-    logic [15:0] flat;
+  pair_t p;
+  logic [15:0] flat;
 
-    assign flat = {p.a, p.b};
+  assign flat = {p.a, p.b};
 
-    initial begin
-        #1;
-        `checkd($bits(byte_t), 8);
-        `checkd($bits(pair_t), 16);
-        `checkd($bits(flat), 16);
-        $write("*-* All Finished *-*\n");
-        $finish;
-    end
+  initial begin
+    #1;
+    `checkd($bits(byte_t), 8);
+    `checkd($bits(pair_t), 16);
+    `checkd($bits(flat), 16);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule

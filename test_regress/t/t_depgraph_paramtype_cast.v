@@ -23,7 +23,6 @@ module TestMod;
   import TestPkg::*;
 
   initial begin
-    $display("STATUS = %x", STATUS);
     `checkd(STATUS, 'ha5);
     $write("*-* All Finished *-*\n");
     $finish;

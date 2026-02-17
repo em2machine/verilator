@@ -9,16 +9,16 @@
 // verilog_format: on
 
 package a_pkg;
-   typedef struct packed {
-      int unsigned a;
-   } cfg_t;
+  typedef struct packed {
+    int unsigned a;
+  } cfg_t;
 endpackage
 
 interface depgraph_if #(a_pkg::cfg_t cfg=0)();
-    typedef logic [cfg.a-1:0] byte_t;
-    typedef struct packed {
-        byte_t a;
-    } pair_t;
+  typedef logic [cfg.a-1:0] byte_t;
+  typedef struct packed {
+      byte_t a;
+  } pair_t;
 endinterface
 
 module a_mod(
@@ -36,7 +36,6 @@ module a_mod(
 endmodule
 
 module t();
-
   localparam a_pkg::cfg_t cfg = '{
     a: 8
   };

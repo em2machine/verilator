@@ -9,40 +9,40 @@
 // verilog_format: on
 
 package depgraph_pkg;
-   typedef struct packed {
-      int unsigned a;
-   } cfg_t;
+  typedef struct packed {
+    int unsigned a;
+  } cfg_t;
 endpackage
 
 interface depgraph_if #(depgraph_pkg::cfg_t cfg=0)();
-    typedef logic [cfg.a-1:0] byte_t;
-    typedef struct packed {
-        byte_t a;
-        byte_t b;
-    } pair_t;
+  typedef logic [cfg.a-1:0] byte_t;
+  typedef struct packed {
+    byte_t a;
+    byte_t b;
+  } pair_t;
 endinterface
 
 module t_depgraph_member_refdtype_pkg_iface;
-    localparam depgraph_pkg::cfg_t cfg = '{
-      8
-    };
+  localparam depgraph_pkg::cfg_t cfg = '{
+    a: 8
+  };
 
-    depgraph_if #(cfg) ifc();
+  depgraph_if #(cfg) ifc();
 
-    typedef ifc.byte_t byte_t;
-    typedef ifc.pair_t pair_t;
+  typedef ifc.byte_t byte_t;
+  typedef ifc.pair_t pair_t;
 
-    pair_t p;
-    logic [15:0] flat;
+  pair_t p;
+  logic [15:0] flat;
 
-    assign flat = {p.a, p.b};
+  assign flat = {p.a, p.b};
 
-    initial begin
-        #1;
-        `checkd($bits(byte_t), 8);
-        `checkd($bits(pair_t), 16);
-        `checkd($bits(flat), 16);
-        $write("*-* All Finished *-*\n");
-        $finish;
-    end
+  initial begin
+    #1;
+    `checkd($bits(byte_t), 8);
+    `checkd($bits(pair_t), 16);
+    `checkd($bits(flat), 16);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule

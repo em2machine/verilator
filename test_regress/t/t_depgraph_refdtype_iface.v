@@ -13,25 +13,25 @@
 // verilog_format: on
 
 interface depgraph_if;
-    typedef logic [3:0] nibble_t;
+  typedef logic [3:0] nibble_t;
 endinterface
 
 module depgraph_top;
-    depgraph_if ifc();
+  depgraph_if ifc();
 
-    typedef ifc.nibble_t nibble_t;
+  typedef ifc.nibble_t nibble_t;
 
-    nibble_t a;
-    nibble_t b;
-    logic [3:0] sum;
+  nibble_t a;
+  nibble_t b;
+  logic [3:0] sum;
 
-    assign sum = a + b;
+  assign sum = a + b;
 
-    initial begin
-        #1;
-        `checkd($bits(nibble_t), 4);
-        `checkd($bits(sum), 4);
-        $write("*-* All Finished *-*\n");
-        $finish;
-    end
+  initial begin
+    #1;
+    `checkd($bits(nibble_t), 4);
+    `checkd($bits(sum), 4);
+    $write("*-* All Finished *-*\n");
+    $finish;
+  end
 endmodule

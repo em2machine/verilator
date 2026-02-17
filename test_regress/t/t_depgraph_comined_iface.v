@@ -23,11 +23,8 @@ typedef struct packed {
   int unsigned IdBits;
 } axi_cfg_t;
 
-// ============================================================================
 // INNERMOST: Parameterized interface with typedefs
-// ============================================================================
 interface axi4_if #(parameter axi_cfg_t cfg = 0)();
-
   localparam int unsigned AddrBits = cfg.AddrBits * 2;
   localparam int unsigned DataBits = cfg.DataBits * 2;
   localparam int unsigned IdBits = cfg.IdBits * 2;
@@ -50,9 +47,7 @@ interface axi4_if #(parameter axi_cfg_t cfg = 0)();
   r_chan_t  r;
 endinterface
 
-// ============================================================================
 // MIDDLE: Interface that wraps axi4_if and re-exports its typedefs
-// ============================================================================
 interface tlb_io_if #(parameter axi_cfg_t axi_cfg = 0)();
   axi4_if #(.cfg(axi_cfg)) axi_tlb_io();
 
@@ -61,10 +56,8 @@ interface tlb_io_if #(parameter axi_cfg_t axi_cfg = 0)();
   typedef axi_tlb_io.ar_chan_t ar_chan_t;
 endinterface
 
-// ============================================================================
 // OUTER: Interface with TWO SIBLING tlb_io_if instances with DIFFERENT params
 // This is the BLENDED pattern: sibling cells + nested chains
-// ============================================================================
 interface cca_io_if #(
   parameter axi_cfg_t axi_cfg_a = 0,
   parameter axi_cfg_t axi_cfg_b = 0
@@ -78,10 +71,8 @@ interface cca_io_if #(
   typedef tlb_io_b.r_chan_t r_chan_b_t;
 endinterface
 
-// ============================================================================
 // MODULE: Accesses typedefs from BOTH sibling nested chains via interface port
 // This is the CRITICAL test - must distinguish between tlb_io_a and tlb_io_b
-// ============================================================================
 module cca_xbar (
   cca_io_if cca_io
 );
@@ -111,9 +102,7 @@ module cca_xbar (
   end
 endmodule
 
-// ============================================================================
 // TOP MODULE
-// ============================================================================
 module t();
   localparam axi_cfg_t cfg_a = '{AddrBits: 32, DataBits: 64, IdBits: 4};
   localparam axi_cfg_t cfg_b = '{AddrBits: 40, DataBits: 128, IdBits: 8};

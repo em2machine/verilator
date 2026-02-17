@@ -2467,7 +2467,7 @@ class ParamVisitor final : public VNVisitor {
             if (!nodep->valuep() && !VN_IS(m_modp, Class)) {
                 nodep->v3error("Parameter without default value is never given value"
                                << " (IEEE 1800-2023 6.20.1): " << nodep->prettyNameQ());
-            } else {
+            } else if (nodep->valuep()) {
                 // In visit(AstVar*) for localparams, check if expression contains VARXREF
                 // to another localparam (not parameter). Parameters are already const,
                 // but localparams may not be evaluated yet.
