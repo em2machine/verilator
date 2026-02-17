@@ -11,6 +11,9 @@
 // - uvm_event_pool = typedef uvm_object_string_pool#(uvm_event#(uvm_object))
 // - Each has internal type_id typedef to uvm_object_registry#(...)
 
+/* verilator lint_off DECLFILENAME */
+/* verilator lint_off UNUSEDSIGNAL */
+
 module t;
   initial begin
     pkg::test_class tc = new();
