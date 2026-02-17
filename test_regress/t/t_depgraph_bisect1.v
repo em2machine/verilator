@@ -1,10 +1,12 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
 // DESCRIPTION: Minimal test for sibling interface typedef resolution
 // This is the SIMPLEST case that demonstrates the t_lparam_dep_iface10 failure pattern:
 // - Two sibling cells of the same interface type with DIFFERENT parameters
 // - A module that accesses typedefs from BOTH siblings
 //
-// This file is placed into the Public Domain, for any use, without warranty.
-// SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
 `define stop $stop

@@ -1796,9 +1796,9 @@ public:
     DepExprVisitor(AstNode* exprp, V3LinkDotDepGraph::DepNode* depNode,
                    const string& cellPathOverride = "",
                    bool hasCellPathOverride = false)
-        : m_depNode(depNode)
-        , m_cellPathOverride(cellPathOverride)
-        , m_hasCellPathOverride(hasCellPathOverride) {
+        : m_depNode{depNode}
+        , m_cellPathOverride{cellPathOverride}
+        , m_hasCellPathOverride{hasCellPathOverride} {
         if (exprp) iterateConst(exprp);
     }
 };

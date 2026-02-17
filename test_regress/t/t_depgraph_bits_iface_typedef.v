@@ -1,4 +1,9 @@
-// Test for $bits() of interface typedef used as parameter value
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
+// DESCRIPTION: Test for $bits() of interface typedef used as parameter value
 // This reproduces the issue from axis_upsizer.sv:186
 // The issue: $bits(op_pkt_t) where op_pkt_t is a typedef from an interface port
 // can't be converted to constant because the PARAMTYPEDTYPE's dtype isn't resolved
