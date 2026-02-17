@@ -3529,7 +3529,7 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
                 if (AstRefDType* const origRdtp = VN_CAST(origMemp->subDTypep(), RefDType)) {
                     if (AstRefDType* const cloneRdtp = VN_CAST(cloneMemp->subDTypep(), RefDType)) {
                         if (origRdtp == cloneRdtp) {
-                            UINFO(0, "DEPGRAPH: FATAL clone RefDType '"
+                            UINFO(9, "DEPGRAPH: FATAL clone RefDType '"
                                          << origRdtp->name()
                                          << "' is SAME OBJECT as original! ptr="
                                          << cvtToHex(origRdtp) << endl);
@@ -3550,7 +3550,7 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
             while (origMemp && cloneMemp) {
                 if (origMemp->subDTypep() && cloneMemp->subDTypep()) {
                     if (origMemp->subDTypep() == cloneMemp->subDTypep()) {
-                        UINFO(0, "DEPGRAPH: WARNING member '"
+                        UINFO(9, "DEPGRAPH: WARNING member '"
                                      << origMemp->name() << "' shares subDTypep with original! "
                                      << "ptr=" << cvtToHex(origMemp->subDTypep()) << endl);
                     }
@@ -3566,7 +3566,7 @@ static AstNodeDType* resolveParameterizedDType(AstNodeDType* dtypep,
         for (AstMemberDType* memp = cloneSdtp->membersp(); memp;
              memp = VN_AS(memp->nextp(), MemberDType)) {
             if (AstRefDType* const rdtp = VN_CAST(memp->subDTypep(), RefDType)) {
-                UINFO(0, "DEPGRAPH: clone RefDType '"
+                UINFO(9, "DEPGRAPH: clone RefDType '"
                              << rdtp->name() << "' typedefp="
                              << (rdtp->typedefp() ? rdtp->typedefp()->name() : "<null>")
                              << " typedefpBackp="
