@@ -866,8 +866,9 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     for (AstNode* nodep = v3Global.rootp()->modulesp(); nodep; nodep = nodep->nextp()) {
         if (AstNodeModule* const modp = VN_CAST(nodep, NodeModule)) {
             if (modp->dead()) continue;
+            const string modName = modp->name();
             modp->foreach([&](AstRefDType* refp) {
-                moduleFixed += fixDeadRefs(refp, modp, modp->name().c_str());
+                moduleFixed += fixDeadRefs(refp, modp, modName.c_str());
             });
         }
     }
