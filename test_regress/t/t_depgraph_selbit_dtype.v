@@ -1,3 +1,8 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // Test for COND node dtype not being set when using type parameters
 // This reproduces the issue from spill_register_flushable.sv:95
 // The issue involves type parameters used in ternary expressions

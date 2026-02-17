@@ -1,11 +1,13 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // DESCRIPTION: Verilator: Test for REQUIREDTYPE resolution with default type parameters
 //
 // This test verifies that modules with `parameter type T = logic` work correctly
 // when instantiated WITHOUT overriding the type parameter (using the default).
 //
-// This file ONLY is placed under the Creative Commons Public Domain, for
-// any use, without warranty, 2025 by Wilson Snyder.
-// SPDX-License-Identifier: CC0-1.0
 
 // Simple type flop - parameterized by type T with default = logic
 module tflop #(parameter type T = logic) (

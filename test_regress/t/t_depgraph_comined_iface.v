@@ -1,3 +1,7 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
 // DESCRIPTION: Verilator: TRULY BLENDED test for interface typedef resolution
 // This test BLENDS both patterns into a single interacting structure:
 // - Sibling cells (like t_lparam_dep_iface10)
@@ -7,9 +11,6 @@
 // The key test: A module accesses typedefs from TWO sibling nested interface
 // chains, and each must resolve to the correct parameterized type.
 //
-// This file ONLY is placed into the Public Domain, for any use,
-// without warranty, 2026
-// SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
 `define stop $stop

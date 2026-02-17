@@ -1922,37 +1922,17 @@ class ParamProcessor final {
         nodep->classOrPackagep(newModp);  // Might be unchanged if not cloned (newModp == srcModp)
 
         // If this ClassOrPackageRef is a child of a RefDType (e.g., typedef class#(T)::member_t),
-        // resolve the RefDType's typedef to point to the typedef inside the specialized class.
-        // This must also retarget existing typedefp that still points at the original class.
+        // resolve the RefDType's typedef to point to the typedef inside the specialized class
         AstRefDType* const refDTypep = VN_CAST(nodep->backp(), RefDType);
         AstClass* const newClassp = refDTypep ? VN_CAST(newModp, Class) : nullptr;
-        if (newClassp) {
-            AstTypedef* typedefp = VN_CAST(m_memberMap.findMember(newClassp, refDTypep->name()), Typedef);
-            if (!typedefp) {
-                for (AstNode* stmtp = newClassp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
-                        if (tdp->name() == refDTypep->name()) {
-                            typedefp = tdp;
-                            break;
-                        }
-                    }
-                }
-            }
-            UINFO(5, "classRefDeparam: ref=" << refDTypep
-                                              << " name=" << refDTypep->name()
-                                              << " old=" << refDTypep->typedefp()
-                                              << " newClass=" << newClassp
-                                              << " found=" << typedefp << endl);
-            if (typedefp && refDTypep->typedefp() != typedefp) {
+        if (newClassp && !refDTypep->typedefp() && !refDTypep->subDTypep()) {
+            if (AstTypedef* const typedefp
+                = VN_CAST(m_memberMap.findMember(newClassp, refDTypep->name()), Typedef)) {
                 refDTypep->typedefp(typedefp);
                 refDTypep->classOrPackagep(newClassp);
                 UINFO(9, "Resolved parameterized class typedef: " << refDTypep->name() << " -> "
                                                                   << typedefp << " in "
                                                                   << newClassp->name());
-            }
-            if (refDTypep->classOrPackageOpp() == nodep) {
-                nodep->unlinkFrBack();
-                refDTypep->classOrPackageOpp(nullptr);
             }
         }
         return newModp;

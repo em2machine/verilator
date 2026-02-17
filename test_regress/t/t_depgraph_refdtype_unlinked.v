@@ -1,3 +1,8 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // Test case for REFDTYPE not linked to type
 // This reproduces the error where a REFDTYPE in a parameter expression
 // is not properly linked to its type after DepGraph resolution

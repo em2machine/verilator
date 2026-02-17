@@ -1,3 +1,8 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // DESCRIPTION: Verilator: Test for specialized interface typedef fix
 //
 // This test verifies that when parameterized interfaces are specialized,
@@ -7,10 +12,6 @@
 //
 // This file is part of the Verilator regression test suite.
 //
-// Copyright 2003-2026 by Wilson Snyder. This program is free software; you can
-// redistribute it and/or modify it under the terms of either the GNU Lesser
-// General Public License Version 3 or the Perl Artistic License Version 2.0.
-// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
 // Parameterized interface with typedefs that depend on the parameter
 interface types_if #(parameter int NUM_THREADS = 1)();
@@ -45,6 +46,7 @@ module t;
         types_inst.current_beat.valid = 1'b1;
         types_inst.current_beat.d.raw = 256'hDEADBEEF;
         $write("*-* All Coverage Coverage *-*\n");
+        $write("*-* All Finished *-*\n");
         $finish;
     end
 endmodule

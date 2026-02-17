@@ -1,11 +1,13 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // DESCRIPTION: Verilator: Test nested interface typedef access
 // This replicates the pattern from a much larger design that was
 // failing with the localparam changes - accessing a typedef from
 // a doubly-nested interface
 //
-// This file ONLY is placed into the Public Domain, for any use,
-// without warranty, 2026
-// SPDX-License-Identifier: CC0-1.0
 
 // verilog_format: off
 `define stop $stop

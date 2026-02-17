@@ -1,3 +1,8 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
+
 // DESCRIPTION: Verilator: Test for cloned RefDType classOrPackagep fix
 //
 // This test verifies that when parameterized classes are cloned, the RefDType
@@ -6,10 +11,6 @@
 //
 // This file is part of the Verilator regression test suite.
 //
-// Copyright 2003-2026 by Wilson Snyder. This program is free software; you can
-// redistribute it and/or modify it under the terms of either the GNU Lesser
-// General Public License Version 3 or the Perl Artistic License Version 2.0.
-// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
 
 // A registry class that returns its own type
 class uvm_object_registry #(type T = int, string Tname = "<unknown>");
@@ -73,6 +74,7 @@ module t;
         if (event_reg != null && queue_reg != null) begin
             $write("*-* All Coverage Coverage *-*\n");
         end
+        $write("*-* All Finished *-*\n");
         $finish;
     end
 endmodule
