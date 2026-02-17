@@ -933,9 +933,8 @@ const AstNodeDType* AstNodeDType::skipRefIterp(bool skipConst, bool skipEnum,
     {
         const AstNodeDType* chainp = this;
         for (int i = 0; i < 20 && chainp; ++i) {
-            UINFO(0, "  chain[" << i << "]=" << chainp << " type="
-                                << chainp->prettyTypeName() << " sub=" << chainp->subDTypep()
-                                << "\n");
+            UINFO(0, "  chain[" << i << "]=" << chainp << " type=" << chainp->prettyTypeName()
+                                << " sub=" << chainp->subDTypep() << "\n");
             chainp = chainp->subDTypep();
         }
     }
@@ -2374,15 +2373,15 @@ AstNodeDType* AstRefDType::subDTypep() const VL_MT_STABLE {
     auto debug = []() -> int { return V3Error::debugDefault(); };  // EOM
     if (typedefp()) {
         if (VN_DELETED(typedefp()) || VN_DELETED(typedefp()->backp())) {
-            UINFO(5, "DEPGRAPH: RefDType has deleted typedefp=" << typedefp()
-                      << " name=" << name() << " refDTypep=" << refDTypep()
-                      << " this=" << this << endl);
+            UINFO(5, "DEPGRAPH: RefDType has deleted typedefp=" << typedefp() << " name=" << name()
+                                                                << " refDTypep=" << refDTypep()
+                                                                << " this=" << this << endl);
             return nullptr;
         }
         if (!typedefp()->backp()) {  // EOM
-            UINFO(5, "DEPGRAPH: RefDType has dangling typedefp=" << typedefp()
-                      << " name=" << name() << " refDTypep=" << refDTypep()
-                      << " this=" << this << endl);  // EOM
+            UINFO(5, "DEPGRAPH: RefDType has dangling typedefp="
+                         << typedefp() << " name=" << name() << " refDTypep=" << refDTypep()
+                         << " this=" << this << endl);  // EOM
         }
         return typedefp()->subDTypep();
     }

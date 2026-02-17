@@ -71,13 +71,13 @@ public:
     // every captured REFDTYPE.  You cannot have two typedefs with the same
     // name in the same module, so this tuple is unique.
     struct CaptureKey final {
-        string ownerModName;   // Module containing the REFDTYPE (e.g. "cca_xbar")
-        string refName;        // REFDTYPE name (e.g. "r_chan_t")
-        string cellPath;       // Template path (e.g. "cca_io.tlb_io")
+        string ownerModName;  // Module containing the REFDTYPE (e.g. "cca_xbar")
+        string refName;  // REFDTYPE name (e.g. "r_chan_t")
+        string cellPath;  // Template path (e.g. "cca_io.tlb_io")
         string cloneCellPath;  // Instance path (e.g. "xbar1"), empty for template
         bool operator==(const CaptureKey& o) const {
-            return ownerModName == o.ownerModName && refName == o.refName
-                   && cellPath == o.cellPath && cloneCellPath == o.cloneCellPath;
+            return ownerModName == o.ownerModName && refName == o.refName && cellPath == o.cellPath
+                   && cloneCellPath == o.cloneCellPath;
         }
     };
     struct CaptureKeyHash final {
@@ -141,8 +141,8 @@ public:
 
     // Captured localparam expression for interfaces/classes
     struct CapturedIfaceLocalparam final {
-        AstVar* varp = nullptr;           // The localparam variable
-        AstNode* origExprp = nullptr;     // Clone of original expression (before constification)
+        AstVar* varp = nullptr;  // The localparam variable
+        AstNode* origExprp = nullptr;  // Clone of original expression (before constification)
         AstNodeModule* ownerModp = nullptr;  // Owning interface/class
     };
     using LocalparamMap = std::unordered_map<const AstVar*, CapturedIfaceLocalparam>;
@@ -181,16 +181,12 @@ public:
     // Extract the last dot-separated component from a cellPath
     static string lastPathComponent(const string& cellPath);
     static void add(AstRefDType* refp, const string& cellPath, AstNodeModule* ownerModp,
-                    AstTypedef* typedefp = nullptr,
-                    const string& typedefOwnerModName = "",
+                    AstTypedef* typedefp = nullptr, const string& typedefOwnerModName = "",
                     AstVar* ifacePortVarp = nullptr);
     static void addClass(AstRefDType* refp, AstClass* origClassp, AstNodeModule* ownerModp,
-                         AstTypedef* typedefp = nullptr,
-                         const string& typedefOwnerModName = "");
-    static void addParamType(AstRefDType* refp, const string& cellPath,
-                             AstNodeModule* ownerModp,
-                             AstParamTypeDType* paramTypep,
-                             const string& paramTypeOwnerModName,
+                         AstTypedef* typedefp = nullptr, const string& typedefOwnerModName = "");
+    static void addParamType(AstRefDType* refp, const string& cellPath, AstNodeModule* ownerModp,
+                             AstParamTypeDType* paramTypep, const string& paramTypeOwnerModName,
                              AstVar* ifacePortVarp);
     // Exact lookup by full key
     static const CapturedEntry* find(const CaptureKey& key);
@@ -211,8 +207,7 @@ public:
     // Walk a dot-separated cell path (e.g. "cca_io.tlb_io") starting from
     // startModp, returning the module at the end of the path.  Returns
     // nullptr if any component cannot be resolved.
-    static AstNodeModule* followCellPath(AstNodeModule* startModp,
-                                         const string& cellPath);
+    static AstNodeModule* followCellPath(AstNodeModule* startModp, const string& cellPath);
 
     // Create a new clone entry in the ledger, inheriting from the template.
     // Ledger-only: no target lookup or AST mutation.  Target resolution
@@ -230,9 +225,9 @@ public:
     // Localparam expression capture
     static void addLocalparam(AstVar* varp, AstNode* exprp, AstNodeModule* ownerModp);
     static const CapturedIfaceLocalparam* findLocalparam(const AstVar* varp);
-    static void forEachLocalparamOwned(
-        const AstNodeModule* ownerModp,
-        const std::function<void(const CapturedIfaceLocalparam&)>& fn);
+    static void
+    forEachLocalparamOwned(const AstNodeModule* ownerModp,
+                           const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
 
     // Debug: dump all captured entries

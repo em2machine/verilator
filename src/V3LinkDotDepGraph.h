@@ -37,54 +37,57 @@ class V3LinkDotDepGraph final {
 public:
     // Node types in the dependency graph
     enum class NodeType {
-        GPARAM,         // Parameter (AstVar with isGParam)
-        LPARAM,         // Localparam (AstVar with isLParam)
-        TYPEDEF,        // Typedef (AstTypedef)
-        PARAMTYPEDTYPE, // Type parameter (AstParamTypeDType)
-        REFDTYPE,       // Reference to a type (AstRefDType)
-        STRUCTDTYPE,    // Struct type (AstStructDType)
-        UNIONDTYPE,     // Union type (AstUnionDType)
-        ATTROF,         // Attribute expression like $bits() (AstAttrOf)
-        FUNC            // Function/Task (AstNodeFTask)
+        GPARAM,  // Parameter (AstVar with isGParam)
+        LPARAM,  // Localparam (AstVar with isLParam)
+        TYPEDEF,  // Typedef (AstTypedef)
+        PARAMTYPEDTYPE,  // Type parameter (AstParamTypeDType)
+        REFDTYPE,  // Reference to a type (AstRefDType)
+        STRUCTDTYPE,  // Struct type (AstStructDType)
+        UNIONDTYPE,  // Union type (AstUnionDType)
+        ATTROF,  // Attribute expression like $bits() (AstAttrOf)
+        FUNC  // Function/Task (AstNodeFTask)
     };
 
     // A node in the dependency graph - shadow data structure for parameters/types
     // Execution model:
     //   1. Build: Create nodes, capture initial state from AST, create edges
-    //   2. Resolve: OOO execution - read from parent DepNodes, compute, store in self, wake children
+    //   2. Resolve: OOO execution - read from parent DepNodes, compute, store in self, wake
+    //   children
     //   3. FinalizeAST: Apply resolved state to AST before V3Param creates clones
     struct DepNode final {
         // === Identity (set during build, immutable) ===
-        AstNode* nodep = nullptr;            // The AST node (for finalizeAST to update)
+        AstNode* nodep = nullptr;  // The AST node (for finalizeAST to update)
         NodeType nodeType = NodeType::GPARAM;
         AstNodeModule* ownerModp = nullptr;  // Module/interface owning this node
-        AstCell* cellp = nullptr;            // Cell instantiation (for cross-module edges)
-        std::string cellName;                // Cell name for typedef lookup (survives cloning)
-        std::string cellPath;                // Full hierarchical path to cell context (e.g., "t.u_sub")
-        AstPin* pinp = nullptr;              // Parameter pin to update in finalizeAST (for GPARAMs)
+        AstCell* cellp = nullptr;  // Cell instantiation (for cross-module edges)
+        std::string cellName;  // Cell name for typedef lookup (survives cloning)
+        std::string cellPath;  // Full hierarchical path to cell context (e.g., "t.u_sub")
+        AstPin* pinp = nullptr;  // Parameter pin to update in finalizeAST (for GPARAMs)
 
         // === Edges (set during build) ===
-        std::set<DepNode*> dependsOn;        // Parent nodes this depends on (read during execute)
-        std::set<DepNode*> dependents;       // Child nodes that depend on this (wake on commit)
+        std::set<DepNode*> dependsOn;  // Parent nodes this depends on (read during execute)
+        std::set<DepNode*> dependents;  // Child nodes that depend on this (wake on commit)
 
         // === Initial state (captured from AST during build) ===
-        // These are the "boundary conditions" for graph execution - either from defaults or overrides
-        int initialWidth = 0;                // Width from AST at build time (value params)
-        AstNode* initialValuep = nullptr;    // Value expression (GPARAM/LPARAM) - cloned
-        AstNodeDType* initialTypep = nullptr; // Bound dtype (PARAMTYPEDTYPE) - cloned
+        // These are the "boundary conditions" for graph execution - either from defaults or
+        // overrides
+        int initialWidth = 0;  // Width from AST at build time (value params)
+        AstNode* initialValuep = nullptr;  // Value expression (GPARAM/LPARAM) - cloned
+        AstNodeDType* initialTypep = nullptr;  // Bound dtype (PARAMTYPEDTYPE) - cloned
 
         // === Execution state ===
-        bool resolved = false;               // Has this node completed execution?
-        int resolvedIteration = -1;          // Which iteration resolved this (-1 = not resolved)
-        int pendingDeps = 0;                 // Unresolved parent count (ready when 0)
+        bool resolved = false;  // Has this node completed execution?
+        int resolvedIteration = -1;  // Which iteration resolved this (-1 = not resolved)
+        int pendingDeps = 0;  // Unresolved parent count (ready when 0)
 
         // === Resolved state (computed during execute, applied in finalizeAST) ===
         // These are the "outputs" of this node that children can read
-        int resolvedWidth = 0;               // Computed width (for $bits())
+        int resolvedWidth = 0;  // Computed width (for $bits())
         AstNodeDType* resolvedTypep = nullptr;  // Computed type (for type parameters)
-        AstNode* resolvedValuep = nullptr;   // Computed value (for value parameters)
-        AstTypedef* resolvedTypedefp = nullptr; // Resolved typedef (for REFDTYPE retargeting)
-        AstNodeModule* resolvedOwnerModp = nullptr; // Owner module of resolved type (for class scope)
+        AstNode* resolvedValuep = nullptr;  // Computed value (for value parameters)
+        AstTypedef* resolvedTypedefp = nullptr;  // Resolved typedef (for REFDTYPE retargeting)
+        AstNodeModule* resolvedOwnerModp
+            = nullptr;  // Owner module of resolved type (for class scope)
     };
 
     // Key for per-cell-context DepNodes: (AstNode*, cellPath)
@@ -97,20 +100,22 @@ public:
     };
     struct NodeKeyHash {
         size_t operator()(const NodeKey& key) const {
-            return std::hash<AstNode*>()(key.nodep) ^ (std::hash<std::string>()(key.cellPath) << 1);
+            return std::hash<AstNode*>()(key.nodep)
+                   ^ (std::hash<std::string>()(key.cellPath) << 1);
         }
     };
     using NodeMap = std::unordered_map<NodeKey, DepNode*, NodeKeyHash>;
 
 private:
-    static NodeMap s_nodes;                  // All nodes in the graph
-    static std::vector<DepNode*> s_allNodes; // Ordered list for iteration
-    static int s_iterationCount;             // Number of resolution iterations
-    static bool s_enabled;                   // Is the graph active?
-    static bool s_executing;                 // Are we currently in DepGraph execution?
+    static NodeMap s_nodes;  // All nodes in the graph
+    static std::vector<DepNode*> s_allNodes;  // Ordered list for iteration
+    static int s_iterationCount;  // Number of resolution iterations
+    static bool s_enabled;  // Is the graph active?
+    static bool s_executing;  // Are we currently in DepGraph execution?
     static std::unordered_map<AstRefDType*, std::string> s_refDTypeDotPathRegistry;
     static std::unordered_set<AstNodeModule*> s_builtModules;  // Modules already visited in build
-    static std::unordered_set<AstNodeModule*> s_parameterizedModules;  // Modules with cell-context DepNodes
+    static std::unordered_set<AstNodeModule*>
+        s_parameterizedModules;  // Modules with cell-context DepNodes
 
     // Forward declare visitor classes as friends
     friend class DepExprVisitor;
@@ -155,7 +160,6 @@ public:
     // Utility: check if an AST node is in an unspecialized template module
     static bool inTemplateModule(const AstNode* nodep);
 
-
     // Resolve all dependencies using OOO execution model
     // Returns number of nodes resolved
     static int resolve();
@@ -179,7 +183,8 @@ public:
     // Register cell association for interface port -> connected interface instance
     // portPath: hierarchical path to the interface port (e.g., "t.u_subA.io")
     // ifaceCellPath: hierarchical path to the connected interface instance (e.g., "t.subA_io")
-    static void registerCellAssociation(const std::string& portPath, const std::string& ifaceCellPath);
+    static void registerCellAssociation(const std::string& portPath,
+                                        const std::string& ifaceCellPath);
     // Register transient cell context for RefDType created from dotted datatype references
     static void registerRefDTypeDotPath(AstRefDType* refp, const std::string& cellName,
                                         AstNodeModule* contextModp = nullptr);
@@ -198,12 +203,12 @@ public:
     //   nodep: Original AST node being processed
     //   promoteVarCb: Callback for promoting vars to param types (for IfaceCapture)
     //   indentFn: Callback for debug indentation
-    static void registerIfaceTypedefContext(
-        AstRefDType* refp, const char* stageLabel, int dotPos, bool dotIsFinal,
-        const std::string& dotText, VSymEnt* dotSymp, VSymEnt* curSymp,
-        AstNodeModule* modp, AstNode* nodep,
-        const std::function<bool(AstVar*, AstRefDType*)>& promoteVarCb,
-        const std::function<std::string()>& indentFn);
+    static void
+    registerIfaceTypedefContext(AstRefDType* refp, const char* stageLabel, int dotPos,
+                                bool dotIsFinal, const std::string& dotText, VSymEnt* dotSymp,
+                                VSymEnt* curSymp, AstNodeModule* modp, AstNode* nodep,
+                                const std::function<bool(AstVar*, AstRefDType*)>& promoteVarCb,
+                                const std::function<std::string()>& indentFn);
     static void registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp);
     static void registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp);
 
@@ -225,10 +230,8 @@ public:
     // This is the primary external API for querying the DepGraph's resolved state.
     // Callers outside DepGraph (e.g., V3Param, V3Width) use this to retrieve
     // per-cell-context resolved values without needing internal DepGraph knowledge.
-    static const DepNode* lookupResolved(const std::string& name,
-                                         AstNodeModule* ownerModp,
-                                         NodeType nodeType,
-                                         const std::string& cellPath);
+    static const DepNode* lookupResolved(const std::string& name, AstNodeModule* ownerModp,
+                                         NodeType nodeType, const std::string& cellPath);
 
     // Apply all resolved state from the DepGraph to a cloned module.
     // This applies LPARAM values AND typedef/struct/union resolved widths.
@@ -252,8 +255,10 @@ public:
 
     // Debugging - print the entire graph
     static void dumpGraph();
-    static void dumpGraphDepsTree(const char* stageName = "");  // Dependency tree (what each node depends on)
-    static void dumpGraphDependentsTree(const char* stageName = "");  // Dependents tree (what depends on each node)
+    static void dumpGraphDepsTree(const char* stageName
+                                  = "");  // Dependency tree (what each node depends on)
+    static void dumpGraphDependentsTree(const char* stageName
+                                        = "");  // Dependents tree (what depends on each node)
     static void dumpGraphTree(AstNetlist* netlistp);  // Hierarchy tree view
     static void dumpNode(const DepNode* nodep);
     static string nodeName(const DepNode* nodep);

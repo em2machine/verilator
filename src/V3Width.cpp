@@ -72,9 +72,9 @@
 #include "V3Const.h"
 #include "V3Error.h"
 #include "V3Global.h"
-#include "V3LinkLValue.h"
 #include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
+#include "V3LinkLValue.h"
 #include "V3MemberMap.h"
 #include "V3Number.h"
 #include "V3Randomize.h"
@@ -991,22 +991,16 @@ class WidthVisitor final : public VNVisitor {
                     break;
                 }
             }
-            UINFO(9, "RANGE provenance <" << AstNode::nodeAddr(nodep) << ">"
-                                             << " modeMod="
-                                             << (m_modep ? m_modep->name() : string("<null>"))
-                                             << " ownerModFromBack="
-                                             << (ownerModp ? ownerModp->name()
-                                                           : string("<null>"))
-                                             << " ownerSomeInstanceName='"
-                                             << (ownerModp ? ownerModp->someInstanceName()
-                                                           : string("<null>"))
-                                             << "'"
-                                             << " left=" << nodep->leftConst()
-                                             << " right=" << nodep->rightConst()
-                                             << " back="
-                                             << (nodep->backp() ? nodep->backp()->typeName()
-                                                                : string("<null>"))
-                                             << " ancestry=" << ancestry << endl);
+            UINFO(9, "RANGE provenance <"
+                         << AstNode::nodeAddr(nodep) << ">" << " modeMod="
+                         << (m_modep ? m_modep->name() : string("<null>")) << " ownerModFromBack="
+                         << (ownerModp ? ownerModp->name() : string("<null>"))
+                         << " ownerSomeInstanceName='"
+                         << (ownerModp ? ownerModp->someInstanceName() : string("<null>")) << "'"
+                         << " left=" << nodep->leftConst() << " right=" << nodep->rightConst()
+                         << " back="
+                         << (nodep->backp() ? nodep->backp()->typeName() : string("<null>"))
+                         << " ancestry=" << ancestry << endl);
         }
         V3Const::constifyParamsEdit(nodep->leftp());  // May relink pointed to node
         V3Const::constifyParamsEdit(nodep->rightp());  // May relink pointed to node
@@ -1042,8 +1036,7 @@ class WidthVisitor final : public VNVisitor {
                 bool foundModule = false;
                 for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                     if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
-                        inParameterizedTemplate
-                            = V3LinkDotDepGraph::isParameterized(modp);
+                        inParameterizedTemplate = V3LinkDotDepGraph::isParameterized(modp);
                         foundModule = true;
                         break;
                     }
@@ -1059,9 +1052,7 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->ascending() && !VN_IS(nodep->backp(), UnpackArrayDType)
                 && !VN_IS(nodep->backp(), Cell)  // For cells we warn in V3Inst
                 && !m_paramsOnly  // Skip during parameter evaluation
-                && !inDeadModule
-                && !inParameterizedTemplate
-                && !inTypeTable) {
+                && !inDeadModule && !inParameterizedTemplate && !inTypeTable) {
                 nodep->v3warn(ASCRANGE, "Ascending bit range vector: left < right of bit range: ["
                                             << nodep->leftConst() << ":" << nodep->rightConst()
                                             << "]");
@@ -1940,24 +1931,24 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->attrType() == VAttrType::DIM_BITS) {
                 AstNodeModule* ownerModp = nullptr;
                 for (AstNode* bp = nodep->backp(); bp; bp = bp->backp()) {
-                    if (AstNodeModule* mp = VN_CAST(bp, NodeModule)) { ownerModp = mp; break; }
+                    if (AstNodeModule* mp = VN_CAST(bp, NodeModule)) {
+                        ownerModp = mp;
+                        break;
+                    }
                 }
                 UINFO(5, "DIAG DIM_BITS: owner="
-                          << (ownerModp ? ownerModp->name() : "<null>")
-                          << " fromp=" << nodep->fromp()
-                          << " dtypep=" << dtypep
-                          << " dtypep->width()=" << dtypep->width()
-                          << " skipRefp=" << dtypep->skipRefp()
-                          << " skipRefp->width()=" << dtypep->skipRefp()->width()
-                          << endl);
+                             << (ownerModp ? ownerModp->name() : "<null>")
+                             << " fromp=" << nodep->fromp() << " dtypep=" << dtypep
+                             << " dtypep->width()=" << dtypep->width()
+                             << " skipRefp=" << dtypep->skipRefp()
+                             << " skipRefp->width()=" << dtypep->skipRefp()->width() << endl);
                 // Check if DepGraph has a pre-computed value for this $bits().
                 // This handles interface type parameters where the dtype still
                 // points to the unspecialized template but the DepGraph resolved
                 // the correct per-cell-context width.
-                if (AstConst* const resolvedp
-                    = V3LinkDotDepGraph::getResolvedAttrOf(nodep)) {
+                if (AstConst* const resolvedp = V3LinkDotDepGraph::getResolvedAttrOf(nodep)) {
                     UINFO(5, "DEPGRAPH: V3Width using resolved $bits value="
-                              << resolvedp->num().toUInt() << endl);
+                                 << resolvedp->num().toUInt() << endl);
                     AstConst* const newp = resolvedp->cloneTree(false);
                     nodep->replaceWith(newp);
                     VL_DO_DANGLING(pushDeletep(nodep), nodep);
@@ -2033,8 +2024,8 @@ class WidthVisitor final : public VNVisitor {
                         AstNodeDType* const baseDTypep = dtypep->skipRefp();
                         UASSERT_OBJ(baseDTypep, nodep, "Unsized expression");
                         const int dim = 1;
-                        AstConst* const newp
-                            = dimensionValue(nodep->fileline(), baseDTypep, nodep->attrType(), dim);
+                        AstConst* const newp = dimensionValue(nodep->fileline(), baseDTypep,
+                                                              nodep->attrType(), dim);
                         nodep->replaceWith(newp);
                         VL_DO_DANGLING(nodep->deleteTree(), nodep);
                     }
@@ -2318,8 +2309,8 @@ class WidthVisitor final : public VNVisitor {
                 // It's directly a type, e.g. "type(int)"
                 typeofDtp = iterateEditMoveDTypep(nodep, typeofDtp);  // Changes typeofp
                 nodep->refDTypep(typeofDtp);
-                UINFO(0, "V3Width: RefDType (typeof) refDTypep set to " << cvtToHex(nodep->refDTypep())
-                          << endl);
+                UINFO(0, "V3Width: RefDType (typeof) refDTypep set to "
+                             << cvtToHex(nodep->refDTypep()) << endl);
             } else {
                 // Type comes from expression's type, e.g. "type(variable)"
                 userIterateAndNext(nodep->typeofp(), WidthVP{SELF, BOTH}.p());
@@ -2347,15 +2338,16 @@ class WidthVisitor final : public VNVisitor {
                         break;
                     }
                 }
-                UINFO(9, "V3Width: RefDType refDTypep changed: " << nodep
-                          << " old=" << oldRefDTypep << " new=" << nodep->refDTypep()
-                          << " ownerMod=" << (ownerModp ? ownerModp->name() : "<null>") << endl);
+                UINFO(9, "V3Width: RefDType refDTypep changed: "
+                             << nodep << " old=" << oldRefDTypep << " new=" << nodep->refDTypep()
+                             << " ownerMod=" << (ownerModp ? ownerModp->name() : "<null>")
+                             << endl);
 
                 // Capture cross-interface refDTypep for later fixup:
                 // If this REFDTYPE is in a cloned module/interface (name contains "__")
-                // and refDTypep points to a dtype in a template interface (name doesn't contain "__"),
-                // Cross-interface pointer fixup is handled by
-                // finalizeIfaceCapture() using per-module cell traversal.
+                // and refDTypep points to a dtype in a template interface (name doesn't contain
+                // "__"), Cross-interface pointer fixup is handled by finalizeIfaceCapture() using
+                // per-module cell traversal.
             }
             // Widths are resolved, but special iterate to check for recursion
             userIterate(nodep->subDTypep(), nullptr);
@@ -2414,9 +2406,7 @@ class WidthVisitor final : public VNVisitor {
         nodep->widthFromSub(nodep->subDTypep());
         // Clear childDTypep after dtypep is set to satisfy V3Broken invariant.
         // The child dtype has been moved to the type table by iterateEditMoveDTypep.
-        if (nodep->dtypep() && nodep->childDTypep()) {
-            nodep->childDTypep(nullptr);
-        }
+        if (nodep->dtypep() && nodep->childDTypep()) { nodep->childDTypep(nullptr); }
     }
     void visit(AstRequireDType* nodep) override {
         userIterateAndNext(nodep->lhsp(), WidthVP{SELF, BOTH}.p());
@@ -2798,9 +2788,10 @@ class WidthVisitor final : public VNVisitor {
         const bool implicitParam = nodep->isParam() && bdtypep && bdtypep->implicit();
         if (implicitParam) {
             if (nodep->valuep()) {
-                // Remove blanket deferral. We must attempt to visit the value to determine type/deps.
-                // If it remains unresolved, specific node visitors (like AttrOf) should handle deferral
-                // by setting a placeholder type to prevent "No dtype" errors later.
+                // Remove blanket deferral. We must attempt to visit the value to determine
+                // type/deps. If it remains unresolved, specific node visitors (like AttrOf) should
+                // handle deferral by setting a placeholder type to prevent "No dtype" errors
+                // later.
                 userIterateAndNext(nodep->valuep(), WidthVP{nodep->dtypep(), PRELIM}.p());
                 UINFO(9, "implicitParamPRELIMIV " << nodep->valuep());
                 // Although nodep will get a different width for parameters
@@ -8867,26 +8858,24 @@ class WidthVisitor final : public VNVisitor {
                         if (VN_IS(ap, NodeModule)) break;
                     }
                     UINFO(9, "iterateEditMoveDTypep PACKARRAY move <"
-                              << AstNode::nodeAddr(padtp) << "> "
-                              << " parent=" << parentp->typeName()
-                              << " declRange=" << padtp->declRange().left() << ":"
-                              << padtp->declRange().right() << " node=" << padtp
-                              << " ownerMod="
-                              << (ownerModp ? ownerModp->name() : "<null>")
-                              << " ownerSomeInstanceName='"
-                              << (ownerModp ? ownerModp->someInstanceName() : string("<null>"))
-                              << "'"
-                              << " ownerHasEmptyInstance="
-                              << (ownerHasEmptyInstance ? "yes" : "no")
-                              << " ownerMarkedParameterized="
-                              << (ownerMarkedParameterized ? "yes" : "no")
-                              << " parameterizedTemplateOwner="
-                              << (parameterizedTemplateOwner ? "yes" : "no")
-                              << " ancestry=" << ancestry << endl);
+                                 << AstNode::nodeAddr(padtp) << "> "
+                                 << " parent=" << parentp->typeName()
+                                 << " declRange=" << padtp->declRange().left() << ":"
+                                 << padtp->declRange().right() << " node=" << padtp
+                                 << " ownerMod=" << (ownerModp ? ownerModp->name() : "<null>")
+                                 << " ownerSomeInstanceName='"
+                                 << (ownerModp ? ownerModp->someInstanceName() : string("<null>"))
+                                 << "'" << " ownerHasEmptyInstance="
+                                 << (ownerHasEmptyInstance ? "yes" : "no")
+                                 << " ownerMarkedParameterized="
+                                 << (ownerMarkedParameterized ? "yes" : "no")
+                                 << " parameterizedTemplateOwner="
+                                 << (parameterizedTemplateOwner ? "yes" : "no")
+                                 << " ancestry=" << ancestry << endl);
                     if (AstRange* const rangep = padtp->rangep()) {
-                        UINFO(9, "iterateEditMoveDTypep   RANGE <"
-                                  << AstNode::nodeAddr(rangep) << ">"
-                                  << " back="
+                        UINFO(9,
+                              "iterateEditMoveDTypep   RANGE <"
+                                  << AstNode::nodeAddr(rangep) << ">" << " back="
                                   << (rangep->backp() ? rangep->backp()->typeName() : "<null>")
                                   << " left="
                                   << (rangep->leftp() ? rangep->leftp()->typeName() : "<null>")
@@ -8907,16 +8896,13 @@ class WidthVisitor final : public VNVisitor {
                         declRange = "<n/a>";
                     }
                     UINFO(0, "INVARIANT-VIOLATION candidate: hoisting child dtype from "
-                                 "parameterized interface template ownerMod='"
-                                 << ownerModp->name() << "'"
-                                 << " someInstanceName='" << ownerModp->someInstanceName()
-                                 << "' dtype=<" << AstNode::nodeAddr(dtnodep) << ">"
-                                 << " dtypeType=" << dtnodep->typeName()
-                                 << " declRange=" << declRange
-                                 << " parentType=" << parentp->typeName()
-                                 << " depGraphExecuting="
-                                 << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
-                                 << endl);
+                             "parameterized interface template ownerMod='"
+                                 << ownerModp->name() << "'" << " someInstanceName='"
+                                 << ownerModp->someInstanceName() << "' dtype=<"
+                                 << AstNode::nodeAddr(dtnodep) << ">" << " dtypeType="
+                                 << dtnodep->typeName() << " declRange=" << declRange
+                                 << " parentType=" << parentp->typeName() << " depGraphExecuting="
+                                 << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no") << endl);
                 }
 
                 // Move to under netlist
@@ -8933,7 +8919,8 @@ class WidthVisitor final : public VNVisitor {
             // Skip iteration — DepGraph computes widths via its own resolution.
             if (V3LinkDotDepGraph::isExecuting()) {
                 UINFO(9, "iterateEditMoveDTypep skipping unwidthed cross-ref during "
-                          "DepGraph execution: " << dtnodep << endl);
+                         "DepGraph execution: "
+                             << dtnodep << endl);
                 return dtnodep;
             }
             UINFO(9, "iterateEditMoveDTypep pointer iterating " << dtnodep);
@@ -9527,17 +9514,13 @@ AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
             }
         }
         if (ancestryTruncated) ancestry += "<-...<truncated>";
-        UINFO(9, "widthParamsEdit ENTER <" << AstNode::nodeAddr(nodep) << ">"
-                                             << " type=" << nodep->typeName()
-                                             << " ownerMod="
-                                             << (ownerModp ? ownerModp->name() : string("<null>"))
-                                             << " ownerSomeInstanceName='"
-                                             << (ownerModp ? ownerModp->someInstanceName()
-                                                           : string("<null>"))
-                                             << "'"
-                                             << " depGraphExecuting="
-                                             << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
-                                             << " ancestry=" << ancestry << endl);
+        UINFO(9, "widthParamsEdit ENTER <"
+                     << AstNode::nodeAddr(nodep) << ">" << " type=" << nodep->typeName()
+                     << " ownerMod=" << (ownerModp ? ownerModp->name() : string("<null>"))
+                     << " ownerSomeInstanceName='"
+                     << (ownerModp ? ownerModp->someInstanceName() : string("<null>")) << "'"
+                     << " depGraphExecuting=" << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
+                     << " ancestry=" << ancestry << endl);
     }
     // We should do it in bottom-up module order, but it works in any order.
     WidthVisitor visitor{true, false};
@@ -9550,17 +9533,13 @@ AstNode* V3Width::widthParamsEdit(AstNode* nodep) {
                 break;
             }
         }
-        UINFO(9, "widthParamsEdit EXIT  <" << AstNode::nodeAddr(nodep) << ">"
-                                             << " type=" << nodep->typeName()
-                                             << " ownerMod="
-                                             << (ownerModp ? ownerModp->name() : string("<null>"))
-                                             << " ownerSomeInstanceName='"
-                                             << (ownerModp ? ownerModp->someInstanceName()
-                                                           : string("<null>"))
-                                             << "'"
-                                             << " depGraphExecuting="
-                                             << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
-                                             << endl);
+        UINFO(9, "widthParamsEdit EXIT  <"
+                     << AstNode::nodeAddr(nodep) << ">" << " type=" << nodep->typeName()
+                     << " ownerMod=" << (ownerModp ? ownerModp->name() : string("<null>"))
+                     << " ownerSomeInstanceName='"
+                     << (ownerModp ? ownerModp->someInstanceName() : string("<null>")) << "'"
+                     << " depGraphExecuting=" << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
+                     << endl);
     }
     // No WidthRemoveVisitor, as don't want to drop $signed etc inside gen blocks
     return nodep;
