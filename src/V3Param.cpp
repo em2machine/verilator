@@ -2822,10 +2822,12 @@ public:
             AstNodeFTask* ftaskp = ftaskrefp->taskp();
             if (!ftaskp || !ftaskp->classMethod()) return;
             string funcName = ftaskp->name();
+            AstClass* refClassp = nullptr;
             for (AstNode* backp = ftaskrefp->backp(); backp; backp = backp->backp()) {
                 if (VN_IS(backp, Class)) {
                     if (backp == ftaskrefp->classOrPackagep())
                         return;  // task is in the same class as reference
+                    refClassp = VN_AS(backp, Class);
                     break;
                 }
             }
@@ -2837,6 +2839,13 @@ public:
                 }
             }
             UASSERT_OBJ(classp, ftaskrefp, "Class method has no class above it");
+            // If the FUNCREF and its task are both in the same (clone) class but
+            // classOrPackagep still points to the old template, just retarget it
+            if (refClassp && refClassp == classp && ftaskrefp->classOrPackagep()
+                && ftaskrefp->classOrPackagep() != refClassp) {
+                ftaskrefp->classOrPackagep(refClassp);
+                return;
+            }
             if (classp->user3p()) return;  // will not get removed, no need to relink
             AstClass* parametrizedClassp = VN_CAST(classp->user4p(), Class);
             if (!parametrizedClassp) return;
