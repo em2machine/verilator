@@ -1005,15 +1005,17 @@ class WidthVisitor final : public VNVisitor {
             const bool inDeadModule = m_modep && m_modep->dead();
             // Use back-walked owner (not m_modep) because width may have
             // crossed into a template interface via stale typedefp pointers
-            // without updating m_modep.  isParameterized() is set during
-            // DepGraph build and is never mutated (unlike someInstanceName).
+            // without updating m_modep.  hasGParam() without "__" in the name
+            // identifies unspecialized template modules whose parameter-dependent
+            // ranges should not trigger ASCRANGE.
             bool inParameterizedTemplate = false;
             bool inTypeTable = false;
-            if (V3LinkDotDepGraph::enabled() && nodep->ascending()) {
+            if (nodep->ascending()) {
                 bool foundModule = false;
                 for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                     if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
-                        inParameterizedTemplate = V3LinkDotDepGraph::isParameterized(modp);
+                        inParameterizedTemplate
+                            = modp->hasGParam() && modp->name().find("__") == string::npos;
                         foundModule = true;
                         break;
                     }
