@@ -1,7 +1,7 @@
 //*************************************************************************
 // DESCRIPTION: Interface typedef capture helper.
 //
-// ARCHITECTURE — Separation of Concerns (do not change without reading):
+// ARCHITECTURE - Separation of Concerns (do not change without reading):
 //
 //   The IfaceCapture system has three phases with strict responsibilities:
 //
@@ -13,7 +13,7 @@
 //
 //   2. CLONE REGISTRATION (V3Param, deepCloneModule):
 //      propagateClone() creates clone entries in the ledger.
-//      ** LEDGER-ONLY — no target lookup, no AST mutation. **
+//      ** LEDGER-ONLY - no target lookup, no AST mutation. **
 //      At this point the cloned module's cells still reference template
 //      interface modules (cell->modp() is stale).  Any attempt to walk
 //      cellPath here finds the wrong module.  Clone entries store the
@@ -34,7 +34,7 @@
 //
 //   Template entries have cloneCellPath = ""; clone entries get it set by
 //   propagateClone.  TemplateKey (ownerModName, refName, cellPath) matches
-//   all entries regardless of cloneCellPath — used for propagation and debug.
+//   all entries regardless of cloneCellPath - used for propagation and debug.
 //
 // Code available from: https://verilator.org
 //
@@ -115,8 +115,8 @@ public:
     struct CapturedEntry final {
         CaptureType captureType = CaptureType::IFACE;
         AstRefDType* refp = nullptr;
-        string cellPath;  // Template path (e.g. "cca_io.tlb_io") — immutable key component
-        string cloneCellPath;  // Instance-specific path (e.g. "cca_io1.tlb_io") — set by
+        string cellPath;  // Template path (e.g. "cca_io.tlb_io") - immutable key component
+        string cloneCellPath;  // Instance-specific path (e.g. "cca_io1.tlb_io") - set by
                                // propagateClone when V3Param clones; empty for original entries
         AstClass* origClassp = nullptr;  // For CLASS captures
         // Module where the RefDType lives
@@ -182,18 +182,24 @@ public:
                              AstVar* ifacePortVarp);
     // Exact lookup by full key
     static const CapturedEntry* find(const CaptureKey& key);
+    // Pointer-based lookup: linear scan with early exit (no std::function overhead)
+    static const CapturedEntry* find(const AstRefDType* refp);
     // Lookup by template key (returns first match, for compat)
     static const CapturedEntry* findByTemplate(const TemplateKey& tkey);
     // Iterate all entries matching a template key (all clones + template)
     static void forEachAtPath(const TemplateKey& tkey,
                               const std::function<void(CapturedEntry&)>& fn);
     static bool erase(const CaptureKey& key);
+    // Pointer-based erase: remove all entries whose refp matches
+    static bool erase(const AstRefDType* refp);
     // Erase all entries matching a template key
     static bool eraseByTemplate(const TemplateKey& tkey);
     static void forEach(const std::function<void(const CapturedEntry&)>& fn);
     static void forEachOwned(const AstNodeModule* ownerModp,
                              const std::function<void(const CapturedEntry&)>& fn);
     static bool replaceRef(const CaptureKey& oldKey, AstRefDType* newRefp);
+    // Pointer-based replaceRef: retarget all entries whose refp matches oldRefp
+    static bool replaceRef(const AstRefDType* oldRefp, AstRefDType* newRefp);
     static std::size_t size() { return s_map.size(); }
 
     // Walk a dot-separated cell path (e.g. "cca_io.tlb_io") starting from

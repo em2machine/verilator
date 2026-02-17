@@ -218,7 +218,7 @@ public:
 
     // Query whether a module/interface is parameterized (has cell-context
     // DepNodes with non-empty cellPath).  A parameterized template will be
-    // cloned by V3Param — its default-parameter types are placeholders and
+    // cloned by V3Param - its default-parameter types are placeholders and
     // should not trigger warnings (e.g., ASCRANGE) during width evaluation.
     // This is a definitive, O(1) query backed by shadow state built during
     // DepGraph construction.

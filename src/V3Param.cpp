@@ -799,12 +799,12 @@ class ParamProcessor final {
                                 }
                                 resolvedParentp = nextModp;
                             }
-                            // Path must resolve — null means broken cellPath
+                            // Path must resolve - null means broken cellPath
                             UASSERT_OBJ(resolvedParentp, entry.refp,
                                         "cellPath parent walk failed: cellPath='"
                                             << cp << "' parentPath='" << parentPath
                                             << "' owner=" << entry.ownerModp->name()
-                                            << " — path component not found");
+                                            << " - path component not found");
                             if (resolvedParentp != m_modp) {
                                 UINFO(9, "iface capture skipping (parent mismatch): cellPath='"
                                              << cp << "' cloneCellPath='" << entry.cloneCellPath
@@ -821,7 +821,7 @@ class ParamProcessor final {
                     }
 
                     // Phase 2: register clone entry in the IfaceCapture ledger.
-                    // Ledger-only — no target lookup or AST mutation here.
+                    // Ledger-only - no target lookup or AST mutation here.
                     // Cell pointers in newModp are still stale (pointing to
                     // template interfaces).  Target resolution happens later
                     // in finalizeIfaceCapture (Phase 3) after all clones are
@@ -835,7 +835,7 @@ class ParamProcessor final {
                     } else if (entry.ownerModp != srcModp) {
                         // The REFDTYPE lives in a parent module (not inside the
                         // cloned class/iface), so clonep() is null.
-                        // Check the ACTUAL owner (via backp() chain) — the stored
+                        // Check the ACTUAL owner (via backp() chain) - the stored
                         // ownerModp may be stale (pointing to the template even
                         // though the REFDTYPE now lives in a clone).
                         AstNodeModule* const actualOwnerp
@@ -854,7 +854,7 @@ class ParamProcessor final {
                                          << actualOwnerp->name() << endl);
                             return;
                         }
-                        // Owner won't be cloned — directly retarget now.
+                        // Owner won't be cloned - directly retarget now.
                         if (entry.refp->typedefp()) {
                             const string& tdName = entry.refp->typedefp()->name();
                             for (AstNode* sp = newModp->stmtsp(); sp; sp = sp->nextp()) {
@@ -1015,7 +1015,7 @@ class ParamProcessor final {
         // find the correct target by searching the reachable modules for a
         // typedef/type with the same name and same node type.
         //
-        // This is the same approach DepGraph uses — the cell hierarchy in the AST
+        // This is the same approach DepGraph uses - the cell hierarchy in the AST
         // is the ground truth for which clone belongs to which instance.
         UASSERT_OBJ(newModp, srcModp, "newModp null before hierarchy fixup");
         if (V3LinkDotIfaceCapture::enabled()) {

@@ -1,3 +1,17 @@
+//*************************************************************************
+// DESCRIPTION: Verilator: Interface typedef capture with path-based keys
+//
+// Code available from: https://verilator.org
+//
+//*************************************************************************
+//
+// Copyright 2003-2026 by Wilson Snyder. This program is free software; you
+// can redistribute it and/or modify it under the terms of either the GNU
+// Lesser General Public License Version 3 or the Perl Artistic License
+// Version 2.0.
+// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
+//
+//*************************************************************************
 
 #include "V3LinkDotDepGraph.h"
 
@@ -405,7 +419,7 @@ static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& pr
     const int thisLine = ++lineNum;
 
     // Print this node with cellPath qualifier if present
-    const string connector = isLast ? "└── " : "├── ";
+    const string connector = isLast ? "+-- " : "|-- ";
     const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
     const string addrStr = nodep->nodep ? (" <" + AstNode::nodeAddr(nodep->nodep) + ">") : "";
     UINFO(3, "DEPGRAPH: " << std::setw(4) << thisLine << ": " << prefix << connector << "["
@@ -423,13 +437,13 @@ static void dumpDepsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const string& pr
     if (visited.count(nodep)) {
         ++lineNum;
         UINFO(3, "DEPGRAPH: " << std::setw(4) << lineNum << ": " << prefix
-                              << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+                              << (isLast ? "    " : "|   ") << "+-- (cycle)" << endl);
         return;
     }
     visited.insert(nodep);
 
     // Print dependencies (what this node depends on)
-    const string childPrefix = prefix + (isLast ? "    " : "│   ");
+    const string childPrefix = prefix + (isLast ? "    " : "|   ");
     std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependsOn.begin(),
                                                   nodep->dependsOn.end());
     for (size_t i = 0; i < deps.size(); ++i) {
@@ -531,7 +545,7 @@ static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const stri
     const int thisLine = ++lineNum;
 
     // Print this node with cellPath qualifier if present
-    const string connector = isLast ? "└── " : "├── ";
+    const string connector = isLast ? "+-- " : "|-- ";
     const string cellQualifier = nodep->cellPath.empty() ? "" : ("[" + nodep->cellPath + "]");
     const string resolvedInfo = formatResolvedValue(nodep);
     UINFO(3, "DEPGRAPH: " << std::setw(4) << thisLine << ": " << prefix << connector << "["
@@ -549,13 +563,13 @@ static void dumpDependentsTreeNode(V3LinkDotDepGraph::DepNode* nodep, const stri
     if (visited.count(nodep)) {
         ++lineNum;
         UINFO(3, "DEPGRAPH: " << std::setw(4) << lineNum << ": " << prefix
-                              << (isLast ? "    " : "│   ") << "└── (cycle)" << endl);
+                              << (isLast ? "    " : "|   ") << "+-- (cycle)" << endl);
         return;
     }
     visited.insert(nodep);
 
     // Print dependents (what depends on this node) - reverse direction
-    const string childPrefix = prefix + (isLast ? "    " : "│   ");
+    const string childPrefix = prefix + (isLast ? "    " : "|   ");
     std::vector<V3LinkDotDepGraph::DepNode*> deps(nodep->dependents.begin(),
                                                   nodep->dependents.end());
     for (size_t i = 0; i < deps.size(); ++i) {
@@ -1294,7 +1308,7 @@ private:
 
             // For VarXRef through interface ports (e.g., io.cfg), use s_cellAssociations
             // to resolve the port reference to the actual interface instance cellPath.
-            // e.g., dotted='io' in child at top.u0 → portPath='top.u0.io' → 'top.bus0'
+            // e.g., dotted='io' in child at top.u0 -> portPath='top.u0.io' -> 'top.bus0'
             string cellPath;
             if (m_depNode && !nodep->dotted().empty()) {
                 const string dotted = nodep->dotted();
@@ -2150,8 +2164,8 @@ private:
         // Collect dependencies from the value expression (prefer captured pre-constify)
         // IMPORTANT: If the node already has dependencies, they were set by pin processing
         // in visit(AstCell*) with the correct parentCellPath context. Don't re-collect here
-        // without cellPathOverride — that would create duplicate edges with wrong context
-        // (empty cellPath → template-level nodes instead of cell-context nodes).
+        // without cellPathOverride - that would create duplicate edges with wrong context
+        // (empty cellPath -> template-level nodes instead of cell-context nodes).
         if (depNodep->dependsOn.empty()) {
             AstNode* exprp = depNodep->initialValuep ? depNodep->initialValuep : nodep->valuep();
             if (exprp) { V3LinkDotDepGraph::collectExpressionDeps(exprp, depNodep, m_modp); }
@@ -3884,7 +3898,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
         // Special case: PATTERN values need dtype set before V3Width can process them
         if (AstPattern* const patp = VN_CAST(nodep->initialValuep, Pattern)) {
             AstVar* const varp = VN_CAST(nodep->nodep, Var);
-            // Use subDTypep() — m_dtypep may be null while childDTypep
+            // Use subDTypep() - m_dtypep may be null while childDTypep
             // (the REFDTYPE child) is already linked by LinkDot.
             AstNodeDType* const varDTypep = varp ? varp->subDTypep() : nullptr;
             if (varp && varDTypep) {
@@ -3903,7 +3917,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
 
                 // Only constify PATTERNs that have actual resolved dependencies
                 // to substitute. PATTERNs with only literal constants (no deps)
-                // don't need DepGraph intervention — V3Param handles them.
+                // don't need DepGraph intervention - V3Param handles them.
                 // Calling widthParamsEdit during DepGraph execution on such
                 // PATTERNs produces wrong results (AST not fully set up).
                 if (!substitutions.empty()) {
@@ -3952,7 +3966,7 @@ void V3LinkDotDepGraph::reEvaluateNode(DepNode* nodep) {
                         nodep->resolvedValuep = nodep->initialValuep;
                     }
                 } else {
-                    // No substitutions needed — use original PATTERN as-is.
+                    // No substitutions needed - use original PATTERN as-is.
                     // V3Param will constify it with fully available types.
                     nodep->resolvedValuep = nodep->initialValuep;
                     UINFO(5, "DEPGRAPH: LPARAM '"
@@ -4406,7 +4420,7 @@ void V3LinkDotDepGraph::finalizeAST() {
         case NodeType::PARAMTYPEDTYPE:
             // Only finalize template-level (empty cellPath).
             // Cell-context instances have different resolved widths for the same
-            // template AST node — writing all of them lets the last writer win,
+            // template AST node - writing all of them lets the last writer win,
             // corrupting the template that V3Param clones from.
             // V3Width re-evaluates typedef widths on each clone using the clone's
             // correctly-set GPARAM values.
@@ -4430,7 +4444,7 @@ void V3LinkDotDepGraph::finalizeAST() {
         case NodeType::GPARAM:
             // Only finalize template-level GPARAMs (empty cellPath).
             // Cell-context GPARAMs carry override values that must NOT be written
-            // to the template AST — V3Param compares pin overrides against the
+            // to the template AST - V3Param compares pin overrides against the
             // template's default to decide whether cloning is needed.
             if (nodep->cellPath.empty()) {
                 finalizeParam(nodep);
@@ -4764,7 +4778,7 @@ void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModu
     //
     // We substitute parameter values into the clone's typedef subtrees using
     // ParamSubstVisitor (same mechanism as DepGraph resolution), then fold
-    // with V3Const.  This uses only the clone's own parameter values — we
+    // with V3Const.  This uses only the clone's own parameter values - we
     // NEVER clone or copy nodes from the DepGraph shadow AST.
     int typedefApplied = 0;
 
@@ -4941,8 +4955,8 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
         return cellStr + targetStr;
     };
 
-    const string connector = isLast ? "└── " : "├── ";
-    const string extension = isLast ? "    " : "│   ";
+    const string connector = isLast ? "+-- " : "|-- ";
+    const string extension = isLast ? "    " : "|   ";
 
     // Print module header
     string modType = "MODULE";
@@ -5030,7 +5044,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
         }
         if (hasChildCells) itemIsLast = false;
 
-        const string itemConnector = itemIsLast ? "└── " : "├── ";
+        const string itemConnector = itemIsLast ? "+-- " : "|-- ";
         UINFO(5, "DEPGRAPH: " << childPrefix << itemConnector << items[i].second << endl);
     }
 
@@ -5043,8 +5057,8 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
     for (size_t i = 0; i < cells.size(); ++i) {
         AstCell* const cellp = cells[i];
         bool cellIsLast = (i == cells.size() - 1);
-        const string cellConnector = cellIsLast ? "└── " : "├── ";
-        const string cellExtension = cellIsLast ? "    " : "│   ";
+        const string cellConnector = cellIsLast ? "+-- " : "|-- ";
+        const string cellExtension = cellIsLast ? "    " : "|   ";
 
         AstNodeModule* const childModp = cellp->modp();
         string childModName = childModp ? childModp->name() : "<unlinked>";
@@ -5108,7 +5122,7 @@ void V3LinkDotDepGraph::dumpModuleTree(AstNodeModule* modp, const string& prefix
                     }
                 }
                 if (hasNestedCells) jIsLast = false;
-                const string jConnector = jIsLast ? "└── " : "├── ";
+                const string jConnector = jIsLast ? "+-- " : "|-- ";
                 UINFO(5, "DEPGRAPH: " << grandchildPrefix << jConnector << childItems[j] << endl);
             }
             // Recurse for nested cells

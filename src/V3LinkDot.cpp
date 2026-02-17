@@ -2867,17 +2867,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             clonedRefp->user2p(typedefRefp->user2p());
             if (V3LinkDotIfaceCapture::enabled()) {
                 // replaceRef for all entries that match this refp pointer
-                bool replaced = false;
-                std::vector<V3LinkDotIfaceCapture::CaptureKey> keysToReplace;
-                V3LinkDotIfaceCapture::forEach([&](const V3LinkDotIfaceCapture::CapturedEntry& e) {
-                    if (e.refp == typedefRefp) {
-                        keysToReplace.push_back({e.ownerModp ? e.ownerModp->name() : "",
-                                                 e.refp->name(), e.cellPath, e.cloneCellPath});
-                    }
-                });
-                for (const auto& k : keysToReplace) {
-                    replaced |= V3LinkDotIfaceCapture::replaceRef(k, clonedRefp);
-                }
+                const bool replaced = V3LinkDotIfaceCapture::replaceRef(typedefRefp, clonedRefp);
                 if (replaced) {
                     UINFO(9, indent() << "iface capture retarget captured typedef var="
                                       << varp->prettyName() << " orig=" << typedefRefp
@@ -5247,15 +5237,9 @@ class LinkDotResolveVisitor final : public VNVisitor {
         }
 
         // Resolve its reference
-        if (V3LinkDotIfaceCapture::enabled()) {
-            bool found = false;
-            V3LinkDotIfaceCapture::forEach([&](const V3LinkDotIfaceCapture::CapturedEntry& e) {
-                if (e.refp == nodep) found = true;
-            });
-            if (found) {
-                UINFO(9, indent() << "iface capture visit captured typedef ptr=" << nodep
-                                  << " user2=" << nodep->user2p());
-            }
+        if (V3LinkDotIfaceCapture::find(nodep)) {
+            UINFO(9, indent() << "iface capture visit captured typedef ptr=" << nodep
+                              << " user2=" << nodep->user2p());
         }
         if (m_statep->forParamed() && nodep->user3()) {
             if (V3LinkDotIfaceCapture::enabled() && nodep->user2p()) {
@@ -5348,13 +5332,8 @@ class LinkDotResolveVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(cpackagep->unlinkFrBack()), cpackagep);
         }
 
-        const bool capEnable = V3LinkDotIfaceCapture::enabled();
-        const V3LinkDotIfaceCapture::CapturedEntry* capEntryp = nullptr;
-        if (capEnable) {
-            V3LinkDotIfaceCapture::forEach([&](const V3LinkDotIfaceCapture::CapturedEntry& e) {
-                if (!capEntryp && e.refp == nodep) capEntryp = &e;
-            });
-        }
+        const V3LinkDotIfaceCapture::CapturedEntry* capEntryp
+            = V3LinkDotIfaceCapture::find(nodep);
         const bool captureMapHit = capEntryp != nullptr;
         AstTypedef* const capturedTypedefp = capEntryp ? capEntryp->typedefp : nullptr;
         const VSymEnt* const capturedTypedefSymp
@@ -5362,7 +5341,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                   ? m_statep->getNodeSym(capturedTypedefp)
                   : nullptr;
 
-        const bool ifaceCaptured = capEnable && nodep->user2p();
+        const bool ifaceCaptured = V3LinkDotIfaceCapture::enabled() && nodep->user2p();
         const bool missingIfaceContext = captureMapHit && !ifaceCaptured;
         const char* const passLabel = m_statep->forParamed() ? "paramed" : "primary";
         if (missingIfaceContext) {
@@ -5382,15 +5361,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                               << " name=" << nodep->name() << " pass=" << passLabel
                               << " user2=" << nodep->user2p());
             // Erase all entries matching this refp pointer
-            std::vector<V3LinkDotIfaceCapture::CaptureKey> eraseKeys;
-            V3LinkDotIfaceCapture::forEach([&](const V3LinkDotIfaceCapture::CapturedEntry& e) {
-                if (e.refp == nodep) {
-                    eraseKeys.push_back({e.ownerModp ? e.ownerModp->name() : "", e.refp->name(),
-                                         e.cellPath, e.cloneCellPath});
-                }
-            });
-            bool erased = false;
-            for (const auto& k : eraseKeys) { erased |= V3LinkDotIfaceCapture::erase(k); }
+            const bool erased = V3LinkDotIfaceCapture::erase(nodep);
             captureEntryRetired = true;
             UINFO(9, indent() << "iface capture retire erase result name=" << nodep->name()
                               << " erased=" << erased);

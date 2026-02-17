@@ -1044,7 +1044,7 @@ class WidthVisitor final : public VNVisitor {
                         break;
                     }
                 }
-                // No module ancestor and not under type table — treat as
+                // No module ancestor and not under type table - treat as
                 // type-table context (global dtype with no module provenance).
                 if (!foundModule && !inTypeTable) inTypeTable = true;
             }
@@ -8914,8 +8914,8 @@ class WidthVisitor final : public VNVisitor {
             // During DepGraph execution, cloned trees have cross-references
             // (via varp(), dtypep(), refDTypep()) to original AST dtype nodes.
             // Iterating into these would trigger visit methods that set refDTypep
-            // (the childDTypep→refDTypep normalization), corrupting the original.
-            // Skip iteration — DepGraph computes widths via its own resolution.
+            // (the childDTypep->refDTypep normalization), corrupting the original.
+            // Skip iteration - DepGraph computes widths via its own resolution.
             if (V3LinkDotDepGraph::isExecuting()) {
                 UINFO(9, "iterateEditMoveDTypep skipping unwidthed cross-ref during "
                          "DepGraph execution: "
