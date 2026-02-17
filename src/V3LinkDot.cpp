@@ -5332,8 +5332,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
             VL_DO_DANGLING(pushDeletep(cpackagep->unlinkFrBack()), cpackagep);
         }
 
-        const V3LinkDotIfaceCapture::CapturedEntry* capEntryp
-            = V3LinkDotIfaceCapture::find(nodep);
+        const V3LinkDotIfaceCapture::CapturedEntry* capEntryp = V3LinkDotIfaceCapture::find(nodep);
         const bool captureMapHit = capEntryp != nullptr;
         AstTypedef* const capturedTypedefp = capEntryp ? capEntryp->typedefp : nullptr;
         const VSymEnt* const capturedTypedefSymp

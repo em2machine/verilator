@@ -2472,7 +2472,6 @@ private:
             else if (pinp->modPTypep()) {
                 AstParamTypeDType* const childPtdp = pinp->modPTypep();
 
-
                 // Create node for child type parameter with cellPath context
                 V3LinkDotDepGraph::DepNode* const childNodep = V3LinkDotDepGraph::findOrCreateNode(
                     childPtdp, V3LinkDotDepGraph::NodeType::PARAMTYPEDTYPE, childModp,

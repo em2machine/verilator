@@ -127,17 +127,10 @@ void V3LinkDotIfaceCapture::add(AstRefDType* refp, const string& cellPath,
                                                     << " extraRefps.size="
                                                     << it->second.extraRefps.size() << endl);
     } else {
-        s_map[key] = CapturedEntry{CaptureType::IFACE,
-                                   refp,
-                                   cellPath,
-                                   /*cloneCellPath=*/"",
-                                   /*origClassp=*/nullptr,
-                                   ownerModp,
-                                   typedefp,
-                                   nullptr,
-                                   tdOwnerName,
-                                   ifacePortVarp,
-                                   {}};
+        s_map[key] = CapturedEntry{
+            CaptureType::IFACE,     refp,      cellPath,
+            /*cloneCellPath=*/"",
+            /*origClassp=*/nullptr, ownerModp, typedefp, nullptr, tdOwnerName, ifacePortVarp, {}};
         UINFO(9, "iface capture add: refp="
                      << refp->name() << " cellPath='" << cellPath << "'" << " ownerMod="
                      << ownerModName << " typedefp=" << (typedefp ? typedefp->name() : "<null>")
@@ -207,8 +200,7 @@ bool V3LinkDotIfaceCapture::erase(const CaptureKey& key) {
     return true;
 }
 
-const V3LinkDotIfaceCapture::CapturedEntry*
-V3LinkDotIfaceCapture::find(const AstRefDType* refp) {
+const V3LinkDotIfaceCapture::CapturedEntry* V3LinkDotIfaceCapture::find(const AstRefDType* refp) {
     if (!refp || s_map.empty()) return nullptr;
     for (const auto& kv : s_map) {
         if (kv.second.refp == refp) return &kv.second;
@@ -587,17 +579,11 @@ void V3LinkDotIfaceCapture::addParamType(AstRefDType* refp, const string& cellPa
                                                << " extraRefps.size="
                                                << it->second.extraRefps.size() << endl);
     } else {
-        s_map[key] = CapturedEntry{CaptureType::IFACE,
-                                   refp,
-                                   cellPath,
-                                   /*cloneCellPath=*/"",
-                                   /*origClassp=*/nullptr,
-                                   ownerModp,
-                                   nullptr,
-                                   paramTypep,
-                                   ptOwnerName,
-                                   ifacePortVarp,
-                                   {}};
+        s_map[key]
+            = CapturedEntry{CaptureType::IFACE,     refp,      cellPath,
+                            /*cloneCellPath=*/"",
+                            /*origClassp=*/nullptr, ownerModp, nullptr,  paramTypep, ptOwnerName,
+                            ifacePortVarp,          {}};
     }
 
     // Also capture REFDTYPEs inside the PARAMTYPEDTYPE's subDTypep chain.
