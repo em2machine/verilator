@@ -151,7 +151,6 @@ private:
     static CapturedMap s_map;
     static LocalparamMap s_localparamMap;
     static bool s_enabled;
-    static bool s_explicitlyDisabled;  // Set when explicitly disabled by DepGraph
 
     static string extractIfacePortName(const string& dotText);
 
@@ -160,19 +159,13 @@ private:
 
 public:
     static void enable(bool flag) {
-        if (flag && s_explicitlyDisabled) {
-            v3fatal("V3LinkDotIfaceCapture::enable(true) called after explicit disable. "
-                    "DepGraph is replacing IfaceCapture - this should not happen.");
-        }
         s_enabled = flag;
         if (!flag) {
-            s_explicitlyDisabled = true;
             s_map.clear();
             s_localparamMap.clear();
         }
     }
     static bool enabled() { return s_enabled; }
-    static bool explicitlyDisabled() { return s_explicitlyDisabled; }
     static void reset() {
         s_map.clear();
         s_localparamMap.clear();

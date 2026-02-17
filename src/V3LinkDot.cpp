@@ -223,14 +223,9 @@ public:
         V3Error::errorExitCb(preErrorDumpHandler);  // If get error, dump self
         const std::size_t capturedCount = V3LinkDotIfaceCapture::size();
         if (forPrimary()) {
-            // Only enable if not explicitly disabled (e.g., by V3LinkDotDepGraph)
-            if (!V3LinkDotIfaceCapture::explicitlyDisabled()) {
-                V3LinkDotIfaceCapture::enable(true);
-                UINFO(9, "iface capture enabled for primary pass (persisting entries) size="
-                             << capturedCount);
-            } else {
-                UINFO(9, "iface capture explicitly disabled, skipping enable for primary pass");
-            }
+            V3LinkDotIfaceCapture::enable(true);
+            UINFO(9, "iface capture enabled for primary pass (persisting entries) size="
+                         << capturedCount);
         } else if (forParamed()) {
             UINFO(9,
                   "iface capture entering paramed pass captured typedef count=" << capturedCount);

@@ -23,8 +23,7 @@ VL_DEFINE_DEBUG_FUNCTIONS;
 
 V3LinkDotIfaceCapture::CapturedMap V3LinkDotIfaceCapture::s_map{};
 V3LinkDotIfaceCapture::LocalparamMap V3LinkDotIfaceCapture::s_localparamMap{};
-bool V3LinkDotIfaceCapture::s_enabled = true;
-bool V3LinkDotIfaceCapture::s_explicitlyDisabled = false;
+bool V3LinkDotIfaceCapture::s_enabled = false;
 
 namespace {
 AstIfaceRefDType* ifaceRefFromVarDType(AstNodeDType* dtypep) {
