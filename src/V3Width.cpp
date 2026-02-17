@@ -1062,8 +1062,10 @@ class WidthVisitor final : public VNVisitor {
             // Suppress SELRANGE in unspecialized parameterized templates where
             // parameter-dependent widths haven't been resolved yet.
             bool inParameterizedTemplate = false;
+            const AstNodeModule* selrangeModp = nullptr;
             for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                 if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
+                    selrangeModp = modp;
                     inParameterizedTemplate
                         = modp->hasGParam() && modp->name().find("__") == string::npos;
                     break;
@@ -1085,6 +1087,67 @@ class WidthVisitor final : public VNVisitor {
             if (nodep->fromp()->width() < width && !inParameterizedTemplate) {
                 nodep->v3warn(SELRANGE, "Extracting " << width << " bits from only "
                                                       << nodep->fromp()->width() << " bit number");
+                // DEBUG: dump AST context for SELRANGE diagnosis
+                {
+                    std::cerr << "SELRANGE-DEBUG: fromp=" << nodep->fromp()->prettyTypeName()
+                              << " width=" << nodep->fromp()->width()
+                              << " dtypep=" << nodep->fromp()->dtypep()->prettyTypeName()
+                              << " dtypeWidth=" << nodep->fromp()->dtypep()->width()
+                              << "\n";
+                    // Walk the SEL chain to find the root VARREF
+                    AstNode* walkp = nodep->fromp();
+                    int depth = 0;
+                    while (walkp && depth < 10) {
+                        if (AstSel* selp = VN_CAST(walkp, Sel)) {
+                            std::cerr << "SELRANGE-DEBUG:  chain[" << depth << "] SEL"
+                                      << " w=" << selp->width()
+                                      << " lsb=" << (VN_IS(selp->lsbp(), Const)
+                                                     ? std::to_string(VN_AS(selp->lsbp(), Const)->toSInt())
+                                                     : "?")
+                                      << " widthConst=" << selp->widthConst()
+                                      << " dtype=" << selp->dtypep()->prettyTypeName()
+                                      << " dtypeW=" << selp->dtypep()->width()
+                                      << "\n";
+                            walkp = selp->fromp();
+                        } else if (AstVarRef* vrp = VN_CAST(walkp, VarRef)) {
+                            std::cerr << "SELRANGE-DEBUG:  chain[" << depth << "] VARREF"
+                                      << " name=" << vrp->varp()->prettyName()
+                                      << " w=" << vrp->width()
+                                      << " dtype=" << vrp->dtypep()->prettyTypeName()
+                                      << " dtypeW=" << vrp->dtypep()->width()
+                                      << "\n";
+                            // Show the var's dtype chain
+                            AstNodeDType* vdtp = vrp->varp()->dtypep();
+                            int di = 0;
+                            while (vdtp && di < 5) {
+                                std::cerr << "SELRANGE-DEBUG:   varDtype[" << di << "] "
+                                          << vdtp->prettyTypeName()
+                                          << " w=" << vdtp->width()
+                                          << "\n";
+                                if (AstRefDType* rdtp = VN_CAST(vdtp, RefDType)) {
+                                    vdtp = rdtp->skipRefp();
+                                } else {
+                                    break;
+                                }
+                                di++;
+                            }
+                            walkp = nullptr;
+                        } else {
+                            std::cerr << "SELRANGE-DEBUG:  chain[" << depth << "] "
+                                      << walkp->prettyTypeName()
+                                      << " w=" << walkp->width()
+                                      << "\n";
+                            walkp = nullptr;
+                        }
+                        depth++;
+                    }
+                    if (selrangeModp) {
+                        std::cerr << "SELRANGE-DEBUG: modp=" << selrangeModp->prettyName()
+                                  << " hasGParam=" << selrangeModp->hasGParam()
+                                  << " origName=" << selrangeModp->origName() << "\n";
+                    }
+                    std::cerr << "SELRANGE-DEBUG: ---\n";
+                }
                 // Extend it.
                 AstNodeDType* const subDTypep
                     = nodep->findLogicDType(width, width, nodep->fromp()->dtypep()->numeric());
