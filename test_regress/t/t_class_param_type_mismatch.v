@@ -1,3 +1,7 @@
+// This file ONLY is placed into the Public Domain, for any use,
+// without warranty, 2026 by Wilson Snyder
+// SPDX-License-Identifier: CC0-1.0
+//
 // DESCRIPTION: Verilator: Minimal reproducer for parameterized class type mismatch
 // Reproduces the pattern from UVM where nested parameterized class types
 // get different specialization suffixes

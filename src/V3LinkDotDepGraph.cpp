@@ -787,7 +787,7 @@ const char* V3LinkDotDepGraph::nodeTypeName(NodeType type) {
 }
 
 V3LinkDotDepGraph::NodeType V3LinkDotDepGraph::classifyVar(const AstVar* varp) {
-    UASSERT_OBJ(varp, varp, "classifyVar called with null varp");
+    UASSERT(varp, "classifyVar called with null varp");
     if (varp->isGParam()) return NodeType::GPARAM;
     if (varp->isParam()) return NodeType::LPARAM;
     // Non-parameter variables should not be classified - caller should check first
@@ -857,7 +857,7 @@ void V3LinkDotDepGraph::resetAll() {
 
 void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string& cellName,
                                                 AstNodeModule* contextModp) {
-    UASSERT_OBJ(refp, refp, "registerRefDTypeDotPath called with null refdtype");
+    UASSERT(refp, "registerRefDTypeDotPath called with null refdtype");
     UASSERT_OBJ(!cellName.empty(), refp, "registerRefDTypeDotPath called with empty cellName for '" << refp->name() << "'");
     auto it = s_refDTypeDotPathRegistry.find(refp);
     if (it != s_refDTypeDotPathRegistry.end()) {
@@ -878,16 +878,16 @@ void V3LinkDotDepGraph::registerRefDTypeDotPath(AstRefDType* refp, const string&
 }
 
 void V3LinkDotDepGraph::registerRefDTypeScopedTypedef(AstRefDType* refp, AstTypedef* tdp) {
-    UASSERT_OBJ(refp, refp, "registerRefDTypeScopedTypedef called with null refdtype");
-    UASSERT_OBJ(tdp, refp, "registerRefDTypeScopedTypedef called with null typedef for '" << refp->name() << "'");
+    UASSERT(refp, "registerRefDTypeScopedTypedef called with null refdtype");
+    UASSERT(tdp, "registerRefDTypeScopedTypedef called with null typedef for '" << refp->name() << "'");
     s_refDTypeScopedTypedefs[refp] = tdp;
     UINFO(5, "DEPGRAPH: registered refdtype scoped typedef '" << refp->name()
               << "' -> '" << tdp->name() << "'" << endl);
 }
 
 void V3LinkDotDepGraph::registerTypedefScopedTypedef(AstTypedef* typedefp, AstTypedef* scopedp) {
-    UASSERT_OBJ(typedefp, typedefp, "registerTypedefScopedTypedef called with null typedef");
-    UASSERT_OBJ(scopedp, typedefp, "registerTypedefScopedTypedef called with null scoped typedef for '" << typedefp->name() << "'");
+    UASSERT(typedefp, "registerTypedefScopedTypedef called with null typedef");
+    UASSERT(scopedp, "registerTypedefScopedTypedef called with null scoped typedef for '" << typedefp->name() << "'");
     s_typedefScopedTypedefs[typedefp] = scopedp;
     UINFO(5, "DEPGRAPH: registered typedef scoped typedef '" << typedefp->name()
               << "' -> '" << scopedp->name() << "'" << endl);
@@ -4428,8 +4428,8 @@ void V3LinkDotDepGraph::cleanupClonedTypes() {
 void V3LinkDotDepGraph::applyResolvedToClone(AstNodeModule* srcModp, AstNodeModule* newModp,
                                               const std::string& cellPath) {
     if (!s_enabled) return;
-    UASSERT_OBJ(srcModp, srcModp, "applyResolvedToClone called with null srcModp");
-    UASSERT_OBJ(newModp, newModp, "applyResolvedToClone called with null newModp");
+    UASSERT(srcModp, "applyResolvedToClone called with null srcModp");
+    UASSERT(newModp, "applyResolvedToClone called with null newModp");
     if (cellPath.empty()) return;
 
     UINFO(5, "DEPGRAPH: applyResolvedToClone srcMod=" << srcModp->name()
