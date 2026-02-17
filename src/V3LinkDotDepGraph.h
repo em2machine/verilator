@@ -1,4 +1,3 @@
-// -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
 // DESCRIPTION: Dependency graph for parameter/localparam/typedef resolution.
 //   Builds a dependency graph after V3Param to correctly resolve
@@ -91,14 +90,14 @@ public:
     };
 
     // Key for per-cell-context DepNodes: (AstNode*, cellPath)
-    struct NodeKey {
+    struct NodeKey final {
         AstNode* nodep;
         std::string cellPath;
         bool operator==(const NodeKey& other) const {
             return nodep == other.nodep && cellPath == other.cellPath;
         }
     };
-    struct NodeKeyHash {
+    struct NodeKeyHash final {
         size_t operator()(const NodeKey& key) const {
             return std::hash<AstNode*>()(key.nodep)
                    ^ (std::hash<std::string>()(key.cellPath) << 1);

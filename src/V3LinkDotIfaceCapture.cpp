@@ -1,4 +1,3 @@
-// -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
 // DESCRIPTION: Verilator: Interface typedef capture with path-based keys
 //
@@ -893,13 +892,13 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     int wrongCloneFixed = 0;
 
     // Per-module edge in the reachable graph: parent + connection name.
-    struct ParentEdge {
+    struct ParentEdge final {
         AstNodeModule* parentp;  // Module that instantiates this one
         string connName;  // Cell instance name or port var name
     };
 
     // Data collected per-module during the reachable walk.
-    struct ReachableInfo {
+    struct ReachableInfo final {
         // origName -> vector of reachable modules with that origName
         std::map<string, std::vector<AstNodeModule*>> byOrigName;
         // For each reachable module, how it's connected to its parent

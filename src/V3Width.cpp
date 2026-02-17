@@ -1,4 +1,3 @@
-// -*- mode: C++; c-file-style: "cc-mode" -*-
 //*************************************************************************
 // DESCRIPTION: Verilator: Expression width calculations
 //

@@ -1,18 +1,3 @@
-// -*- mode: C++; c-file-style: "cc-mode" -*-
-//*************************************************************************
-// DESCRIPTION: Verilator: Dependency graph for parameter/localparam/typedef resolution
-//
-// Code available from: https://verilator.org
-//
-//*************************************************************************
-//
-// Copyright 2003-2026 by Wilson Snyder. This program is free software; you
-// can redistribute it and/or modify it under the terms of either the GNU
-// Lesser General Public License Version 3 or the Perl Artistic License
-// Version 2.0.
-// SPDX-License-Identifier: LGPL-3.0-only OR Artistic-2.0
-//
-//*************************************************************************
 
 #include "V3LinkDotDepGraph.h"
 
@@ -2473,10 +2458,6 @@ private:
             else if (pinp->modPTypep()) {
                 AstParamTypeDType* const childPtdp = pinp->modPTypep();
 
-                UINFO(9, "DEPGRAPH: Cell '" << nodep->name() << "' type param pin '"
-                                            << pinp->name() << "' -> " << childPtdp->name()
-                                            << " in " << childModp->name() << " cellPath='"
-                                            << childCellPath << "'" << endl);
 
                 // Create node for child type parameter with cellPath context
                 V3LinkDotDepGraph::DepNode* const childNodep = V3LinkDotDepGraph::findOrCreateNode(
@@ -2484,7 +2465,6 @@ private:
                     childCellPath);
                 childNodep->cellp = nodep;
                 childNodep->pinp = pinp;
-
                 // The child type param depends on the pin expression (which is a type reference)
                 // e.g., tflop #(.T(local_data_t)) - T depends on local_data_t
                 // IMPORTANT: Use parentCellPath for expression deps - the expression is in the
