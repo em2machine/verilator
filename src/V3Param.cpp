@@ -786,10 +786,27 @@ class ParamProcessor final {
                                     }
                                     // Check interface port variables (e.g. "cca_io" port)
                                     if (AstVar* const vp = VN_CAST(sp, Var)) {
-                                        if ((vp->name() == comp || vp->name() == compBase)
+                                        string varBaseName = vp->name();
+                                        const size_t viftopPos = varBaseName.find("__Viftop");
+                                        if (viftopPos != string::npos)
+                                            varBaseName = varBaseName.substr(0, viftopPos);
+                                        if ((varBaseName == comp || varBaseName == compBase)
                                             && vp->isIfaceRef()) {
-                                            AstIfaceRefDType* const irefp
-                                                = VN_CAST(vp->subDTypep(), IfaceRefDType);
+                                            // Unwrap array types to find IfaceRefDType
+                                            // (handles both scalar and array-of-interfaces)
+                                            AstIfaceRefDType* irefp = nullptr;
+                                            for (AstNodeDType* curDtp = vp->subDTypep(); curDtp;) {
+                                                if (AstIfaceRefDType* const ir = VN_CAST(curDtp, IfaceRefDType)) {
+                                                    irefp = ir; break;
+                                                }
+                                                if (AstBracketArrayDType* const bp = VN_CAST(curDtp, BracketArrayDType)) {
+                                                    curDtp = bp->subDTypep(); continue;
+                                                }
+                                                if (AstUnpackArrayDType* const up = VN_CAST(curDtp, UnpackArrayDType)) {
+                                                    curDtp = up->subDTypep(); continue;
+                                                }
+                                                break;
+                                            }
                                             if (irefp && irefp->ifaceViaCellp()) {
                                                 nextModp = irefp->ifaceViaCellp();
                                                 break;
@@ -800,6 +817,55 @@ class ParamProcessor final {
                                 resolvedParentp = nextModp;
                             }
                             // Path must resolve - null means broken cellPath
+                            if (!resolvedParentp) {
+                                // Diagnostic: dump all cells and vars in the
+                                // module where the walk got stuck
+                                AstNodeModule* stuckModp = entry.ownerModp;
+                                // Re-walk to find where we got stuck
+                                string rewalk = parentPath;
+                                AstNodeModule* prevModp = entry.ownerModp;
+                                while (!rewalk.empty() && prevModp) {
+                                    string rc;
+                                    const size_t rd = rewalk.find('.');
+                                    if (rd == string::npos) { rc = rewalk; rewalk.clear(); }
+                                    else { rc = rewalk.substr(0, rd); rewalk = rewalk.substr(rd + 1); }
+                                    const size_t rb = rc.find("__BRA__");
+                                    const string rcBase = (rb == string::npos) ? rc : rc.substr(0, rb);
+                                    AstNodeModule* nxt = nullptr;
+                                    for (AstNode* sp = prevModp->stmtsp(); sp; sp = sp->nextp()) {
+                                        if (AstCell* const c2 = VN_CAST(sp, Cell)) {
+                                            if ((c2->name() == rc || c2->name() == rcBase) && c2->modp()) { nxt = c2->modp(); break; }
+                                        }
+                                        if (AstVar* const v2 = VN_CAST(sp, Var)) {
+                                            if ((v2->name() == rc || v2->name() == rcBase) && v2->isIfaceRef()) {
+                                                AstIfaceRefDType* ir = VN_CAST(v2->subDTypep(), IfaceRefDType);
+                                                if (!ir) {
+                                                    if (AstUnpackArrayDType* const a2 = VN_CAST(v2->subDTypep(), UnpackArrayDType))
+                                                        ir = VN_CAST(a2->subDTypep()->skipRefp(), IfaceRefDType);
+                                                }
+                                                if (ir && ir->ifaceViaCellp()) { nxt = ir->ifaceViaCellp(); break; }
+                                            }
+                                        }
+                                    }
+                                    if (!nxt) { stuckModp = prevModp; break; }
+                                    prevModp = nxt;
+                                }
+                                UINFO(0, "cellPath walk STUCK in module '"
+                                    << stuckModp->name() << "' stmts:" << endl);
+                                for (AstNode* sp = stuckModp->stmtsp(); sp; sp = sp->nextp()) {
+                                    if (AstCell* const c2 = VN_CAST(sp, Cell)) {
+                                        UINFO(0, "  CELL: '" << c2->name() << "' modp="
+                                            << (c2->modp() ? c2->modp()->name() : "<null>") << endl);
+                                    }
+                                    if (AstVar* const v2 = VN_CAST(sp, Var)) {
+                                        if (v2->isIfaceRef()) {
+                                            UINFO(0, "  VAR(iface): '" << v2->name()
+                                                << "' subDType=" << v2->subDTypep()->typeName()
+                                                << " dtypeName=" << v2->subDTypep()->name() << endl);
+                                        }
+                                    }
+                                }
+                            }
                             UASSERT_OBJ(resolvedParentp, entry.refp,
                                         "cellPath parent walk failed: cellPath='"
                                             << cp << "' parentPath='" << parentPath
