@@ -925,6 +925,46 @@ class ParamProcessor final {
                 AstNodeModule* const actualOwnerp
                     = V3LinkDotIfaceCapture::findOwnerModule(entry.refp);
                 if (!actualOwnerp || actualOwnerp->hasGParam()) return;
+                // Skip retarget if the REFDTYPE was ledger-fixed (not
+                // just retarget-fixed from a previous clone).  We detect
+                // this by checking whether actualOwnerp directly contains
+                // a cell whose modp has the same origName as srcModp.
+                // If it does, the REFDTYPE is in a parent interface that
+                // nests the interface being cloned — the retarget should
+                // proceed so the last clone gives the correct result.
+                // If not, the typedef was set by the ledger fixup and
+                // retargeting would overwrite with the wrong clone.
+                if (entry.refp->typedefp()) {
+                    AstNodeModule* const tdOwnerp
+                        = V3LinkDotIfaceCapture::findOwnerModule(
+                            entry.refp->typedefp());
+                    if (tdOwnerp && tdOwnerp != srcModp) {
+                        bool ownerContainsSrcCell = false;
+                        for (AstNode* sp = actualOwnerp->stmtsp(); sp;
+                             sp = sp->nextp()) {
+                            if (AstCell* const cellp = VN_CAST(sp, Cell)) {
+                                if (cellp->modp()
+                                    && cellp->modp()->origName()
+                                           == srcModp->origName()) {
+                                    ownerContainsSrcCell = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!ownerContainsSrcCell) {
+                            UINFO(5,
+                                  "iface capture clone-entry retarget SKIP (ledger-fixed): "
+                                      << entry.refp->name()
+                                      << " refAddrId=" << AstNode::nodeAddr(entry.refp)
+                                      << " srcMod=" << srcName
+                                      << " actualOwner=" << actualOwnerp->name()
+                                      << " tdOwner=" << tdOwnerp->name()
+                                      << " cellPath=" << entry.cellPath
+                                      << " cloneCP=" << entry.cloneCellPath << endl);
+                            return;
+                        }
+                    }
+                }
                 if (entry.refp->typedefp()) {
                     const string& tdName = entry.refp->typedefp()->name();
                     for (AstNode* sp = newModp->stmtsp(); sp; sp = sp->nextp()) {
