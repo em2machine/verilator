@@ -18,6 +18,8 @@
 #include "V3Error.h"
 #include "V3Global.h"
 
+#include <unordered_set>
+
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 V3LinkDotIfaceCapture::CapturedMap V3LinkDotIfaceCapture::s_map{};
@@ -50,22 +52,6 @@ AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
         if (AstNodeModule* const modp = VN_CAST(curp, NodeModule)) return modp;
     }
     return nullptr;
-}
-
-void V3LinkDotIfaceCapture::nullifyDeletedRefs(
-    const std::function<bool(const AstNode*)>& isDeleted) {
-    if (s_map.empty() || !isDeleted) return;
-    for (auto& kv : s_map) {
-        CapturedEntry& entry = kv.second;
-        if (entry.refp && isDeleted(entry.refp)) {
-            UINFO(9, "nullifyDeletedRefs: refp=" << cvtToHex(entry.refp) << " key={"
-                         << kv.first.ownerModName << "," << kv.first.refName << "}" << endl);
-            entry.refp = nullptr;
-        }
-        for (auto& extraRefp : entry.extraRefps) {
-            if (extraRefp && isDeleted(extraRefp)) extraRefp = nullptr;
-        }
-    }
 }
 
 void V3LinkDotIfaceCapture::dumpEntries(const string& label) {
@@ -663,6 +649,31 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs" << endl);
 
     if (!v3Global.rootp()) return;
+
+    // Collect all live AstRefDType* from the AST.  Some ledger entries may
+    // hold stale refp pointers to nodes freed during V3Param (e.g. class/
+    // interface clones deleted by VNDeleter).  Null them out so all
+    // downstream forEach calls are safe.
+    {
+        std::unordered_set<const AstRefDType*> liveRefs;
+        for (AstNode* modp = v3Global.rootp()->modulesp(); modp; modp = modp->nextp()) {
+            modp->foreach([&](AstRefDType* rp) { liveRefs.insert(rp); });
+        }
+        if (v3Global.rootp()->typeTablep()) {
+            for (AstNode* tp = v3Global.rootp()->typeTablep()->typesp(); tp;
+                 tp = tp->nextp()) {
+                tp->foreach([&](AstRefDType* rp) { liveRefs.insert(rp); });
+            }
+        }
+        for (auto& kv : s_map) {
+            if (kv.second.refp && !liveRefs.count(kv.second.refp)) {
+                UINFO(9, "finalizeIfaceCapture: purging stale refp="
+                             << cvtToHex(kv.second.refp) << " key={" << kv.first.ownerModName
+                             << "," << kv.first.refName << "}" << endl);
+                kv.second.refp = nullptr;
+            }
+        }
+    }
 
     // Context-aware fixup for REFDTYPEs whose typedefp/refDTypep point to dead
     // template modules.  Instead of a global template->clone map (which breaks
