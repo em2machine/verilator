@@ -5713,11 +5713,10 @@ public:
         : m_statep{statep} {
         UINFO(4, __FUNCTION__ << ": ");
 
-        if (m_statep->forParamed()) {
-            V3LinkDotIfaceCapture::forEach([](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
-                if (AstRefDType* const refp = entry.refp) refp->user3(false);
-            });
-        }
+        // Note: no need to clear user3 on ledger entries here.
+        // VNUser3InUse (m_inuser3) already logically clears user3 on all
+        // nodes via the generation counter.  The ledger may also hold stale
+        // refp pointers to deleted AST nodes, so iterating it is unsafe.
 
         iterate(rootp);
         std::map<std::string, AstNodeModule*> modulesToRevisit = std::move(m_modulesToRevisit);
