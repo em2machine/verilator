@@ -982,6 +982,11 @@ class ParamProcessor final {
             // cloneCellPath) are skipped by forEachOwned above, but their
             // refp lives in a clone module that won't be cloned again.
             // They need direct retargeting NOW.
+            //
+            // IMPORTANT: use the same cellPath matching as the first pass
+            // to make this targeted rather than broadcast.  Only retarget
+            // entries whose cellPath's last component matches cloneCellp
+            // and whose parent path resolves to m_modp.
             const string srcName = srcModp->name();
             V3LinkDotIfaceCapture::forEach([&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
                 if (!entry.refp) return;
@@ -991,42 +996,97 @@ class ParamProcessor final {
                 AstNodeModule* const actualOwnerp
                     = V3LinkDotIfaceCapture::findOwnerModule(entry.refp);
                 if (!actualOwnerp || actualOwnerp->hasGParam()) return;
-                // Skip retarget if the REFDTYPE was ledger-fixed (not
-                // just retarget-fixed from a previous clone).  We detect
-                // this by checking whether actualOwnerp directly contains
-                // a cell whose modp has the same origName as srcModp.
-                // If it does, the REFDTYPE is in a parent interface that
-                // nests the interface being cloned — the retarget should
-                // proceed so the last clone gives the correct result.
-                // If not, the typedef was set by the ledger fixup and
-                // retargeting would overwrite with the wrong clone.
-                if (entry.refp->typedefp()) {
-                    AstNodeModule* const tdOwnerp
-                        = V3LinkDotIfaceCapture::findOwnerModule(
-                            entry.refp->typedefp());
-                    if (tdOwnerp && tdOwnerp != srcModp) {
-                        bool ownerContainsSrcCell = false;
-                        for (AstNode* sp = actualOwnerp->stmtsp(); sp;
-                             sp = sp->nextp()) {
-                            if (AstCell* const cellp = VN_CAST(sp, Cell)) {
-                                if (cellp->modp()
-                                    && cellp->modp()->origName()
-                                           == srcModp->origName()) {
-                                    ownerContainsSrcCell = true;
-                                    break;
+                // Match cellPath to the specific clone being created,
+                // mirroring the first pass logic.
+                if (cloneCellp && !entry.cellPath.empty()) {
+                    const string& cp = entry.cellPath;
+                    const size_t lastDot = cp.rfind('.');
+                    const string lastComp
+                        = (lastDot == string::npos) ? cp : cp.substr(lastDot + 1);
+                    const size_t braPos = lastComp.find("__BRA__");
+                    const string lastCompBase
+                        = (braPos == string::npos) ? lastComp : lastComp.substr(0, braPos);
+                    if (lastComp != cloneCellp->name()
+                        && lastCompBase != cloneCellp->name()) {
+                        return;  // cellPath doesn't end with the cell being cloned
+                    }
+                    // If there's a parent portion, walk it from the
+                    // entry's owner module and verify it resolves to
+                    // m_modp (the parent module containing the cell).
+                    if (lastDot != string::npos) {
+                        const string parentPath = cp.substr(0, lastDot);
+                        AstNodeModule* resolvedp = actualOwnerp;
+                        string remaining = parentPath;
+                        while (!remaining.empty() && resolvedp) {
+                            string comp;
+                            const size_t dot = remaining.find('.');
+                            if (dot == string::npos) {
+                                comp = remaining;
+                                remaining.clear();
+                            } else {
+                                comp = remaining.substr(0, dot);
+                                remaining = remaining.substr(dot + 1);
+                            }
+                            const size_t bp = comp.find("__BRA__");
+                            const string compBase
+                                = (bp == string::npos) ? comp : comp.substr(0, bp);
+                            AstNodeModule* nextModp = nullptr;
+                            for (AstNode* sp = resolvedp->stmtsp(); sp;
+                                 sp = sp->nextp()) {
+                                if (AstCell* const cp2 = VN_CAST(sp, Cell)) {
+                                    if ((cp2->name() == comp
+                                         || cp2->name() == compBase)
+                                        && cp2->modp()) {
+                                        nextModp = cp2->modp();
+                                        break;
+                                    }
+                                }
+                                if (AstVar* const vp = VN_CAST(sp, Var)) {
+                                    string varBaseName = vp->name();
+                                    const size_t vfp = varBaseName.find("__Viftop");
+                                    if (vfp != string::npos)
+                                        varBaseName = varBaseName.substr(0, vfp);
+                                    if ((varBaseName == comp
+                                         || varBaseName == compBase)
+                                        && vp->isIfaceRef()) {
+                                        AstIfaceRefDType* irefp = nullptr;
+                                        for (AstNodeDType* curDtp = vp->subDTypep();
+                                             curDtp;) {
+                                            if (AstIfaceRefDType* const ir
+                                                = VN_CAST(curDtp, IfaceRefDType)) {
+                                                irefp = ir;
+                                                break;
+                                            }
+                                            if (AstBracketArrayDType* const bap
+                                                = VN_CAST(curDtp, BracketArrayDType)) {
+                                                curDtp = bap->subDTypep();
+                                                continue;
+                                            }
+                                            if (AstUnpackArrayDType* const uap
+                                                = VN_CAST(curDtp, UnpackArrayDType)) {
+                                                curDtp = uap->subDTypep();
+                                                continue;
+                                            }
+                                            break;
+                                        }
+                                        if (irefp && irefp->ifaceViaCellp()) {
+                                            nextModp = irefp->ifaceViaCellp();
+                                            break;
+                                        }
+                                    }
                                 }
                             }
+                            resolvedp = nextModp;
                         }
-                        if (!ownerContainsSrcCell) {
+                        if (resolvedp != m_modp) {
                             UINFO(5,
-                                  "iface capture clone-entry retarget SKIP (ledger-fixed): "
+                                  "iface capture clone-entry retarget SKIP (parent mismatch): "
                                       << entry.refp->name()
-                                      << " refAddrId=" << AstNode::nodeAddr(entry.refp)
-                                      << " srcMod=" << srcName
-                                      << " actualOwner=" << actualOwnerp->name()
-                                      << " tdOwner=" << tdOwnerp->name()
                                       << " cellPath=" << entry.cellPath
-                                      << " cloneCP=" << entry.cloneCellPath << endl);
+                                      << " cloneCP=" << entry.cloneCellPath
+                                      << " resolved="
+                                      << (resolvedp ? resolvedp->name() : "<null>")
+                                      << " m_modp=" << m_modp->name() << endl);
                             return;
                         }
                     }
@@ -1087,6 +1147,35 @@ class ParamProcessor final {
         const auto iter = m_modNameMap.find(newname);
         CloneMap* const clonemapp = &(iter->second.m_cloneMap);
         UINFO(4, "     De-parameterize to new: " << newModp);
+
+        // DEBUG: dump typedef BASICDTYPE range state right after clone creation
+        if (VN_IS(newModp, Iface)) {
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                    if (AstBasicDType* const bdtp = VN_CAST(tdp->childDTypep(), BasicDType)) {
+                        UINFO(1, "TYPEDEF-CLONE-DUMP " << newModp->name()
+                                     << "::" << tdp->name() << " BASICDTYPE <"
+                                     << AstNode::nodeAddr(bdtp) << ">"
+                                     << " w=" << bdtp->width()
+                                     << " range=" << bdtp->declRange().left()
+                                     << ":" << bdtp->declRange().right()
+                                     << " rangep=" << (bdtp->rangep()
+                                                           ? bdtp->rangep()->typeName()
+                                                           : "<null>")
+                                     << " rangep.leftp="
+                                     << (bdtp->rangep() && bdtp->rangep()->leftp()
+                                             ? bdtp->rangep()->leftp()->typeName()
+                                             : "<null>")
+                                     << " rangep.rightp="
+                                     << (bdtp->rangep() && bdtp->rangep()->rightp()
+                                             ? bdtp->rangep()->rightp()->typeName()
+                                             : "<null>")
+                                     << " didWidth=" << bdtp->didWidth()
+                                     << endl);
+                    }
+                }
+            }
+        }
 
         // Grab all I/O so we can remap our pins later
         // Note we allow multiple users of a parameterized model,
@@ -1322,6 +1411,7 @@ class ParamProcessor final {
                     }
                 }
             }
+
         }
 
         // Assign parameters to the constants specified
@@ -1504,6 +1594,35 @@ class ParamProcessor final {
             }
         }
 
+        // DEBUG: dump typedef BASICDTYPE range state after LPARAM resolution
+        if (VN_IS(newModp, Iface)) {
+            for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
+                    if (AstBasicDType* const bdtp = VN_CAST(tdp->childDTypep(), BasicDType)) {
+                        UINFO(1, "TYPEDEF-POST-LPARAM " << newModp->name()
+                                     << "::" << tdp->name() << " BASICDTYPE <"
+                                     << AstNode::nodeAddr(bdtp) << ">"
+                                     << " w=" << bdtp->width()
+                                     << " range=" << bdtp->declRange().left()
+                                     << ":" << bdtp->declRange().right()
+                                     << " rangep=" << (bdtp->rangep()
+                                                           ? bdtp->rangep()->typeName()
+                                                           : "<null>")
+                                     << " rangep.leftp="
+                                     << (bdtp->rangep() && bdtp->rangep()->leftp()
+                                             ? bdtp->rangep()->leftp()->typeName()
+                                             : "<null>")
+                                     << " rangep.rightp="
+                                     << (bdtp->rangep() && bdtp->rangep()->rightp()
+                                             ? bdtp->rangep()->rightp()->typeName()
+                                             : "<null>")
+                                     << " didWidth=" << bdtp->didWidth()
+                                     << endl);
+                    }
+                }
+            }
+        }
+
         return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
@@ -1647,7 +1766,21 @@ class ParamProcessor final {
             resolveDotToTypedef(pinp->exprp());
 
             AstNodeDType* rawTypep = VN_CAST(pinp->exprp(), NodeDType);
-            if (rawTypep) V3Width::widthParamsEdit(rawTypep);
+            // widthParamsEdit is destructive: it evaluates range expressions,
+            // sets didWidth=1, and removes Range nodes. When the REFDTYPE chain
+            // reaches into a template interface (e.g., struct types derived from
+            // parameterized interfaces), this mutates the template's BASICDTYPEs,
+            // corrupting all subsequent clones. Only call widthParamsEdit when
+            // the resolved type is NOT a struct/union (i.e., needs range folding).
+            {
+                AstNodeDType* const resolvedp
+                    = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+                const bool isStructOrUnion
+                    = resolvedp
+                      && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType)
+                          || VN_IS(resolvedp, ClassRefDType));
+                if (rawTypep && !isStructOrUnion) V3Width::widthParamsEdit(rawTypep);
+            }
             AstNodeDType* exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
             const AstNodeDType* origp = modvarp->skipRefToNonRefp();
             if (!exprp) {
@@ -1658,10 +1791,13 @@ class ParamProcessor final {
                               << modvarp->prettyNameQ());
             } else {
                 UINFO(9, "Parameter type assignment expr=" << exprp << " to " << origp);
-                V3Const::constifyParamsEdit(pinp->exprp());  // Reconcile typedefs
-                // Constify may have caused pinp->exprp to change
-                rawTypep = VN_AS(pinp->exprp(), NodeDType);
-                exprp = rawTypep->skipRefToNonRefp();
+                if (!VN_IS(exprp, StructDType) && !VN_IS(exprp, UnionDType)
+                    && !VN_IS(exprp, ClassRefDType)) {
+                    V3Const::constifyParamsEdit(pinp->exprp());  // Reconcile typedefs
+                    // Constify may have caused pinp->exprp to change
+                    rawTypep = VN_AS(pinp->exprp(), NodeDType);
+                    exprp = rawTypep->skipRefToNonRefp();
+                }
                 if (!modvarp->fwdType().isNodeCompatible(exprp)) {
                     pinp->v3error("Parameter type expression type "
                                   << exprp->prettyDTypeNameQ()
@@ -1673,9 +1809,12 @@ class ParamProcessor final {
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
                 } else {
-                    VL_DO_DANGLING(V3Const::constifyParamsEdit(exprp), exprp);
-                    rawTypep = VN_CAST(pinp->exprp(), NodeDType);
-                    exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+                    if (!VN_IS(exprp, StructDType) && !VN_IS(exprp, UnionDType)
+                        && !VN_IS(exprp, ClassRefDType)) {
+                        VL_DO_DANGLING(V3Const::constifyParamsEdit(exprp), exprp);
+                        rawTypep = VN_CAST(pinp->exprp(), NodeDType);
+                        exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+                    }
                     longnamer += "_" + paramSmallName(srcModp, modvarp) + paramValueNumber(exprp);
                     any_overridesr = true;
                 }
