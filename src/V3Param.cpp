@@ -3231,6 +3231,12 @@ public:
                 }
             });
         });
+        // Also null out iface-capture ledger entries whose refp is about
+        // to be freed (same user3 marking as above).
+        if (V3LinkDotIfaceCapture::enabled()) {
+            V3LinkDotIfaceCapture::nullifyDeletedRefs(
+                [](const AstNode* nodep) { return nodep->user3(); });
+        }
     }
     ~ParamTop() = default;
     VL_UNCOPYABLE(ParamTop);

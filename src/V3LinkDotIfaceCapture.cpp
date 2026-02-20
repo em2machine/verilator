@@ -52,6 +52,22 @@ AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
     return nullptr;
 }
 
+void V3LinkDotIfaceCapture::nullifyDeletedRefs(
+    const std::function<bool(const AstNode*)>& isDeleted) {
+    if (s_map.empty() || !isDeleted) return;
+    for (auto& kv : s_map) {
+        CapturedEntry& entry = kv.second;
+        if (entry.refp && isDeleted(entry.refp)) {
+            UINFO(9, "nullifyDeletedRefs: refp=" << cvtToHex(entry.refp) << " key={"
+                         << kv.first.ownerModName << "," << kv.first.refName << "}" << endl);
+            entry.refp = nullptr;
+        }
+        for (auto& extraRefp : entry.extraRefps) {
+            if (extraRefp && isDeleted(extraRefp)) extraRefp = nullptr;
+        }
+    }
+}
+
 void V3LinkDotIfaceCapture::dumpEntries(const string& label) {
     UINFO(9, "========== iface capture dumpEntries: " << label << " (entries=" << s_map.size()
                                                       << " localparams=" << s_localparamMap.size()

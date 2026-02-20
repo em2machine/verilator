@@ -228,6 +228,10 @@ public:
                            const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
 
+    // Null out ledger refp/extraRefps that match a predicate (e.g. about to
+    // be freed).  Called from V3Param before VNDeleter frees removed classes.
+    static void nullifyDeletedRefs(const std::function<bool(const AstNode*)>& isDeleted);
+
     // Debug: dump all captured entries
     static void dumpEntries(const string& label);
 
