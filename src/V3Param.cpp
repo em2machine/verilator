@@ -1775,8 +1775,10 @@ class ParamProcessor final {
             // Local structs with parameter-dependent widths still need widthing.
             bool skipWidthForTemplateStruct = false;
             {
+                // Use non-asserting skip: before widthParamsEdit, type(expr)
+                // constructs may contain unlinked REFDTYPEs (e.g. type(x-y))
                 AstNodeDType* const resolvedp
-                    = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
+                    = rawTypep ? rawTypep->skipRefOrNullp() : nullptr;
                 if (resolvedp
                     && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType))) {
                     AstNodeModule* const ownerModp
