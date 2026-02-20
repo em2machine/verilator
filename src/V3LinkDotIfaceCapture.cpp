@@ -949,7 +949,7 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
                     AstNodeDType* const subDtp = memberp->subDTypep();
                     AstNodeModule* const subOwnerp = findOwnerModule(subDtp);
                     if (!subOwnerp || !subOwnerp->dead()) {
-                        // subDTypep is live — use it as dtypep
+                        // subDTypep is live - use it as dtypep
                         UINFO(9, "iface capture type table MEMBERDTYPE fixup (from subDTypep): "
                                      << memberp->name() << " dtypep "
                                      << dtOwnerp->name() << " -> subDTypep" << endl);

@@ -1316,7 +1316,7 @@ class ParamProcessor final {
 
             // Walk only direct statement-level REFDTYPEs in newModp.
             // Do NOT use newModp->foreach which recurses into nested type
-            // subtrees (struct members, union members, etc.) — rewriting
+            // subtrees (struct members, union members, etc.) - rewriting
             // pointers inside those can create dangling dtypep links that
             // trigger V3Broken.
             for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
@@ -1770,16 +1770,25 @@ class ParamProcessor final {
             // sets didWidth=1, and removes Range nodes. When the REFDTYPE chain
             // reaches into a template interface (e.g., struct types derived from
             // parameterized interfaces), this mutates the template's BASICDTYPEs,
-            // corrupting all subsequent clones. Only call widthParamsEdit when
-            // the resolved type is NOT a struct/union (i.e., needs range folding).
+            // corrupting all subsequent clones. Only skip widthing when the
+            // resolved type is a struct/union owned by a template interface.
+            // Local structs with parameter-dependent widths still need widthing.
+            bool skipWidthForTemplateStruct = false;
             {
                 AstNodeDType* const resolvedp
                     = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
-                const bool isStructOrUnion
-                    = resolvedp
-                      && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType)
-                          || VN_IS(resolvedp, ClassRefDType));
-                if (rawTypep && !isStructOrUnion) V3Width::widthParamsEdit(rawTypep);
+                if (resolvedp
+                    && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType))) {
+                    AstNodeModule* const ownerModp
+                        = V3LinkDotIfaceCapture::findOwnerModule(resolvedp);
+                    // Skip if owned by a template (hasGParam, not yet specialized)
+                    if (ownerModp && ownerModp->hasGParam()
+                        && ownerModp->name().find("__") == string::npos) {
+                        skipWidthForTemplateStruct = true;
+                    }
+                }
+                if (rawTypep && !skipWidthForTemplateStruct)
+                    V3Width::widthParamsEdit(rawTypep);
             }
             AstNodeDType* exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
             const AstNodeDType* origp = modvarp->skipRefToNonRefp();
@@ -1791,8 +1800,7 @@ class ParamProcessor final {
                               << modvarp->prettyNameQ());
             } else {
                 UINFO(9, "Parameter type assignment expr=" << exprp << " to " << origp);
-                if (!VN_IS(exprp, StructDType) && !VN_IS(exprp, UnionDType)
-                    && !VN_IS(exprp, ClassRefDType)) {
+                if (!skipWidthForTemplateStruct) {
                     V3Const::constifyParamsEdit(pinp->exprp());  // Reconcile typedefs
                     // Constify may have caused pinp->exprp to change
                     rawTypep = VN_AS(pinp->exprp(), NodeDType);
@@ -1809,8 +1817,7 @@ class ParamProcessor final {
                     // This prevents making additional modules, and makes coverage more
                     // obvious as it won't show up under a unique module page name.
                 } else {
-                    if (!VN_IS(exprp, StructDType) && !VN_IS(exprp, UnionDType)
-                        && !VN_IS(exprp, ClassRefDType)) {
+                    if (!skipWidthForTemplateStruct) {
                         VL_DO_DANGLING(V3Const::constifyParamsEdit(exprp), exprp);
                         rawTypep = VN_CAST(pinp->exprp(), NodeDType);
                         exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
