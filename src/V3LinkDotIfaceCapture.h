@@ -228,6 +228,10 @@ public:
                            const std::function<void(const CapturedIfaceLocalparam&)>& fn);
     static std::size_t localparamSize() { return s_localparamMap.size(); }
 
+    // Null out ledger refp entries that point to freed nodes (not in the live AST).
+    // Called once after V3Param completes, before any code touches the ledger.
+    static void purgeStaleRefs();
+
     // Debug: dump all captured entries
     static void dumpEntries(const string& label);
 

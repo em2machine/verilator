@@ -3223,11 +3223,11 @@ public:
         }
         // Set all links pointing to a user3 (deleting) node as null
         netlistp->foreach([](AstNode* const nodep) {
-            nodep->foreachLink([&](AstNode** const linkpp, const char*) {
+            nodep->foreachLink([&](AstNode** const linkpp, const char* namep) {
                 if (*linkpp && (*linkpp)->user3()) {
-                    UINFO(9, "clear   link " << nodep);
+                    UINFO(9, "clear   link " << namep << " on " << nodep);
                     *linkpp = nullptr;
-                    UINFO(9, "cleared link " << nodep);
+                    UINFO(9, "cleared link " << namep << " on " << nodep);
                 }
             });
         });
@@ -3282,6 +3282,7 @@ void V3Param::param(AstNetlist* rootp) {
     UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
     V3LinkDotIfaceCapture::dumpEntries("before V3Param");
     { ParamTop{rootp}; }
+    V3LinkDotIfaceCapture::purgeStaleRefs();
     V3LinkDotIfaceCapture::dumpEntries("after V3Param");
 
     V3Global::dumpCheckGlobalTree("param", 0, dumpTreeEitherLevel() >= 3);

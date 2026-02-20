@@ -54,6 +54,30 @@ AstNodeModule* V3LinkDotIfaceCapture::findOwnerModule(AstNode* nodep) {
     return nullptr;
 }
 
+void V3LinkDotIfaceCapture::purgeStaleRefs() {
+    if (!s_enabled || s_map.empty() || !v3Global.rootp()) return;
+    // Collect every live AstNode* in the AST so we can detect stale pointers
+    // in the ledger (refp, ownerModp, typedefp, paramTypep, etc.).
+    std::unordered_set<const AstNode*> liveNodes;
+    v3Global.rootp()->foreach([&](AstNode* np) { liveNodes.insert(np); });
+    for (auto& kv : s_map) {
+        CapturedEntry& e = kv.second;
+        if (e.refp && !liveNodes.count(e.refp)) {
+            UINFO(9, "purgeStaleRefs: refp=" << cvtToHex(e.refp) << " key={"
+                         << kv.first.ownerModName << "," << kv.first.refName << "}" << endl);
+            e.refp = nullptr;
+        }
+        if (e.ownerModp && !liveNodes.count(e.ownerModp)) e.ownerModp = nullptr;
+        if (e.typedefp && !liveNodes.count(e.typedefp)) e.typedefp = nullptr;
+        if (e.paramTypep && !liveNodes.count(e.paramTypep)) e.paramTypep = nullptr;
+        if (e.ifacePortVarp && !liveNodes.count(e.ifacePortVarp)) e.ifacePortVarp = nullptr;
+        if (e.origClassp && !liveNodes.count(e.origClassp)) e.origClassp = nullptr;
+        for (auto& xrefp : e.extraRefps) {
+            if (xrefp && !liveNodes.count(xrefp)) xrefp = nullptr;
+        }
+    }
+}
+
 void V3LinkDotIfaceCapture::dumpEntries(const string& label) {
     UINFO(9, "========== iface capture dumpEntries: " << label << " (entries=" << s_map.size()
                                                       << " localparams=" << s_localparamMap.size()
@@ -649,31 +673,6 @@ void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
     UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs" << endl);
 
     if (!v3Global.rootp()) return;
-
-    // Collect all live AstRefDType* from the AST.  Some ledger entries may
-    // hold stale refp pointers to nodes freed during V3Param (e.g. class/
-    // interface clones deleted by VNDeleter).  Null them out so all
-    // downstream forEach calls are safe.
-    {
-        std::unordered_set<const AstRefDType*> liveRefs;
-        for (AstNode* modp = v3Global.rootp()->modulesp(); modp; modp = modp->nextp()) {
-            modp->foreach([&](AstRefDType* rp) { liveRefs.insert(rp); });
-        }
-        if (v3Global.rootp()->typeTablep()) {
-            for (AstNode* tp = v3Global.rootp()->typeTablep()->typesp(); tp;
-                 tp = tp->nextp()) {
-                tp->foreach([&](AstRefDType* rp) { liveRefs.insert(rp); });
-            }
-        }
-        for (auto& kv : s_map) {
-            if (kv.second.refp && !liveRefs.count(kv.second.refp)) {
-                UINFO(9, "finalizeIfaceCapture: purging stale refp="
-                             << cvtToHex(kv.second.refp) << " key={" << kv.first.ownerModName
-                             << "," << kv.first.refName << "}" << endl);
-                kv.second.refp = nullptr;
-            }
-        }
-    }
 
     // Context-aware fixup for REFDTYPEs whose typedefp/refDTypep point to dead
     // template modules.  Instead of a global template->clone map (which breaks
