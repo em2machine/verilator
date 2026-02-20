@@ -1003,19 +1003,16 @@ class WidthVisitor final : public VNVisitor {
             }
             // Note width() not set on range; use elementsConst()
             const bool inDeadModule = m_modep && m_modep->dead();
-            // Use back-walked owner (not m_modep) because width may have
-            // crossed into a template interface via stale typedefp pointers
-            // without updating m_modep.  hasGParam() without "__" in the name
-            // identifies unspecialized template modules whose parameter-dependent
-            // ranges should not trigger ASCRANGE.
+            // Suppress ASCRANGE in dead template modules whose parameter-dependent
+            // ranges haven't been resolved yet.  Dead modules are templates that
+            // have been superseded by specialized clones.
             bool inParameterizedTemplate = false;
             bool inTypeTable = false;
             if (nodep->ascending()) {
                 bool foundModule = false;
                 for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                     if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
-                        inParameterizedTemplate
-                            = modp->hasGParam() && modp->name().find("__") == string::npos;
+                        inParameterizedTemplate = modp->dead();
                         foundModule = true;
                         break;
                     }
@@ -1059,15 +1056,14 @@ class WidthVisitor final : public VNVisitor {
             }
             UASSERT_OBJ(nodep->dtypep(), nodep, "dtype wasn't set");  // by V3WidthSel
 
-            // Suppress SELRANGE in unspecialized parameterized templates where
+            // Suppress SELRANGE in dead template modules where
             // parameter-dependent widths haven't been resolved yet.
             bool inParameterizedTemplate = false;
             const AstNodeModule* selrangeModp = nullptr;
             for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                 if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
                     selrangeModp = modp;
-                    inParameterizedTemplate
-                        = modp->hasGParam() && modp->name().find("__") == string::npos;
+                    inParameterizedTemplate = modp->dead();
                     break;
                 }
             }
@@ -1289,12 +1285,11 @@ class WidthVisitor final : public VNVisitor {
                 if (VN_IS(nodep->bitp(), Const)
                     && (VN_AS(nodep->bitp(), Const)->toSInt() > (frommsb - fromlsb)
                         || VN_AS(nodep->bitp(), Const)->toSInt() < 0)) {
-                    // Suppress in unspecialized parameterized templates
+                    // Suppress in dead template modules
                     bool inParameterizedTemplate = false;
                     for (AstNode* ap = nodep; ap; ap = ap->backp()) {
                         if (const AstNodeModule* const modp = VN_CAST(ap, NodeModule)) {
-                            inParameterizedTemplate
-                                = modp->hasGParam() && modp->name().find("__") == string::npos;
+                            inParameterizedTemplate = modp->dead();
                             break;
                         }
                     }
