@@ -795,14 +795,20 @@ class ParamProcessor final {
                                             // (handles both scalar and array-of-interfaces)
                                             AstIfaceRefDType* irefp = nullptr;
                                             for (AstNodeDType* curDtp = vp->subDTypep(); curDtp;) {
-                                                if (AstIfaceRefDType* const ir = VN_CAST(curDtp, IfaceRefDType)) {
-                                                    irefp = ir; break;
+                                                if (AstIfaceRefDType* const ir
+                                                    = VN_CAST(curDtp, IfaceRefDType)) {
+                                                    irefp = ir;
+                                                    break;
                                                 }
-                                                if (AstBracketArrayDType* const bp = VN_CAST(curDtp, BracketArrayDType)) {
-                                                    curDtp = bp->subDTypep(); continue;
+                                                if (AstBracketArrayDType* const bp
+                                                    = VN_CAST(curDtp, BracketArrayDType)) {
+                                                    curDtp = bp->subDTypep();
+                                                    continue;
                                                 }
-                                                if (AstUnpackArrayDType* const up = VN_CAST(curDtp, UnpackArrayDType)) {
-                                                    curDtp = up->subDTypep(); continue;
+                                                if (AstUnpackArrayDType* const up
+                                                    = VN_CAST(curDtp, UnpackArrayDType)) {
+                                                    curDtp = up->subDTypep();
+                                                    continue;
                                                 }
                                                 break;
                                             }
@@ -826,41 +832,65 @@ class ParamProcessor final {
                                 while (!rewalk.empty() && prevModp) {
                                     string rc;
                                     const size_t rd = rewalk.find('.');
-                                    if (rd == string::npos) { rc = rewalk; rewalk.clear(); }
-                                    else { rc = rewalk.substr(0, rd); rewalk = rewalk.substr(rd + 1); }
+                                    if (rd == string::npos) {
+                                        rc = rewalk;
+                                        rewalk.clear();
+                                    } else {
+                                        rc = rewalk.substr(0, rd);
+                                        rewalk = rewalk.substr(rd + 1);
+                                    }
                                     const size_t rb = rc.find("__BRA__");
-                                    const string rcBase = (rb == string::npos) ? rc : rc.substr(0, rb);
+                                    const string rcBase
+                                        = (rb == string::npos) ? rc : rc.substr(0, rb);
                                     AstNodeModule* nxt = nullptr;
                                     for (AstNode* sp = prevModp->stmtsp(); sp; sp = sp->nextp()) {
                                         if (AstCell* const c2 = VN_CAST(sp, Cell)) {
-                                            if ((c2->name() == rc || c2->name() == rcBase) && c2->modp()) { nxt = c2->modp(); break; }
+                                            if ((c2->name() == rc || c2->name() == rcBase)
+                                                && c2->modp()) {
+                                                nxt = c2->modp();
+                                                break;
+                                            }
                                         }
                                         if (AstVar* const v2 = VN_CAST(sp, Var)) {
-                                            if ((v2->name() == rc || v2->name() == rcBase) && v2->isIfaceRef()) {
-                                                AstIfaceRefDType* ir = VN_CAST(v2->subDTypep(), IfaceRefDType);
+                                            if ((v2->name() == rc || v2->name() == rcBase)
+                                                && v2->isIfaceRef()) {
+                                                AstIfaceRefDType* ir
+                                                    = VN_CAST(v2->subDTypep(), IfaceRefDType);
                                                 if (!ir) {
-                                                    if (AstUnpackArrayDType* const a2 = VN_CAST(v2->subDTypep(), UnpackArrayDType))
-                                                        ir = VN_CAST(a2->subDTypep()->skipRefp(), IfaceRefDType);
+                                                    if (AstUnpackArrayDType* const a2 = VN_CAST(
+                                                            v2->subDTypep(), UnpackArrayDType))
+                                                        ir = VN_CAST(a2->subDTypep()->skipRefp(),
+                                                                     IfaceRefDType);
                                                 }
-                                                if (ir && ir->ifaceViaCellp()) { nxt = ir->ifaceViaCellp(); break; }
+                                                if (ir && ir->ifaceViaCellp()) {
+                                                    nxt = ir->ifaceViaCellp();
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
-                                    if (!nxt) { stuckModp = prevModp; break; }
+                                    if (!nxt) {
+                                        stuckModp = prevModp;
+                                        break;
+                                    }
                                     prevModp = nxt;
                                 }
-                                UINFO(0, "cellPath walk STUCK in module '"
-                                    << stuckModp->name() << "' stmts:" << endl);
+                                UINFO(0, "cellPath walk STUCK in module '" << stuckModp->name()
+                                                                           << "' stmts:" << endl);
                                 for (AstNode* sp = stuckModp->stmtsp(); sp; sp = sp->nextp()) {
                                     if (AstCell* const c2 = VN_CAST(sp, Cell)) {
                                         UINFO(0, "  CELL: '" << c2->name() << "' modp="
-                                            << (c2->modp() ? c2->modp()->name() : "<null>") << endl);
+                                                             << (c2->modp() ? c2->modp()->name()
+                                                                            : "<null>")
+                                                             << endl);
                                     }
                                     if (AstVar* const v2 = VN_CAST(sp, Var)) {
                                         if (v2->isIfaceRef()) {
-                                            UINFO(0, "  VAR(iface): '" << v2->name()
-                                                << "' subDType=" << v2->subDTypep()->typeName()
-                                                << " dtypeName=" << v2->subDTypep()->name() << endl);
+                                            UINFO(0, "  VAR(iface): '"
+                                                         << v2->name() << "' subDType="
+                                                         << v2->subDTypep()->typeName()
+                                                         << " dtypeName="
+                                                         << v2->subDTypep()->name() << endl);
                                         }
                                     }
                                 }
@@ -1005,8 +1035,7 @@ class ParamProcessor final {
                     const size_t braPos = lastComp.find("__BRA__");
                     const string lastCompBase
                         = (braPos == string::npos) ? lastComp : lastComp.substr(0, braPos);
-                    if (lastComp != cloneCellp->name()
-                        && lastCompBase != cloneCellp->name()) {
+                    if (lastComp != cloneCellp->name() && lastCompBase != cloneCellp->name()) {
                         return;  // cellPath doesn't end with the cell being cloned
                     }
                     // If there's a parent portion, walk it from the
@@ -1030,11 +1059,9 @@ class ParamProcessor final {
                             const string compBase
                                 = (bp == string::npos) ? comp : comp.substr(0, bp);
                             AstNodeModule* nextModp = nullptr;
-                            for (AstNode* sp = resolvedp->stmtsp(); sp;
-                                 sp = sp->nextp()) {
+                            for (AstNode* sp = resolvedp->stmtsp(); sp; sp = sp->nextp()) {
                                 if (AstCell* const cp2 = VN_CAST(sp, Cell)) {
-                                    if ((cp2->name() == comp
-                                         || cp2->name() == compBase)
+                                    if ((cp2->name() == comp || cp2->name() == compBase)
                                         && cp2->modp()) {
                                         nextModp = cp2->modp();
                                         break;
@@ -1045,12 +1072,10 @@ class ParamProcessor final {
                                     const size_t vfp = varBaseName.find("__Viftop");
                                     if (vfp != string::npos)
                                         varBaseName = varBaseName.substr(0, vfp);
-                                    if ((varBaseName == comp
-                                         || varBaseName == compBase)
+                                    if ((varBaseName == comp || varBaseName == compBase)
                                         && vp->isIfaceRef()) {
                                         AstIfaceRefDType* irefp = nullptr;
-                                        for (AstNodeDType* curDtp = vp->subDTypep();
-                                             curDtp;) {
+                                        for (AstNodeDType* curDtp = vp->subDTypep(); curDtp;) {
                                             if (AstIfaceRefDType* const ir
                                                 = VN_CAST(curDtp, IfaceRefDType)) {
                                                 irefp = ir;
@@ -1078,14 +1103,11 @@ class ParamProcessor final {
                             resolvedp = nextModp;
                         }
                         if (resolvedp != m_modp) {
-                            UINFO(5,
-                                  "iface capture clone-entry retarget SKIP (parent mismatch): "
-                                      << entry.refp->name()
-                                      << " cellPath=" << entry.cellPath
-                                      << " cloneCP=" << entry.cloneCellPath
-                                      << " resolved="
-                                      << (resolvedp ? resolvedp->name() : "<null>")
-                                      << " m_modp=" << m_modp->name() << endl);
+                            UINFO(5, "iface capture clone-entry retarget SKIP (parent mismatch): "
+                                         << entry.refp->name() << " cellPath=" << entry.cellPath
+                                         << " cloneCP=" << entry.cloneCellPath << " resolved="
+                                         << (resolvedp ? resolvedp->name() : "<null>")
+                                         << " m_modp=" << m_modp->name() << endl);
                             return;
                         }
                     }
@@ -1152,15 +1174,12 @@ class ParamProcessor final {
             for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                 if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
                     if (AstBasicDType* const bdtp = VN_CAST(tdp->childDTypep(), BasicDType)) {
-                        UINFO(1, "TYPEDEF-CLONE-DUMP " << newModp->name()
-                                     << "::" << tdp->name() << " BASICDTYPE <"
-                                     << AstNode::nodeAddr(bdtp) << ">"
-                                     << " w=" << bdtp->width()
-                                     << " range=" << bdtp->declRange().left()
-                                     << ":" << bdtp->declRange().right()
-                                     << " rangep=" << (bdtp->rangep()
-                                                           ? bdtp->rangep()->typeName()
-                                                           : "<null>")
+                        UINFO(1, "TYPEDEF-CLONE-DUMP "
+                                     << newModp->name() << "::" << tdp->name() << " BASICDTYPE <"
+                                     << AstNode::nodeAddr(bdtp) << ">" << " w=" << bdtp->width()
+                                     << " range=" << bdtp->declRange().left() << ":"
+                                     << bdtp->declRange().right() << " rangep="
+                                     << (bdtp->rangep() ? bdtp->rangep()->typeName() : "<null>")
                                      << " rangep.leftp="
                                      << (bdtp->rangep() && bdtp->rangep()->leftp()
                                              ? bdtp->rangep()->leftp()->typeName()
@@ -1169,8 +1188,7 @@ class ParamProcessor final {
                                      << (bdtp->rangep() && bdtp->rangep()->rightp()
                                              ? bdtp->rangep()->rightp()->typeName()
                                              : "<null>")
-                                     << " didWidth=" << bdtp->didWidth()
-                                     << endl);
+                                     << " didWidth=" << bdtp->didWidth() << endl);
                     }
                 }
             }
@@ -1223,7 +1241,7 @@ class ParamProcessor final {
                 const string srcName = srcModp->name();
 
                 UINFO(1, "FIXUP-A: srcName=" << srcName << " cloneCP='" << cloneCP
-                             << "' newModp=" << newModp->name() << endl);
+                                             << "' newModp=" << newModp->name() << endl);
 
                 V3LinkDotIfaceCapture::forEach(
                     [&](const V3LinkDotIfaceCapture::CapturedEntry& entry) {
@@ -1233,12 +1251,12 @@ class ParamProcessor final {
                             const string& enm = srcName;
                             if (enm.find("axi_to_axi_lite_wrap") != string::npos
                                 || enm.find("axi_dw_converter_wrap") != string::npos) {
-                                UINFO(1, "FIXUP-A-ENTRY: ref=" << entry.refp->name()
-                                             << " cellPath='" << entry.cellPath
-                                             << "' cloneCP='" << entry.cloneCellPath
-                                             << "' wantCP='" << cloneCP << "'"
-                                             << " match=" << (entry.cloneCellPath == cloneCP ? "Y" : "N")
-                                             << endl);
+                                UINFO(1,
+                                      "FIXUP-A-ENTRY: ref="
+                                          << entry.refp->name() << " cellPath='" << entry.cellPath
+                                          << "' cloneCP='" << entry.cloneCellPath << "' wantCP='"
+                                          << cloneCP << "'" << " match="
+                                          << (entry.cloneCellPath == cloneCP ? "Y" : "N") << endl);
                             }
                         }
                         if (entry.cloneCellPath != cloneCP) return;
@@ -1410,7 +1428,6 @@ class ParamProcessor final {
                     }
                 }
             }
-
         }
 
         // Assign parameters to the constants specified
@@ -1536,15 +1553,12 @@ class ParamProcessor final {
             for (AstNode* stmtp = newModp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
                 if (AstTypedef* const tdp = VN_CAST(stmtp, Typedef)) {
                     if (AstBasicDType* const bdtp = VN_CAST(tdp->childDTypep(), BasicDType)) {
-                        UINFO(1, "TYPEDEF-POST-LPARAM " << newModp->name()
-                                     << "::" << tdp->name() << " BASICDTYPE <"
-                                     << AstNode::nodeAddr(bdtp) << ">"
-                                     << " w=" << bdtp->width()
-                                     << " range=" << bdtp->declRange().left()
-                                     << ":" << bdtp->declRange().right()
-                                     << " rangep=" << (bdtp->rangep()
-                                                           ? bdtp->rangep()->typeName()
-                                                           : "<null>")
+                        UINFO(1, "TYPEDEF-POST-LPARAM "
+                                     << newModp->name() << "::" << tdp->name() << " BASICDTYPE <"
+                                     << AstNode::nodeAddr(bdtp) << ">" << " w=" << bdtp->width()
+                                     << " range=" << bdtp->declRange().left() << ":"
+                                     << bdtp->declRange().right() << " rangep="
+                                     << (bdtp->rangep() ? bdtp->rangep()->typeName() : "<null>")
                                      << " rangep.leftp="
                                      << (bdtp->rangep() && bdtp->rangep()->leftp()
                                              ? bdtp->rangep()->leftp()->typeName()
@@ -1553,8 +1567,7 @@ class ParamProcessor final {
                                      << (bdtp->rangep() && bdtp->rangep()->rightp()
                                              ? bdtp->rangep()->rightp()->typeName()
                                              : "<null>")
-                                     << " didWidth=" << bdtp->didWidth()
-                                     << endl);
+                                     << " didWidth=" << bdtp->didWidth() << endl);
                     }
                 }
             }
@@ -1714,10 +1727,8 @@ class ParamProcessor final {
             {
                 // Use non-asserting skip: before widthParamsEdit, type(expr)
                 // constructs may contain unlinked REFDTYPEs (e.g. type(x-y))
-                AstNodeDType* const resolvedp
-                    = rawTypep ? rawTypep->skipRefOrNullp() : nullptr;
-                if (resolvedp
-                    && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType))) {
+                AstNodeDType* const resolvedp = rawTypep ? rawTypep->skipRefOrNullp() : nullptr;
+                if (resolvedp && (VN_IS(resolvedp, StructDType) || VN_IS(resolvedp, UnionDType))) {
                     AstNodeModule* const ownerModp
                         = V3LinkDotIfaceCapture::findOwnerModule(resolvedp);
                     // Skip if owned by a template (hasGParam, not yet specialized)
@@ -1726,8 +1737,7 @@ class ParamProcessor final {
                         skipWidthForTemplateStruct = true;
                     }
                 }
-                if (rawTypep && !skipWidthForTemplateStruct)
-                    V3Width::widthParamsEdit(rawTypep);
+                if (rawTypep && !skipWidthForTemplateStruct) V3Width::widthParamsEdit(rawTypep);
             }
             AstNodeDType* exprp = rawTypep ? rawTypep->skipRefToNonRefp() : nullptr;
             const AstNodeDType* origp = modvarp->skipRefToNonRefp();
@@ -2211,8 +2221,7 @@ public:
                      << " parentMod='" << (modp ? modp->name() : string("<null>")) << "'"
                      << " parentSomeInstanceName='"
                      << (modp ? modp->someInstanceName() : string("<null>")) << "'"
-                     << " inputSomeInstanceName='" << someInstanceName << "'"
-                     << endl);
+                     << " inputSomeInstanceName='" << someInstanceName << "'" << endl);
         // Create new module name with _'s between the constants
         UINFOTREE(10, nodep, "", "cell");
         // Evaluate all module constants
@@ -2500,7 +2509,8 @@ class ParamVisitor final : public VNVisitor {
 
         parentModp->foreach([&](AstVarRef* varrefp) {
             if (!varrefp->varp()) return;
-            AstNodeModule* const varOwnerp = V3LinkDotIfaceCapture::findOwnerModule(varrefp->varp());
+            AstNodeModule* const varOwnerp
+                = V3LinkDotIfaceCapture::findOwnerModule(varrefp->varp());
             if (varOwnerp != templateModp) return;
             ++leakCount;
             UINFO(9, "TEMPLATE-LEAK "
