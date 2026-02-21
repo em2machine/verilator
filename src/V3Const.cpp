@@ -29,7 +29,6 @@
 
 #include "V3Ast.h"
 #include "V3Global.h"
-#include "V3LinkDotDepGraph.h"
 #include "V3Simulate.h"
 #include "V3Stats.h"
 #include "V3String.h"

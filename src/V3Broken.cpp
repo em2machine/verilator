@@ -26,8 +26,6 @@
 
 #include "V3Broken.h"
 
-#include "V3LinkDotDepGraph.h"
-
 #include <unordered_set>
 
 VL_DEFINE_DEBUG_FUNCTIONS;
@@ -200,17 +198,8 @@ private:
                 UASSERT_OBJ(!nodep->dtypep(), nodep,
                             "DType on node without hasDType(): " << nodep->prettyTypeName());
             }
-            // Skip childDTypep check for PARAMTYPEDTYPE in template modules.
-            // Template modules may have unresolved PARAMTYPEDTYPE nodes with childDTypep
-            // still set because V3Width only processes specialized clones, not templates.
-            if (nodep->getChildDTypep()) {
-                bool skipCheck = false;
-                if (VN_IS(nodep, ParamTypeDType)) {
-                    skipCheck = V3LinkDotDepGraph::inTemplateModule(nodep);
-                }
-                UASSERT_OBJ(skipCheck, nodep,
-                            "childDTypep() non-null on node after should have removed");
-            }
+            UASSERT_OBJ(!nodep->getChildDTypep(), nodep,
+                        "childDTypep() non-null on node after should have removed");
             if (const AstNodeDType* const dnodep = VN_CAST(nodep, NodeDType))
                 checkWidthMin(dnodep);
         }
