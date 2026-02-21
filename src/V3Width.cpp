@@ -71,7 +71,6 @@
 #include "V3Const.h"
 #include "V3Error.h"
 #include "V3Global.h"
-#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3LinkLValue.h"
 #include "V3MemberMap.h"
@@ -1982,20 +1981,6 @@ class WidthVisitor final : public VNVisitor {
         case VAttrType::DIM_SIZE: {
             AstNodeDType* const dtypep = fromDTypep();
             UASSERT_OBJ(dtypep, nodep, "Unsized expression");
-            // Check if DepGraph has a pre-computed value for this $bits().
-            // This handles interface type parameters where the dtype still
-            // points to the unspecialized template but the DepGraph resolved
-            // the correct per-cell-context width.
-            if (V3LinkDotDepGraph::enabled() && nodep->attrType() == VAttrType::DIM_BITS) {
-                if (AstConst* const resolvedp = V3LinkDotDepGraph::getResolvedAttrOf(nodep)) {
-                    UINFO(5, "DEPGRAPH: V3Width using resolved $bits value="
-                                 << resolvedp->num().toUInt() << endl);
-                    AstConst* const newp = resolvedp->cloneTree(false);
-                    nodep->replaceWith(newp);
-                    VL_DO_DANGLING(pushDeletep(nodep), nodep);
-                    break;
-                }
-            }
             if (VN_IS(dtypep, QueueDType) || VN_IS(dtypep, DynArrayDType)) {
                 switch (nodep->attrType()) {
                 case VAttrType::DIM_SIZE: {
@@ -2189,12 +2174,6 @@ class WidthVisitor final : public VNVisitor {
 
     // DTYPES
     void visit(AstNodeArrayDType* nodep) override {
-        // During DepGraph execution, V3Width processes cloned expressions that
-        // cross-reference original AST dtype nodes. Setting refDTypep here while
-        // childDTypep is still present (isExecuting guard prevents the child
-        // unlink/move to type table) would violate the XOR invariant. Skip the
-        // visit entirely; V3Param's later V3Width pass will process it normally.
-        if (V3LinkDotDepGraph::isExecuting() && !nodep->didWidth()) return;
         if (nodep->didWidthAndSet()) return;  // This node is a dtype & not both PRELIMed+FINALed
 
         if (nodep->subDTypep() == nodep->basicp()) {  // Innermost dimension
@@ -8836,41 +8815,22 @@ class WidthVisitor final : public VNVisitor {
         const bool child1 = (parentp->getChildDTypep() == dtnodep);
         const bool child2 = (parentp->getChild2DTypep() == dtnodep);
         if (child1 || child2) {
-            // During DepGraph execution, skip child dtype processing entirely.
-            // Resolve works on shadow clones whose dtypep() may point back to
-            // template AST nodes.  Iterating here would set didWidth() on the
-            // template's child dtype, preventing the later full V3Width pass
-            // from moving it to the type table.  Resolve computes widths via
-            // DepNodes, so this iteration is unnecessary for shadow clones.
-            if (!V3LinkDotDepGraph::isExecuting()) {
-                UINFO(9, "iterateEditMoveDTypep child iterating " << dtnodep);
-                // Iterate, this might edit the dtypes which means dtnodep now lost
-                VL_DO_DANGLING(userIterate(dtnodep, nullptr), dtnodep);
-                // Figure out the new dtnodep, remained a child of parent so find it there
-                dtnodep = child1 ? parentp->getChildDTypep() : parentp->getChild2DTypep();
-                UASSERT_OBJ(dtnodep, parentp, "iterateEditMoveDTypep lost pointer to child");
-                UASSERT_OBJ(dtnodep->didWidth(), parentp,
-                            "iterateEditMoveDTypep didn't get width resolution of "
-                                << dtnodep->prettyTypeName());
+            UINFO(9, "iterateEditMoveDTypep child iterating " << dtnodep);
+            // Iterate, this might edit the dtypes which means dtnodep now lost
+            VL_DO_DANGLING(userIterate(dtnodep, nullptr), dtnodep);
+            // Figure out the new dtnodep, remained a child of parent so find it there
+            dtnodep = child1 ? parentp->getChildDTypep() : parentp->getChild2DTypep();
+            UASSERT_OBJ(dtnodep, parentp, "iterateEditMoveDTypep lost pointer to child");
+            UASSERT_OBJ(dtnodep->didWidth(), parentp,
+                        "iterateEditMoveDTypep didn't get width resolution of "
+                            << dtnodep->prettyTypeName());
 
-                // Move to under netlist
-                UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
-                dtnodep->unlinkFrBack();
-                v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
-            }
+            // Move to under netlist
+            UINFO(9, "iterateEditMoveDTypep child moving " << dtnodep);
+            dtnodep->unlinkFrBack();
+            v3Global.rootp()->typeTablep()->addTypesp(dtnodep);
         }
         if (!dtnodep->didWidth()) {
-            // During DepGraph execution, cloned trees have cross-references
-            // (via varp(), dtypep(), refDTypep()) to original AST dtype nodes.
-            // Iterating into these would trigger visit methods that set refDTypep
-            // (the childDTypep->refDTypep normalization), corrupting the original.
-            // Skip iteration - DepGraph computes widths via its own resolution.
-            if (V3LinkDotDepGraph::isExecuting()) {
-                UINFO(9, "iterateEditMoveDTypep skipping unwidthed cross-ref during "
-                         "DepGraph execution: "
-                             << dtnodep << endl);
-                return dtnodep;
-            }
             UINFO(9, "iterateEditMoveDTypep pointer iterating " << dtnodep);
             // See notes in visit(AstBracketArrayDType*)
             UASSERT_OBJ(!VN_IS(dtnodep, BracketArrayDType), parentp,
