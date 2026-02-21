@@ -247,7 +247,6 @@ private:
     bool m_debugStackCheck = false;  // main switch: --debug-stack-check
     int m_debugRuntimeTimeout = 0;  // main switch: --debug-runtime-timeout <n>
     bool m_debugWidth = false;      // main switch: --debug-width
-    bool m_enableDepGraph = false;  // temporary debug switch: --enable-depgraph
     bool m_decoration = true;       // main switch: --decoration
     bool m_decorationNodes = false;  // main switch: --decoration=nodes
     bool m_diagnosticsSarif = false;  // main switch: --diagnostics-sarif
@@ -527,7 +526,6 @@ public:
     bool debugSelfTest() const { return m_debugSelfTest; }
     bool debugStackCheck() const { return m_debugStackCheck; }
     bool debugWidth() const VL_PURE { return m_debugWidth; }
-    bool enableDepGraph() const { return m_enableDepGraph; }
     bool decoration() const VL_MT_SAFE { return m_decoration; }
     bool decorationNodes() const VL_MT_SAFE { return m_decorationNodes; }
     bool diagnosticsSarif() const VL_MT_SAFE { return m_diagnosticsSarif; }
