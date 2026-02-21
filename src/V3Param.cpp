@@ -52,7 +52,6 @@
 #include "V3Const.h"
 #include "V3EmitV.h"
 #include "V3Hasher.h"
-#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3MemberMap.h"
 #include "V3Os.h"
@@ -1442,68 +1441,6 @@ class ParamProcessor final {
             }
         }
 
-        // Apply resolved LPARAM values from DepGraph for this cell context
-        // srcModp->someInstanceName() contains the cell path (e.g., "t.u_sub8")
-        if (V3LinkDotDepGraph::enabled()) {
-            V3LinkDotDepGraph::applyResolvedToClone(srcModp, newModp, srcModp->someInstanceName());
-
-            // Build a set of source typedef RANGE node pointers for alias checks.
-            // A cloned typedef subtree must never reuse any source RANGE node.
-            std::unordered_set<const AstRange*> srcTypedefRanges;
-            if (VN_IS(srcModp, Iface) || VN_IS(srcModp, Class)) {
-                for (AstNode* srcStmtp = srcModp->stmtsp(); srcStmtp;
-                     srcStmtp = srcStmtp->nextp()) {
-                    AstTypedef* const srcTdp = VN_CAST(srcStmtp, Typedef);
-                    if (!srcTdp || !srcTdp->childDTypep()) continue;
-                    srcTdp->childDTypep()->foreach(
-                        [&](AstRange* rangep) { srcTypedefRanges.insert(rangep); });
-                }
-            }
-
-            // Debug probe: verify clone typedef RANGE nodes immediately after
-            // DepGraph back-annotation and before later width/const passes move
-            // child dtypes to the type table.
-            if (VN_IS(newModp, Iface) || VN_IS(newModp, Class)) {
-                for (AstNode* dbgStmtp = newModp->stmtsp(); dbgStmtp;
-                     dbgStmtp = dbgStmtp->nextp()) {
-                    AstTypedef* const dbgTdp = VN_CAST(dbgStmtp, Typedef);
-                    if (!dbgTdp || !dbgTdp->childDTypep()) continue;
-                    dbgTdp->childDTypep()->foreach([&](AstPackArrayDType* padtp) {
-                        AstRange* const rangep = padtp->rangep();
-                        const bool sharedWithSource = rangep && srcTypedefRanges.count(rangep) > 0;
-                        UINFO(9, "V3Param: clone typedef PACKARRAY "
-                                     << newModp->name() << "::" << dbgTdp->name() << " PAD <"
-                                     << AstNode::nodeAddr(padtp) << ">" << " range="
-                                     << (rangep ? AstNode::nodeAddr(rangep) : "<null>")
-                                     << " sharedWithSource=" << (sharedWithSource ? "yes" : "no")
-                                     << " declRange=" << padtp->declRange().left() << ":"
-                                     << padtp->declRange().right() << endl);
-                        UASSERT_OBJ(!sharedWithSource, padtp,
-                                    "Cloned typedef PACKARRAYDTYPE shares RANGE pointer with "
-                                    "source module");
-                    });
-                    dbgTdp->childDTypep()->foreach([&](AstRange* rangep) {
-                        UINFO(9,
-                              "V3Param: post-applyResolvedToClone "
-                                  << newModp->name() << "::" << dbgTdp->name() << " RANGE <"
-                                  << AstNode::nodeAddr(rangep) << ">" << " back="
-                                  << (rangep->backp() ? rangep->backp()->typeName() : "<null>")
-                                  << " left="
-                                  << (rangep->leftp() ? rangep->leftp()->typeName() : "<null>")
-                                  << " right="
-                                  << (rangep->rightp() ? rangep->rightp()->typeName() : "<null>")
-                                  << " leftNode="
-                                  << (rangep->leftp() ? AstNode::nodeAddr(rangep->leftp())
-                                                      : "<null>")
-                                  << " rightNode="
-                                  << (rangep->rightp() ? AstNode::nodeAddr(rangep->rightp())
-                                                       : "<null>")
-                                  << endl);
-                    });
-                }
-            }
-        }
-
         // Restore captured localparam expressions for interfaces/classes
         // After parameters are assigned, restore original expressions.
         // Do NOT constify here - let the normal passes handle ordering.
@@ -2198,7 +2135,7 @@ class ParamProcessor final {
                         if (AstParamTypeDType* const ptdp
                             = VN_CAST(refp->refDTypep(), ParamTypeDType)) {
                             AstNodeModule* const ptdOwnerp
-                                = V3LinkDotDepGraph::findOwnerModule(ptdp);
+                                = V3LinkDotIfaceCapture::findOwnerModule(ptdp);
                             if (ptdOwnerp != m_modp) allOwnParams = false;
                         } else {
                             allOwnParams = false;
@@ -2275,22 +2212,11 @@ public:
                      << " parentSomeInstanceName='"
                      << (modp ? modp->someInstanceName() : string("<null>")) << "'"
                      << " inputSomeInstanceName='" << someInstanceName << "'"
-                     << " depGraphExecuting=" << (V3LinkDotDepGraph::isExecuting() ? "yes" : "no")
                      << endl);
         // Create new module name with _'s between the constants
         UINFOTREE(10, nodep, "", "cell");
         // Evaluate all module constants
-        if (AstCell* const cellp = VN_CAST(nodep, Cell)) {
-            if (V3LinkDotDepGraph::enabled() && VN_IS(cellp->modp(), Iface)) {
-                for (AstPin* pinp = cellp->paramsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
-                    if (AstNode* const exprp = pinp->exprp()) V3Const::constifyParamsEdit(exprp);
-                }
-            } else {
-                V3Const::constifyParamsEdit(nodep);
-            }
-        } else {
-            V3Const::constifyParamsEdit(nodep);
-        }
+        V3Const::constifyParamsEdit(nodep);
         // Set name for warnings for when we param propagate the module
         // For AstIfaceRefDType, name() returns the modport name (often empty),
         // so use cellName() which is the actual cell instance name.
@@ -2540,7 +2466,7 @@ class ParamVisitor final : public VNVisitor {
         parentModp->foreach([&](AstRefDType* refp) {
             if (refp->typedefp()) {
                 AstNodeModule* const tdOwnerp
-                    = V3LinkDotDepGraph::findOwnerModule(refp->typedefp());
+                    = V3LinkDotIfaceCapture::findOwnerModule(refp->typedefp());
                 if (tdOwnerp == templateModp) {
                     ++leakCount;
                     UINFO(9, "TEMPLATE-LEAK "
@@ -2556,7 +2482,7 @@ class ParamVisitor final : public VNVisitor {
             }
             if (refp->refDTypep()) {
                 AstNodeModule* const rdOwnerp
-                    = V3LinkDotDepGraph::findOwnerModule(refp->refDTypep());
+                    = V3LinkDotIfaceCapture::findOwnerModule(refp->refDTypep());
                 if (rdOwnerp == templateModp) {
                     ++leakCount;
                     UINFO(9, "TEMPLATE-LEAK "
@@ -2574,7 +2500,7 @@ class ParamVisitor final : public VNVisitor {
 
         parentModp->foreach([&](AstVarRef* varrefp) {
             if (!varrefp->varp()) return;
-            AstNodeModule* const varOwnerp = V3LinkDotDepGraph::findOwnerModule(varrefp->varp());
+            AstNodeModule* const varOwnerp = V3LinkDotIfaceCapture::findOwnerModule(varrefp->varp());
             if (varOwnerp != templateModp) return;
             ++leakCount;
             UINFO(9, "TEMPLATE-LEAK "
@@ -2677,17 +2603,6 @@ class ParamVisitor final : public VNVisitor {
                 // Don't enter into a definition.
                 // If a class is used, it will be visited through a reference and cloned
                 m_state.m_paramClasses.push_back(classp);
-                return;
-            }
-        }
-        if (AstIface* const ifacep = VN_CAST(nodep, Iface)) {
-            // Under DepGraph flow, parameterized interface templates should not be
-            // reprocessed here unless the default instance is actually used.
-            // user3p is set when default-instance reuse occurs in nodeDeparamCommon.
-            if (V3LinkDotDepGraph::enabled() && ifacep->hasGParam() && !ifacep->user3p()) {
-                UINFO(9, "V3Param: skip parameterized interface template body '"
-                             << ifacep->name() << "' someInstanceName='"
-                             << ifacep->someInstanceName() << "'" << endl);
                 return;
             }
         }
@@ -3242,44 +3157,6 @@ public:
 void V3Param::param(AstNetlist* rootp) {
     UINFO(2, __FUNCTION__ << ":");
 
-    if (V3LinkDotDepGraph::enabled()) {
-        // NEW ARCHITECTURE: DepGraph resolves EVERYTHING first, then V3Param runs ONCE
-        //
-        // Keep s_executing=true for the entire flow (build, resolve, finalizeAST, V3Param).
-        // This prevents V3Width::iterateEditMoveDTypep from moving child dtypes to the
-        // global type table. Without this, widthParamsEdit calls during V3Param cloning
-        // would move BASICDTYPE children out of template VARs, causing cloneTree() to
-        // produce clones with dangling dtypep() pointers to the deleted template nodes.
-        V3LinkDotDepGraph::setExecuting(true);
-
-        // Phase 1: Build complete dependency graph
-        // This captures ALL cells, params, types, $bits() expressions
-        UINFO(2, "DEPGRAPH: Phase 1 - Building complete dependency graph" << endl);
-        V3LinkDotDepGraph::build(rootp);
-        V3LinkDotIfaceCapture::dumpEntries("after DepGraph build");
-
-        // Phase 2: Resolve all dependencies in topological order
-        // This computes all constants by propagating through dependency chains
-        UINFO(2, "DEPGRAPH: Phase 2 - Resolving all dependencies" << endl);
-        const int depSteps = V3LinkDotDepGraph::resolve();
-        UINFO(2, "DEPGRAPH: Resolved " << depSteps << " nodes" << endl);
-
-        // Phase 3: Back-annotate resolved constants to AST
-        // This replaces expressions like $bits(var) with their computed constant values
-        UINFO(2, "DEPGRAPH: Phase 3 - Back-annotating constants to AST" << endl);
-        V3LinkDotDepGraph::finalizeAST();
-
-        // DepGraph flow complete - turn off execution flag so V3Param's
-        // widthParamsEdit calls can move child dtypes to the type table normally.
-        V3LinkDotDepGraph::setExecuting(false);
-    } else {
-        UINFO(2, "DEPGRAPH: disabled by default (use --enable-depgraph), "
-                 "skipping build/resolve/finalize"
-                     << endl);
-    }
-
-    // Phase 4: Run V3Param ONCE - it sees only constants, does simple cloning
-    UINFO(2, "DEPGRAPH: Phase 4 - Running V3Param (single pass)" << endl);
     V3LinkDotIfaceCapture::dumpEntries("before V3Param");
     { ParamTop{rootp}; }
     V3LinkDotIfaceCapture::purgeStaleRefs();
