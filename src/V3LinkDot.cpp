@@ -67,7 +67,6 @@
 
 #include "V3Global.h"
 #include "V3Graph.h"
-#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3MemberMap.h"
 #include "V3Parse.h"
@@ -4053,8 +4052,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (m_ds.m_dotPos == DP_NONE) checkDeclOrder(nodep, defp);
                     refp->typedefp(defp);
 
-                    // Unified registration for both DepGraph and IfaceCapture
-                    V3LinkDotDepGraph::registerIfaceTypedefContext(
+                    V3LinkDotIfaceCapture::captureTypedefContext(
                         refp, "typedef", static_cast<int>(m_ds.m_dotPos),
                         m_ds.m_dotPos == DP_FINAL, m_ds.m_dotText, m_ds.m_dotSymp, m_curSymp,
                         m_modp, nodep,
@@ -4075,8 +4073,7 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     AstRefDType* const refp = new AstRefDType{nodep->fileline(), nodep->name()};
                     refp->refDTypep(defp);
 
-                    // Unified registration for both DepGraph and IfaceCapture
-                    V3LinkDotDepGraph::registerIfaceTypedefContext(
+                    V3LinkDotIfaceCapture::captureTypedefContext(
                         refp, "paramtype", static_cast<int>(m_ds.m_dotPos),
                         m_ds.m_dotPos == DP_FINAL, m_ds.m_dotText, m_ds.m_dotSymp, m_curSymp,
                         m_modp, nodep,
@@ -5289,26 +5286,6 @@ class LinkDotResolveVisitor final : public VNVisitor {
                     if (!foundp) return;
                 }
                 nodep->classOrPackagep(cpackagerefp->classOrPackageSkipp());
-                if (AstTypedef* const scopeTdp
-                    = VN_CAST(cpackagerefp->classOrPackageNodep(), Typedef)) {
-                    V3LinkDotDepGraph::registerRefDTypeScopedTypedef(nodep, scopeTdp);
-                    AstTypedef* parentTdp = nullptr;
-                    for (AstNode* backp = nodep->backp(); backp; backp = backp->backp()) {
-                        if (AstTypedef* const candTdp = VN_CAST(backp, Typedef)) {
-                            parentTdp = candTdp;
-                            break;
-                        }
-                        if (VN_IS(backp, NodeModule)) break;
-                    }
-                    if (parentTdp) {
-                        if (parentTdp->name() == "type_id") {
-                            UINFO(5, "DEPGRAPH: linkdot found type_id typedef '"
-                                         << parentTdp->name() << "' scoped by '"
-                                         << scopeTdp->name() << "'" << endl);
-                        }
-                        V3LinkDotDepGraph::registerTypedefScopedTypedef(parentTdp, scopeTdp);
-                    }
-                }
                 if (!VN_IS(nodep->classOrPackagep(), Class)
                     && !VN_IS(nodep->classOrPackagep(), Package)) {
                     if (m_statep->forPrimary()) {
