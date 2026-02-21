@@ -68,7 +68,6 @@
 #include "V3Life.h"
 #include "V3LifePost.h"
 #include "V3LinkDot.h"
-#include "V3LinkDotDepGraph.h"
 #include "V3LinkDotIfaceCapture.h"
 #include "V3LinkInc.h"
 #include "V3LinkJump.h"
@@ -158,9 +157,7 @@ static void process() {
         V3LinkParse::linkParse(v3Global.rootp());
         // Cross-link signal names
         // Keep IfaceCapture enabled for AST pointer fixups.
-        // DepGraph is default-off and enabled only with --enable-depgraph.
         V3LinkDotIfaceCapture::enable(true);
-        V3LinkDotDepGraph::enable(v3Global.opt.enableDepGraph());
 
         // Cross-link dotted hierarchical references
         V3LinkDot::linkDotPrimary(v3Global.rootp());
@@ -183,9 +180,6 @@ static void process() {
         //   This requires some width calculations and constant propagation
         // No more AstGenCase/AstGenFor/AstGenIf after this
         V3Param::param(v3Global.rootp());
-
-        // Cleanup cloned types from DepGraph resolution after V3Param completes
-        if (V3LinkDotDepGraph::enabled()) V3LinkDotDepGraph::cleanupClonedTypes();
 
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs
