@@ -1045,17 +1045,15 @@ class ParamProcessor final {
         newModp->recursive(false);
         newModp->recursiveClone(false);
         newModp->hasGParam(false);
-        // Recursion may need level cleanups.  A default clone stands for the definition itself,
-        // so it keeps the definition's level: diagnostics, module order and the recursion-depth
-        // measure below must see it where the definition was, not one level deeper.
+        // Recursion may need level cleanups.  A default clone stands for the definition itself, so
+        // it keeps the definition's level; the depth measure below then sees a zero delta.
         if (defaultClone) {
             newModp->level(srcModp->level());
         } else if (newModp->level() <= m_modp->level()) {
             newModp->level(m_modp->level() + 1);
         }
-        if (!defaultClone
-            && (newModp->level() - srcModp->level())
-                   >= (v3Global.opt.moduleRecursionDepth() - 2)) {
+        if ((newModp->level() - srcModp->level())
+            >= (v3Global.opt.moduleRecursionDepth() - 2)) {
             ifErrorp->v3error("Exceeded maximum --module-recursion-depth of "
                               << v3Global.opt.moduleRecursionDepth());
             VL_DO_DANGLING(newModp->deleteTree(), newModp);
