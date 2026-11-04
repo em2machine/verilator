@@ -1009,8 +1009,12 @@ class ParamProcessor final {
     }
 
     // Return true on success, false on error
+    // 'defaultClone' is a request with no overrides: the clone must take the definition's own
+    // visible name, level and place in the module list, and no pin values are applied because the
+    // clone already carries the definition's defaults.
     bool deepCloneModule(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
-                         const string& newname, const IfaceRefRefs& ifaceRefRefs) {
+                         const string& newname, const IfaceRefRefs& ifaceRefRefs,
+                         bool defaultClone) {
         // Deep clone of new module
         // Note all module internal variables will be re-linked to the new modules by clone
         // However links outside the module (like on the upper cells) will not.
@@ -1041,9 +1045,17 @@ class ParamProcessor final {
         newModp->recursive(false);
         newModp->recursiveClone(false);
         newModp->hasGParam(false);
-        // Recursion may need level cleanups
-        if (newModp->level() <= m_modp->level()) newModp->level(m_modp->level() + 1);
-        if ((newModp->level() - srcModp->level()) >= (v3Global.opt.moduleRecursionDepth() - 2)) {
+        // Recursion may need level cleanups.  A default clone stands for the definition itself,
+        // so it keeps the definition's level: diagnostics, module order and the recursion-depth
+        // measure below must see it where the definition was, not one level deeper.
+        if (defaultClone) {
+            newModp->level(srcModp->level());
+        } else if (newModp->level() <= m_modp->level()) {
+            newModp->level(m_modp->level() + 1);
+        }
+        if (!defaultClone
+            && (newModp->level() - srcModp->level())
+                   >= (v3Global.opt.moduleRecursionDepth() - 2)) {
             ifErrorp->v3error("Exceeded maximum --module-recursion-depth of "
                               << v3Global.opt.moduleRecursionDepth());
             VL_DO_DANGLING(newModp->deleteTree(), newModp);
@@ -1058,12 +1070,18 @@ class ParamProcessor final {
         // module end up with the same level, which we will need to fix up at the end, as we do not
         // know up front how recursive modules are expanded, and a later expansion might re-use an
         // earlier expansion (see t_recursive_module_bug_2).
-        AstNode* insertp = srcModp;
-        while (VN_IS(insertp->nextp(), NodeModule)
-               && VN_AS(insertp->nextp(), NodeModule)->level() <= newModp->level()) {
-            insertp = insertp->nextp();
+        if (defaultClone) {
+            // The default clone stands where its definition was, so module order (and hence
+            // generated-name order) is unchanged from elaborating the definition in place.
+            srcModp->addNextHere(newModp);
+        } else {
+            AstNode* insertp = srcModp;
+            while (VN_IS(insertp->nextp(), NodeModule)
+                   && VN_AS(insertp->nextp(), NodeModule)->level() <= newModp->level()) {
+                insertp = insertp->nextp();
+            }
+            insertp->addNextHere(newModp);
         }
-        insertp->addNextHere(newModp);
 
         m_modNameMap.emplace(newModp->name(), ModInfo{newModp});
         const auto iter = m_modNameMap.find(newname);
@@ -1148,13 +1166,14 @@ class ParamProcessor final {
         return true;
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
-                                     const string& newname, const IfaceRefRefs& ifaceRefRefs) {
+                                     const string& newname, const IfaceRefRefs& ifaceRefRefs,
+                                     bool defaultClone = false) {
         // Already made this flavor?
         auto it = m_modNameMap.find(newname);
         if (it != m_modNameMap.end()) {
             UINFO(4, "     De-parameterize to prev: " << it->second.m_modp);
         } else {
-            if (!deepCloneModule(srcModp, ifErrorp, paramsp, newname, ifaceRefRefs)) {
+            if (!deepCloneModule(srcModp, ifErrorp, paramsp, newname, ifaceRefRefs, defaultClone)) {
                 return nullptr;
             }
             it = m_modNameMap.find(newname);
@@ -2118,6 +2137,19 @@ class ParamProcessor final {
             relinkPinsByName(pinsp, paramedModp);
             newModp = paramedModp;
             // any_overrides = true;  // Unused later, so not needed
+        } else if (!any_overrides && VN_IS(srcModp, Module) && !srcModp->recursiveClone()
+                   && !srcModp->isTop()) {
+            // A source definition is a clone source, never its own elaborated instance.  A request
+            // with no overrides takes a writable specialization through the same clone/reuse path
+            // as an override request: m_modNameMap shares one clone between every equivalent
+            // request.  No pin values are applied, as the clone already carries the definition's
+            // defaults; only the port formals are relinked.
+            UINFO(9, "nodeDeparamCommon: default clone of " << srcModp);
+            const ModInfo* const modInfop
+                = moduleFindOrClone(srcModp, nodep, nullptr, srcModp->name(), ifaceRefRefs, true);
+            if (!modInfop) return nullptr;
+            newModp = modInfop->m_modp;
+            relinkPinsByName(pinsp, newModp);
         } else if (!any_overrides) {
             UINFO(9, "nodeDeparamCommon: no overrides, reusing " << srcModp);
             UINFO(8, "Cell parameters all match original values, skipping expansion.");
@@ -3911,6 +3943,18 @@ public:
         relinkDots();
 
         resortNetlistModules(netlistp);
+
+        // A module definition that received specializations is no longer an instance: every cell
+        // was retargeted to a clone when its request was processed.  Give it an internal name and
+        // mark it dead so V3Dead removes it; the clone keeps the visible name and the definition's
+        // place in the module list.  Classes keep their own removal path below.
+        for (AstNodeModule* modp = netlistp->modulesp(); modp;
+             modp = VN_AS(modp->nextp(), NodeModule)) {
+            if (VN_IS(modp, Module) && modp->parameterizedTemplate() && !modp->dead()) {
+                modp->name(modp->name() + "__Vtpl");
+                modp->dead(true);
+            }
+        }
 
         // For occasional debug only; this will upset VL_LEAK_CHECKS
         // V3Global::dumpCheckGlobalTree("param-predel", 0, dumpTreeEitherLevel() >= 9);
