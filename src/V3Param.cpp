@@ -1121,6 +1121,11 @@ class ParamProcessor final {
             UASSERT_OBJ(cloneIrefp, portIrefp, "parameter clone didn't hit AstIfaceRefDType");
             UINFO(8, "     IfaceClo " << cloneIrefp);
             cloneIrefp->ifacep(pinIrefp->ifaceViaCellp());
+            // The declared type's parameter pins describe this bound instance now, so point them at
+            // its own parameter variables: they stay valid and a later request sees its values.
+            if (AstNodeModule* const boundp = cloneIrefp->ifaceViaCellp()) {
+                retargetIfaceParamPins(cloneIrefp, boundp);
+            }
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
 
@@ -1162,6 +1167,37 @@ class ParamProcessor final {
         }
 
         return true;
+    }
+    // True when 'modp' is a specialization made by this pass, not a definition loaded from source.
+    // Interface cells and interface references are deparameterized eagerly and again from the work
+    // queue, so the second request can arrive after its specialization was made and bound.
+    bool isSpecialization(const AstNodeModule* modp) const {
+        const auto it = m_modNameMap.find(modp->name());
+        return it != m_modNameMap.end() && it->second.m_modp == modp;
+    }
+    // Point the declared-type parameter pins of an interface reference at the parameter variables
+    // of the instance it is bound to.  The pins stay valid (they are not dangling, and a later
+    // request sees the instance's own values), while the declaration keeps its pins.
+    static void retargetIfaceParamPins(AstIfaceRefDType* refp, AstNodeModule* boundp) {
+        for (AstPin* pinp = refp->paramsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
+            if (AstVar* const fromVarp = pinp->modVarp()) {
+                for (AstNode* stmtp = boundp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    AstVar* const varp = VN_CAST(stmtp, Var);
+                    if (varp && varp->isGParam() && varp->name() == fromVarp->name()) {
+                        pinp->modVarp(varp);
+                        break;
+                    }
+                }
+            } else if (AstParamTypeDType* const fromTypep = pinp->modPTypep()) {
+                for (AstNode* stmtp = boundp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
+                    AstParamTypeDType* const typep = VN_CAST(stmtp, ParamTypeDType);
+                    if (typep && typep->name() == fromTypep->name()) {
+                        pinp->modPTypep(typep);
+                        break;
+                    }
+                }
+            }
+        }
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
                                      const string& newname, const IfaceRefRefs& ifaceRefRefs,
@@ -1852,7 +1888,15 @@ class ParamProcessor final {
                                   << " is not connected to interface/modport pin expression");
                 } else {
                     UINFO(9, "     pinIfaceRef " << pinIrefp);
-                    if (portIrefp->ifaceViaCellp() != pinIrefp->ifaceViaCellp()) {
+                    AstNodeModule* const portModp = portIrefp->ifaceViaCellp();
+                    AstNodeModule* const pinModp = pinIrefp->ifaceViaCellp();
+                    // A default specialization keeps the definition's visible name, so a declared
+                    // interface and the instance connected to it name the same specialization even
+                    // though one of the two is still the clone source.
+                    const bool sameSpecialization
+                        = portModp == pinModp
+                          || (portModp && pinModp && portModp->name() == pinModp->name());
+                    if (!sameSpecialization) {
                         UINFO(9, "     IfaceRefDType needs reconnect  " << pinIrefp);
                         longnamer += ("_" + paramSmallName(srcModp, pinp->modVarp())
                                       + paramValueNumber(pinIrefp));
@@ -1867,6 +1911,15 @@ class ParamProcessor final {
                                                   << AstNode::prettyNameQ(pinIrefp->ifaceName())
                                                   << " interface");
                         }
+                    } else if (portModp != pinModp && pinModp
+                               && !pinModp->parameterizedTemplate()) {
+                        // Same specialization, but the declared port names the clone source while
+                        // the pin already names the selected specialization (an interface instance,
+                        // or a parent port already bound to one).  Bind the clone's port to it, or
+                        // the port would name a retired definition.  If the pin still names a clone
+                        // source, V3LinkDot binds that through-port chain instead.
+                        UINFO(9, "     IfaceRefDType default bind  " << pinIrefp);
+                        ifaceRefRefs.emplace_back(portIrefp, pinIrefp);
                     }
                 }
             }
@@ -2054,6 +2107,17 @@ class ParamProcessor final {
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides) {
         // Returns new or reused module
+        // An interface specialization is an instance, never a clone source.  Interface cells and
+        // interface references are deparameterized eagerly and again from the work queue, so a
+        // second request arrives with the specialization already selected; its pins describe the
+        // binding, not a new specialization.  Retarget them at the bound instance and consume.
+        if (VN_IS(srcModp, Iface) && isSpecialization(srcModp)) {
+            UINFO(9, "nodeDeparamCommon: consumed interface request " << srcModp);
+            if (AstIfaceRefDType* const refp = VN_CAST(nodep, IfaceRefDType)) {
+                retargetIfaceParamPins(refp, srcModp);
+            }
+            return srcModp;
+        }
         // Make sure constification worked
         // Must be a separate loop, as constant conversion may have changed some pointers.
         string longname = srcModp->name() + "_";
@@ -2135,8 +2199,8 @@ class ParamProcessor final {
             relinkPinsByName(pinsp, paramedModp);
             newModp = paramedModp;
             // any_overrides = true;  // Unused later, so not needed
-        } else if (!any_overrides && VN_IS(srcModp, Module) && !srcModp->recursiveClone()
-                   && !srcModp->isTop()) {
+        } else if (!any_overrides && (VN_IS(srcModp, Module) || VN_IS(srcModp, Iface))
+                   && !srcModp->recursiveClone() && !srcModp->isTop()) {
             // A source definition is a clone source, never its own elaborated instance.  A request
             // with no overrides takes a writable specialization through the same clone/reuse path
             // as an override request: m_modNameMap shares one clone between every equivalent
@@ -3942,13 +4006,14 @@ public:
 
         resortNetlistModules(netlistp);
 
-        // A module definition that received specializations is no longer an instance: every cell
-        // was retargeted to a clone when its request was processed.  Give it an internal name and
-        // mark it dead so V3Dead removes it; the clone keeps the visible name and the definition's
-        // place in the module list.  Classes keep their own removal path below.
+        // A definition that received specializations is no longer an instance: every cell and
+        // reference was retargeted to a clone when its request was processed.  Give it an internal
+        // name and mark it dead so V3Dead removes it; the clone keeps the visible name and the
+        // definition's place in the module list.  Classes keep their own removal path below.
         for (AstNodeModule* modp = netlistp->modulesp(); modp;
              modp = VN_AS(modp->nextp(), NodeModule)) {
-            if (VN_IS(modp, Module) && modp->parameterizedTemplate() && !modp->dead()) {
+            if ((VN_IS(modp, Module) || VN_IS(modp, Iface)) && modp->parameterizedTemplate()
+                && !modp->dead()) {
                 modp->name(modp->name() + "__Vtpl");
                 modp->dead(true);
             }
