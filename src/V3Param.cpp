@@ -637,11 +637,14 @@ class ParamProcessor final {
     }
     void relinkPinsByName(AstPin* startpinp, AstNodeModule* modp) {
         std::map<const string, AstVar*> nameToPin;
+        std::map<const string, AstParamTypeDType*> nameToPType;
         for (AstNode* const stmtp : modp->stmtspList()) {
             if (AstVar* const varp = VN_CAST(stmtp, Var)) {
                 if (varp->isIO() || varp->isGParam() || varp->isIfaceRef()) {
                     nameToPin.emplace(varp->name(), varp);
                 }
+            } else if (AstParamTypeDType* const typep = VN_CAST(stmtp, ParamTypeDType)) {
+                if (typep->isGParam()) nameToPType.emplace(typep->name(), typep);
             }
         }
         for (AstPin* pinp = startpinp; pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
@@ -650,6 +653,11 @@ class ParamProcessor final {
                 UASSERT_OBJ(varIt != nameToPin.end(), varp,
                             "Not found in " << modp->prettyNameQ());
                 pinp->modVarp(varIt->second);
+            } else if (const AstParamTypeDType* const typep = pinp->modPTypep()) {
+                const auto typeIt = vlstd::as_const(nameToPType).find(typep->name());
+                UASSERT_OBJ(typeIt != nameToPType.end(), typep,
+                            "Not found in " << modp->prettyNameQ());
+                pinp->modPTypep(typeIt->second);
             }
         }
     }
@@ -1124,7 +1132,7 @@ class ParamProcessor final {
             // The declared type's parameter pins describe this bound instance now, so point them at
             // its own parameter variables: they stay valid and a later request sees its values.
             if (AstNodeModule* const boundp = cloneIrefp->ifaceViaCellp()) {
-                retargetIfaceParamPins(cloneIrefp, boundp);
+                relinkPinsByName(cloneIrefp->paramsp(), boundp);
             }
             UINFO(8, "     IfaceNew " << cloneIrefp);
         }
@@ -1174,30 +1182,6 @@ class ParamProcessor final {
     bool isSpecialization(const AstNodeModule* modp) const {
         const auto it = m_modNameMap.find(modp->name());
         return it != m_modNameMap.end() && it->second.m_modp == modp;
-    }
-    // Point the declared-type parameter pins of an interface reference at the parameter variables
-    // of the instance it is bound to.  The pins stay valid (they are not dangling, and a later
-    // request sees the instance's own values), while the declaration keeps its pins.
-    static void retargetIfaceParamPins(AstIfaceRefDType* refp, AstNodeModule* boundp) {
-        for (AstPin* pinp = refp->paramsp(); pinp; pinp = VN_AS(pinp->nextp(), Pin)) {
-            if (AstVar* const fromVarp = pinp->modVarp()) {
-                for (AstNode* stmtp = boundp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    AstVar* const varp = VN_CAST(stmtp, Var);
-                    if (varp && varp->isGParam() && varp->name() == fromVarp->name()) {
-                        pinp->modVarp(varp);
-                        break;
-                    }
-                }
-            } else if (AstParamTypeDType* const fromTypep = pinp->modPTypep()) {
-                for (AstNode* stmtp = boundp->stmtsp(); stmtp; stmtp = stmtp->nextp()) {
-                    AstParamTypeDType* const typep = VN_CAST(stmtp, ParamTypeDType);
-                    if (typep && typep->name() == fromTypep->name()) {
-                        pinp->modPTypep(typep);
-                        break;
-                    }
-                }
-            }
-        }
     }
     const ModInfo* moduleFindOrClone(AstNodeModule* srcModp, AstNode* ifErrorp, AstPin* paramsp,
                                      const string& newname, const IfaceRefRefs& ifaceRefRefs,
@@ -2114,7 +2098,7 @@ class ParamProcessor final {
         if (VN_IS(srcModp, Iface) && isSpecialization(srcModp)) {
             UINFO(9, "nodeDeparamCommon: consumed interface request " << srcModp);
             if (AstIfaceRefDType* const refp = VN_CAST(nodep, IfaceRefDType)) {
-                retargetIfaceParamPins(refp, srcModp);
+                relinkPinsByName(refp->paramsp(), srcModp);
             }
             return srcModp;
         }
