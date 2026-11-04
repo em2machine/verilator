@@ -11,12 +11,12 @@ import vltest_bootstrap
 
 test.scenarios('linter')
 
-# Issue #5066: Nested interface ports through interface arrays
-# (e.g., l2.l1[0] where l1 is an interface array inside interface l2).
-# V3Param internal errors have been fixed, but V3LinkDot interface
-# connection resolution for array element selections is not yet implemented.
-# This test documents the current behavior and should be updated when
-# full support is added.
-test.lint(fails=True, expect_filename=test.golden_filename)
+# Issue #5066: nested interface ports through interface arrays.  Forwarding an
+# indexed interface instance array element (l1.l0a[0]) to a port is not
+# supported yet.  Assert that the construct is rejected with a user error, and
+# that no internal error is reported.
+test.lint(fails=True)
+test.file_grep(test.compile_log_filename, r"Illegal port connection 'l0'")
+test.file_grep_not(test.compile_log_filename, r"Internal Error")
 
 test.passes()
