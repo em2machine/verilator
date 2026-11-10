@@ -533,7 +533,7 @@ class AstNode VL_NOT_FINAL {
     }
 
 private:
-    void frozenWrite(const char* operation) const VL_ATTR_NORETURN VL_ATTR_NOINLINE VL_ATTR_COLD;
+    void frozenWrite(const char* operation) const VL_ATTR_NOINLINE VL_ATTR_COLD;
     void frozenCheckLinkSlow(const char* operation) const;
     static void relinkOneLink(AstNode*& pointpr, AstNode* newp);
     AstNode* cloneTreeIter(bool needPure);
@@ -621,6 +621,9 @@ public:
     VL_ATTR_ALWINLINE void frozenCheck(const char* operation) const;
     VL_ATTR_ALWINLINE void frozenCheckLink(const char* operation) const;
     static void frozenSelfTest(bool testWrite = false);
+    // Measurement mode: log protected writes and keep templates frozen for the whole run.
+    static bool frozenWatch();
+    static void frozenPhase(const char* name);
 
     // ACCESSORS
     VNType type() const VL_MT_SAFE { return m_type; }

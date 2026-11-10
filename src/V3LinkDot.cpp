@@ -6891,6 +6891,9 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 }
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
+#ifdef VL_DEBUG
+    AstNode::frozenPhase("linkDotParamed");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     linkDotGuts(nodep, LDS_PARAMED);
     V3Global::dumpCheckGlobalTree("linkdotparam", 0, dumpTreeEitherLevel() >= 3);

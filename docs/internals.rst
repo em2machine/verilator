@@ -65,6 +65,9 @@ The main flow of Verilator can be followed by reading the Verilator.cpp
    diagnostic instance names remain bookkeeping. New semantic mutators must call
    ``frozenCheck`` before their first write.
    Virtual-interface usage affects optimization and is protected state.
+   ``VL_TEMPLATE_WATCH=1`` is a measurement mode in debug builds: it keeps
+   definitions frozen past V3Param, logs each protected write with its pass and
+   caller instead of aborting, and leaves teardown exempt.
    Check the interface being changed, not just a referring dtype.
 
    This is API-level checking, not memory protection: unguarded handwritten

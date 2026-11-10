@@ -884,6 +884,9 @@ void V3Dead::deadifyDTypesScoped(AstNetlist* nodep) {
 }
 
 void V3Dead::deadifyAll(AstNetlist* nodep) {
+#ifdef VL_DEBUG
+    AstNode::frozenPhase("dead");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     { DeadVisitor{nodep, true, true, false, true, true}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("deadAll", 0, dumpTreeEitherLevel() >= 3);

@@ -665,6 +665,9 @@ public:
 // V3WidthCommit class functions
 
 void V3WidthCommit::widthCommit(AstNetlist* nodep) {
+#ifdef VL_DEBUG
+    AstNode::frozenPhase("widthCommit");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     { WidthCommitVisitor{nodep}; }  // Destruct before checking
     V3Global::dumpCheckGlobalTree("widthcommit", 0, dumpTreeEitherLevel() >= 6);

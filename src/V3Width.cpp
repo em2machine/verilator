@@ -11652,6 +11652,9 @@ public:
 // Width class functions
 
 void V3Width::width(AstNetlist* nodep) {
+#ifdef VL_DEBUG
+    AstNode::frozenPhase("width");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     {
         // We should do it in bottom-up module order, but it works in any order.

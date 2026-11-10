@@ -301,6 +301,7 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
+        if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
         if (it == m_nodes.end()) return;
         for (AstNode* const nodep : it->second) nodep->frozenOwnerp(nullptr);
@@ -308,6 +309,7 @@ public:
     }
 
     ~ParamFrozenTemplates() {
+        if (AstNode::frozenWatch()) return;  // measurement: markers persist to the end
         // Recorded identities remain valid until their definition retires.
         for (const auto& definition : m_nodes) {
             for (AstNode* const nodep : definition.second) nodep->frozenOwnerp(nullptr);
@@ -4153,6 +4155,9 @@ public:
 // Param class functions
 
 void V3Param::param(AstNetlist* rootp) {
+#ifdef VL_DEBUG
+    AstNode::frozenPhase("param");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     rootp->clearDeferredParamVarps();  // Defensive: drop any stragglers from a prior invocation
 

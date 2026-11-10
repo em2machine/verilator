@@ -23,6 +23,10 @@
 #include <memory>
 #include <sstream>
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+#endif
+
 VL_DEFINE_DEBUG_FUNCTIONS;
 
 //======================================================================
@@ -34,8 +38,40 @@ uint64_t AstNode::s_editCntLast = 0;
 uint64_t AstNode::s_editCntGbl = 0;  // Hot cache line
 #ifdef VL_DEBUG
 thread_local unsigned AstNode::s_frozenRootLinks = 0;
+static const char* s_frozenPhase = "pre";
+void AstNode::frozenPhase(const char* name) { s_frozenPhase = name; }
+#else
+void AstNode::frozenPhase(const char*) {}
+#endif
+
+bool AstNode::frozenWatch() {
+#ifdef VL_DEBUG
+    static const bool watch = std::getenv("VL_TEMPLATE_WATCH") != nullptr;
+    return watch;
+#else
+    return false;
+#endif
+}
+
+#ifdef VL_DEBUG
+namespace {
+void frozenWatchLog(const AstNode* nodep, const char* operation, void* caller0) {
+    const char* symbol0 = "?";
+#ifdef __APPLE__
+    Dl_info info;
+    if (dladdr(caller0, &info) && info.dli_sname) symbol0 = info.dli_sname;
+#endif
+    fprintf(stderr, "PROTWRITE %s phase=%s target=%s caller=%s\n", operation,
+            s_frozenPhase, nodep->prettyTypeName().c_str(), symbol0);
+    fflush(stderr);
+}
+}  // namespace
 
 void AstNode::frozenWrite(const char* operation) const {
+    if (frozenWatch()) {
+        frozenWatchLog(this, operation, __builtin_return_address(0));
+        return;
+    }
     v3fatalSrc("Protected template write: " << operation << "; owner "
                << m_frozenOwnerp->prettyTypeName() << "; target " << prettyTypeName());
 }
@@ -1095,6 +1131,10 @@ void AstNode::purityCheck() {
 // Delete
 
 void AstNode::deleteNode() {
+#ifdef VL_DEBUG
+    // Teardown is not a template mutation; stop tracking the node before it goes away.
+    if (frozenWatch()) m_frozenOwnerp = nullptr;
+#endif
     frozenCheck("deleteNode");
     // private: Delete single node. Publicly call deleteTree() instead.
     UASSERT(!m_backp, "Delete called on node with backlink still set");
@@ -1125,6 +1165,9 @@ void AstNode::deleteTreeIter() {
     // private: Delete list of nodes. Publicly call deleteTree() instead.
     // Audited to make sure this is never nullptr
     for (AstNode *nodep = this, *nnextp; nodep; nodep = nnextp) {
+#ifdef VL_DEBUG
+        if (frozenWatch()) nodep->m_frozenOwnerp = nullptr;
+#endif
         nodep->frozenCheck("deleteTree");
         nnextp = nodep->m_nextp;
         // MUST be depth first!
@@ -1139,6 +1182,9 @@ void AstNode::deleteTreeIter() {
 }
 
 void AstNode::deleteTree() {
+#ifdef VL_DEBUG
+    if (frozenWatch()) m_frozenOwnerp = nullptr;
+#endif
     frozenCheck("deleteTree");
 #ifdef VL_DEBUG
     foreachAndNext([](AstNode* nodep) { nodep->frozenCheck("deleteTree"); });
