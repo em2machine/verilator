@@ -159,18 +159,20 @@ public:
     // Changing the width may confuse the data type resolution, so must clear
     // TypeTable cache after use.
     void widthForce(int width, int widthMin) {
+        frozenCheck("widthForce");
         m_width = width;
         m_widthMin = widthMin;
     }
     // For backward compatibility inherit width and signing from the subDType/base type
     void widthFromSub(const AstNodeDType* nodep) {
+        frozenCheck("widthFromSub");
         m_width = nodep->m_width;
         m_widthMin = nodep->m_widthMin;
         m_numeric = nodep->m_numeric;
     }
     //
     int width() const VL_MT_STABLE { return m_width; }
-    void numeric(VSigning flag) { m_numeric = flag; }
+    void numeric(VSigning flag) { frozenCheck("numeric"); m_numeric = flag; }
     bool isSigned() const VL_MT_STABLE { return m_numeric.isSigned(); }
     bool isNosign() const VL_MT_SAFE { return m_numeric.isNosign(); }
     VSigning numeric() const VL_MT_STABLE { return m_numeric; }
@@ -180,10 +182,10 @@ public:
         return m_widthMin ? m_widthMin : m_width;
     }
     int widthPow2() const;
-    void widthMinFromWidth() { m_widthMin = m_width; }
+    void widthMinFromWidth() { frozenCheck("widthMinFromWidth"); m_widthMin = m_width; }
     bool widthSized() const VL_MT_SAFE { return !m_widthMin || m_widthMin == m_width; }
     bool generic() const VL_MT_SAFE { return m_generic; }
-    void generic(bool flag) { m_generic = flag; }
+    void generic(bool flag) { frozenCheck("generic"); m_generic = flag; }
     std::pair<uint32_t, uint32_t> dimensions(bool includeBasic) const;
     uint32_t arrayUnpackedElements() const;  // 1, or total multiplication of all dimensions
     // Fixed aggregate streaming properties
@@ -249,7 +251,7 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
@@ -318,18 +320,18 @@ public:
     int widthTotalBytes() const override;
     bool similarDTypeNode(const AstNodeDType* samep) const override;
     string name() const override VL_MT_STABLE { return m_name; }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     // Keep the name the typedef declaring it gives, as it moves off it to the type table
-    void typedefName(const string& name) { m_typedefName = name; }
+    void typedefName(const string& name) { frozenCheck("typedefName"); m_typedefName = name; }
     // Name of the C structure for DPI, empty if no typedef names it, so declared where used
     string dpiName() const;
     // C typedef of the unpacked structure for DPI (IEEE 1800-2023 H.7.3)
     string dpiTypedef() const;
     bool packed() const VL_MT_SAFE { return m_packed; }
-    void packed(bool flag) { m_packed = flag; }
+    void packed(bool flag) { frozenCheck("packed"); m_packed = flag; }
     // packed() but as don't support unpacked, presently all structs
     static bool packedUnsup() { return true; }
-    void isFourstate(bool flag) { m_isFourstate = flag; }
+    void isFourstate(bool flag) { frozenCheck("isFourstate"); m_isFourstate = flag; }
     bool isFourstate() const override VL_MT_SAFE { return m_isFourstate; }
     static int lo() VL_MT_STABLE { return 0; }
     int hi() const VL_MT_STABLE {
@@ -337,11 +339,14 @@ public:
     }  // Packed classes look like arrays
     VNumRange declRange() const VL_MT_STABLE { return VNumRange{hi(), lo()}; }
     AstNodeModule* classOrPackagep() const { return m_classOrPackagep; }
-    void classOrPackagep(AstNodeModule* classpackagep) { m_classOrPackagep = classpackagep; }
+    void classOrPackagep(AstNodeModule* classpackagep) {
+        frozenCheck("classOrPackagep");
+        m_classOrPackagep = classpackagep;
+    }
     bool isConstrainedRand() const { return m_constrainedRand; }
-    void markConstrainedRand(bool flag) { m_constrainedRand = flag; }
+    void markConstrainedRand(bool flag) { frozenCheck("markConstrainedRand"); m_constrainedRand = flag; }
     bool emitToString() const { return m_emitToString; }
-    void setEmitToString() { m_emitToString = true; }
+    void setEmitToString() { frozenCheck("setEmitToString"); m_emitToString = true; }
     bool isAggregateType() const override { return !packed(); }
 };
 
@@ -365,7 +370,7 @@ public:
     string name() const override VL_MT_STABLE { return m_name; }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
     bool hasDType() const override VL_MT_SAFE { return true; }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
 };
 
 // === AstNodeDType ===
@@ -424,7 +429,7 @@ public:
         return m_keyDTypep ? m_keyDTypep : keyChildDTypep();
     }
     bool isAggregateType() const override { return true; }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     AstNodeDType* virtRefDType2p() const override { return m_keyDTypep; }
@@ -433,7 +438,7 @@ public:
     AstNodeDType* keyDTypep() const VL_MT_STABLE {
         return m_keyDTypep ? m_keyDTypep : keyChildDTypep();
     }
-    void keyDTypep(AstNodeDType* nodep) { m_keyDTypep = nodep; }
+    void keyDTypep(AstNodeDType* nodep) { frozenCheck("keyDTypep"); m_keyDTypep = nodep; }
     // METHODS
     AstBasicDType* basicp() const override VL_MT_STABLE { return nullptr; }
     int widthAlignBytes() const override { return subDTypep()->widthAlignBytes(); }
@@ -659,11 +664,11 @@ public:
     void virtRefDTypep(AstNodeDType* nodep) override {}
     AstNodeDType* subDTypep() const override VL_MT_STABLE { return nullptr; }
     AstNodeModule* classOrPackagep() const { return m_classOrPackagep; }
-    void classOrPackagep(AstNodeModule* nodep) { m_classOrPackagep = nodep; }
+    void classOrPackagep(AstNodeModule* nodep) { frozenCheck("classOrPackagep"); m_classOrPackagep = nodep; }
     AstClass* classp() const VL_MT_STABLE { return m_classp; }
-    void classp(AstClass* nodep) { m_classp = nodep; }
+    void classp(AstClass* nodep) { frozenCheck("classp"); m_classp = nodep; }
     bool rawPointer() const { return m_rawPointer; }
-    void rawPointer(bool flag) { m_rawPointer = flag; }
+    void rawPointer(bool flag) { frozenCheck("rawPointer"); m_rawPointer = flag; }
     static void selfTest();
     bool isCompound() const override { return true; }
 };
@@ -698,7 +703,7 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
@@ -844,7 +849,7 @@ public:
     int widthAlignBytes() const override { return dtypep()->widthAlignBytes(); }
     int widthTotalBytes() const override { return dtypep()->widthTotalBytes(); }
     string name() const override VL_MT_STABLE { return m_name; }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     bool isCompound() const override { return false; }
 };
 class AstDynArrayDType final : public AstNodeDType {
@@ -889,7 +894,7 @@ public:
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
     bool isAggregateType() const override { return true; }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
@@ -959,13 +964,13 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     string name() const override VL_MT_STABLE { return m_name; }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     // Keep the name the typedef declaring it gives, as it moves off it to the type table
-    void typedefName(const string& name) { m_typedefName = name; }
+    void typedefName(const string& name) { frozenCheck("typedefName"); m_typedefName = name; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     void dumpSmall(std::ostream& str) const override;
@@ -1068,25 +1073,29 @@ public:
     int widthTotalBytes() const override { return 0; }
     bool isVirtual() const { return m_virtual; }
     void isVirtual(bool flag) {
+        frozenCheck("isVirtual");
         m_virtual = flag;
         if (flag) v3Global.setHasVirtIfaces();
     }
     FileLine* modportFileline() const { return m_modportFileline; }
-    void modportFileline(FileLine* const modportFileline) { m_modportFileline = modportFileline; }
+    void modportFileline(FileLine* const modportFileline) {
+        frozenCheck("modportFileline");
+        m_modportFileline = modportFileline;
+    }
     string cellName() const { return m_cellName; }
-    void cellName(const string& name) { m_cellName = name; }
+    void cellName(const string& name) { frozenCheck("cellName"); m_cellName = name; }
     string ifaceName() const { return m_ifaceName; }
     string ifaceNameQ() const { return "'" + prettyName(ifaceName()) + "'"; }
-    void ifaceName(const string& name) { m_ifaceName = name; }
-    void modportName(const string& modportName) { m_modportName = modportName; }
+    void ifaceName(const string& name) { frozenCheck("ifaceName"); m_ifaceName = name; }
+    void modportName(const string& modportName) { frozenCheck("modportName"); m_modportName = modportName; }
     string modportName() const { return m_modportName; }
     AstIface* ifaceViaCellp() const;  // Use cellp or ifacep
     AstIface* ifacep() const { return m_ifacep; }
-    void ifacep(AstIface* nodep) { m_ifacep = nodep; }
+    void ifacep(AstIface* nodep) { frozenCheck("ifacep"); m_ifacep = nodep; }
     AstCell* cellp() const { return m_cellp; }
-    void cellp(AstCell* nodep) { m_cellp = nodep; }
+    void cellp(AstCell* nodep) { frozenCheck("cellp"); m_cellp = nodep; }
     AstModport* modportp() const { return m_modportp; }
-    void modportp(AstModport* modportp) { m_modportp = modportp; }
+    void modportp(AstModport* modportp) { frozenCheck("modportp"); m_modportp = modportp; }
     bool isModport() { return !m_modportName.empty(); }
     bool isCompound() const override { return true; }  // But not relevant
 };
@@ -1133,7 +1142,7 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     bool similarDTypeNode(const AstNodeDType* samep) const override { return this == samep; }
@@ -1148,19 +1157,19 @@ public:
     // (Slow) recurses - Width in bytes rounding up 1,2,4,8,12,...
     int widthTotalBytes() const override { return subDTypep()->widthTotalBytes(); }
     // METHODS
-    void name(const string& name) override { m_name = name; }
+    void name(const string& name) override { frozenCheck("name"); m_name = name; }
     string tag() const override { return m_tag; }
-    void tag(const string& text) override { m_tag = text; }
+    void tag(const string& text) override { frozenCheck("tag"); m_tag = text; }
     int lsb() const { return m_lsb; }
-    void lsb(int lsb) { m_lsb = lsb; }
+    void lsb(int lsb) { frozenCheck("lsb"); m_lsb = lsb; }
     bool isCompound() const override {
         v3fatalSrc("call isCompound on subdata type, not reference");
         return false;
     }
     bool isConstrainedRand() const { return m_constrainedRand; }
-    void markConstrainedRand(bool flag) { m_constrainedRand = flag; }
+    void markConstrainedRand(bool flag) { frozenCheck("markConstrainedRand"); m_constrainedRand = flag; }
     VRandAttr rand() const { return m_rand; }
-    void rand(const VRandAttr flag) { m_rand = flag; }
+    void rand(const VRandAttr flag) { frozenCheck("rand"); m_rand = flag; }
 };
 class AstNBACommitQueueDType final : public AstNodeDType {
     // @astgen ptr := m_subDTypep : AstNodeDType  // Type of the corresponding variable
@@ -1224,7 +1233,7 @@ public:
     string name() const override VL_MT_STABLE { return m_name; }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
     bool hasDType() const override VL_MT_SAFE { return true; }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     VVarType varType() const { return m_varType; }  // * = Type of variable
     VFwdType fwdType() const { return m_fwdType; }
     bool isParam() const { return true; }
@@ -1303,7 +1312,7 @@ public:
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
     bool isAggregateType() const override { return true; }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     inline int boundConst() const VL_MT_STABLE;
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
@@ -1371,18 +1380,18 @@ public:
     AstNodeDType* getChildDTypep() const override { return VN_CAST(typeofp(), NodeDType); }
     int widthAlignBytes() const override { return dtypeSkipRefp()->widthAlignBytes(); }
     int widthTotalBytes() const override { return dtypeSkipRefp()->widthTotalBytes(); }
-    void name(const string& flag) override { m_name = flag; }
+    void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     AstNodeDType* dtypeSkipRefp() const { return subDTypep()->skipRefp(); }
     AstTypedef* typedefp() const VL_MT_SAFE { return m_typedefp; }
-    void typedefp(AstTypedef* nodep) { m_typedefp = nodep; }
+    void typedefp(AstTypedef* nodep) { frozenCheck("typedefp"); m_typedefp = nodep; }
     AstNodeDType* refDTypep() const VL_MT_SAFE { return m_refDTypep; }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return refDTypep(); }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     AstNodeModule* classOrPackagep() const { return m_classOrPackagep; }
-    void classOrPackagep(AstNodeModule* nodep) { m_classOrPackagep = nodep; }
+    void classOrPackagep(AstNodeModule* nodep) { frozenCheck("classOrPackagep"); m_classOrPackagep = nodep; }
     const VIfaceCaptureTag* captureTagp() const { return m_captureTagp; }
-    void captureTagp(const VIfaceCaptureTag* tagp) { m_captureTagp = tagp; }
+    void captureTagp(const VIfaceCaptureTag* tagp) { frozenCheck("captureTagp"); m_captureTagp = tagp; }
     bool isCompound() const override {
         v3fatalSrc("call isCompound on subdata type, not reference");
         return false;
@@ -1444,7 +1453,7 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
@@ -1509,12 +1518,12 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
     bool packed() const { return m_packed; }
-    void packed(bool flag) { m_packed = flag; }
+    void packed(bool flag) { frozenCheck("packed"); m_packed = flag; }
     AstBasicDType* basicp() const override VL_MT_STABLE { return subDTypep()->basicp(); }
     int widthAlignBytes() const override { return subDTypep()->widthAlignBytes(); }
     int widthTotalBytes() const override { return subDTypep()->widthTotalBytes(); }
@@ -1567,7 +1576,7 @@ public:
     AstNodeDType* subDTypep() const override VL_MT_STABLE {
         return m_refDTypep ? m_refDTypep : childDTypep();
     }
-    void refDTypep(AstNodeDType* nodep) { m_refDTypep = nodep; }
+    void refDTypep(AstNodeDType* nodep) { frozenCheck("refDTypep"); m_refDTypep = nodep; }
     AstNodeDType* virtRefDTypep() const override { return m_refDTypep; }
     void virtRefDTypep(AstNodeDType* nodep) override { refDTypep(nodep); }
     // METHODS
@@ -1626,7 +1635,7 @@ public:
     bool isReverseOf(const AstNodeDType* otherp) const;
     // Outer dimension comes first. The first element is this node.
     std::vector<AstUnpackArrayDType*> unpackDimensions();
-    void isCompound(bool flag) { m_isCompound = flag; }
+    void isCompound(bool flag) { frozenCheck("isCompound"); m_isCompound = flag; }
     bool isCompound() const override VL_MT_SAFE { return m_isCompound; }
     bool isIntegralOrPacked() const override { return false; }
 };

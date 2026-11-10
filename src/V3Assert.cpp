@@ -342,7 +342,7 @@ class DefaultSampledValueVisitor final : public VNVisitor {
     static AstConst* newTypeDefault(AstNodeExpr* nodep) {
         AstConst* const constp
             = new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()};
-        if (nodep->dtypep()->isFourstate()) constp->num().setAllBitsX();
+        if (nodep->dtypep()->isFourstate()) constp->numMutate().setAllBitsX();
         constp->dtypeFrom(nodep);
         return constp;
     }

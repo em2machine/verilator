@@ -289,6 +289,10 @@ private:
     bool m_debugPreprocPassthru = false;  // main switch: --debug-preproc-passthru
     bool m_debugProtect = false;    // main switch: --debug-protect
     bool m_debugSelfTest = false;   // main switch: --debug-self-test
+#ifdef VL_DEBUG
+    bool m_debugTemplateProtect = false;
+    bool m_debugTemplateProtectTestWrite = false;
+#endif
     bool m_debugStackCheck = false;  // main switch: --debug-stack-check
     int m_debugRuntimeTimeout = 0;  // main switch: --debug-runtime-timeout <n>
     bool m_debugWidth = false;      // main switch: --debug-width
@@ -602,6 +606,12 @@ public:
     bool debugProtect() const VL_MT_SAFE { return m_debugProtect; }
     int debugRuntimeTimeout() const { return m_debugRuntimeTimeout; }
     bool debugSelfTest() const { return m_debugSelfTest; }
+#ifdef VL_DEBUG
+    bool debugTemplateProtect() const { return m_debugTemplateProtect; }
+    bool debugTemplateProtectTestWrite() const { return m_debugTemplateProtectTestWrite; }
+#else
+    bool debugTemplateProtect() const { return false; }
+#endif
     bool debugStackCheck() const { return m_debugStackCheck; }
     bool debugWidth() const VL_PURE { return m_debugWidth; }
     bool decoration() const VL_MT_SAFE { return m_decoration; }

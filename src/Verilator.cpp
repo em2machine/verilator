@@ -728,7 +728,13 @@ static bool verilate(const string& argString) {
     // Internal tests (after option parsing as need debug() setting,
     // and after removing files as may make debug output)
     VBasicDTypeKwd::selfTest();
+#ifdef VL_DEBUG
+    if (v3Global.opt.debugTemplateProtectTestWrite()) AstNode::frozenSelfTest(true);
+#endif
     if (v3Global.opt.debugSelfTest()) {
+#ifdef VL_DEBUG
+        AstNode::frozenSelfTest();
+#endif
         AstClassRefDType::selfTest();
         V3Os::selfTest();
         V3Number::selfTest();

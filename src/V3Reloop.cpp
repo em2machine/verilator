@@ -167,11 +167,11 @@ class ReloopVisitor final : public VNVisitor {
         // Structurally identical apart from the constants. Compare in place with the constants
         // temporarily set to those of 'firstp', then restore them to 'first + delta * n'.
         for (size_t i = 0; i < m_consts.size(); ++i) {
-            m_consts[i]->num().setLong(m_firstConsts[i]->toUInt());
+            m_consts[i]->numMutate().setLong(m_firstConsts[i]->toUInt());
         }
         const bool same = nodep->sameTree(firstp);
         for (size_t i = 0; i < m_consts.size(); ++i) {
-            m_consts[i]->num().setLong(m_firstConsts[i]->toUInt() + m_deltas[i] * n);
+            m_consts[i]->numMutate().setLong(m_firstConsts[i]->toUInt() + m_deltas[i] * n);
         }
         return same;
     }

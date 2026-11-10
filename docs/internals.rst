@@ -52,6 +52,41 @@ The main flow of Verilator can be followed by reading the Verilator.cpp
    Declaration-side enum representatives remain unchanged during rebinding.
    Ownership lookup skips preceding siblings and checks each link when validating node liveness.
 
+   Debug builds can enable template protection with ``--debug-template-protect``.
+   During V3Param, guarded mutation APIs reject writes to physically owned
+   definition nodes before changing them. Clones are writable before relinking.
+   Top modules, hierarchical roots, packages, and recursive copies are excluded.
+   Protection continues through ParamTop postprocessing and ends when definitions
+   retire or ParamState is destroyed; later linking and width passes are outside
+   this boundary.
+
+   Root-list placement permits only definition-root list-link changes, not body
+   or semantic edits. Visitor slots, clone correspondence, edit counters, and
+   diagnostic instance names remain bookkeeping. New semantic mutators must call
+   ``frozenCheck`` before their first write.
+
+   This is API-level checking, not memory protection: unguarded handwritten
+   setters, direct writes through ``foreachLink`` slots, and mutable constant
+   references obtained before freezing can bypass it. Referenced canonical
+   dtypes outside the definition's physical children are not frozen.
+   ``num()`` is read-only; writable constant access uses ``numMutate()``.
+
+   The ``t_debug_template_protect`` fixture checks clone independence and root
+   placement. Its expected-failure companion uses
+   ``--debug-template-protect-test-write`` to check a forbidden write through
+   the real fatal path, including while root-link permission is active.
+   Protection state, activation flags, and freeze walks are absent from release
+   builds. Existing writes may stop a protected run; lifecycle bookkeeping must
+   be distinguished from semantic template poisoning.
+
+   Selection tracking may set ``parameterizedTemplate`` on a protected definition
+   root; repeating the same marker is a debug no-op. Clearing a protected marker
+   or changing one on a protected descendant remains forbidden. This policy does
+   not make the definition body writable.
+
+   Guard declarations stay in ``V3Ast.h``; inline debug/release definitions live
+   in ``V3AstInlines.h``, and fatal reporting stays in ``V3Ast.cpp``.
+
 #. Verilator then performs additional edits and optimizations on the
    hierarchical design. This includes coverage, assertions, X elimination,
    inlining, constant propagation, and dead code elimination.

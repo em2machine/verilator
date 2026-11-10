@@ -32,6 +32,59 @@ uint64_t VIsCached::s_cachedCntGbl = 1;
 
 uint64_t AstNode::s_editCntLast = 0;
 uint64_t AstNode::s_editCntGbl = 0;  // Hot cache line
+#ifdef VL_DEBUG
+thread_local unsigned AstNode::s_frozenRootLinks = 0;
+
+void AstNode::frozenWrite(const char* operation) const {
+    v3fatalSrc("Protected template write: " << operation << "; owner "
+               << m_frozenOwnerp->prettyTypeName() << "; target " << prettyTypeName());
+}
+
+void AstNode::frozenCheckLinkSlow(const char* operation) const {
+    if (s_frozenRootLinks && static_cast<const AstNode*>(m_frozenOwnerp) == this) return;
+    frozenWrite(operation);
+}
+
+void AstNode::frozenSelfTest(bool testWrite) {
+    FileLine* const flp = new FileLine{FileLine::commandLineFilename()};
+    AstModule* const sourcep = new AstModule{flp, "template_fixture", "work"};
+    AstBegin* const childp = new AstBegin{flp, "template_original", nullptr, false};
+    sourcep->addStmtsp(childp);
+    sourcep->checkTree();
+    sourcep->frozenOwnerp(sourcep);
+    childp->frozenOwnerp(sourcep);
+    sourcep->parameterizedTemplate(true);
+    sourcep->parameterizedTemplate(true);
+    if (testWrite) {
+        const FrozenRootLinks frozenRootLinks;
+        childp->name("template_changed");
+    }
+    AstModule* const clonep = sourcep->cloneTree(false);
+    AstBegin* const cloneChildp = VN_AS(clonep->stmtsp(), Begin);
+    UASSERT_OBJ(!clonep->frozenOwnerp() && !cloneChildp->frozenOwnerp(), clonep,
+                "Protected clone remained frozen");
+    clonep->parameterizedTemplate(false);
+    clonep->name("template_clone");
+    cloneChildp->name("template_changed");
+    cloneChildp->addStmtsp(new AstBegin{flp, "clone_only", nullptr, false});
+    UASSERT_OBJ(sourcep->name() == "template_fixture"
+                    && sourcep->parameterizedTemplate() && !clonep->parameterizedTemplate()
+                    && childp->name() == "template_original" && !childp->stmtsp()
+                    && cloneChildp != childp && cloneChildp->name() == "template_changed",
+                sourcep, "Protected source changed through clone");
+    {
+        const FrozenRootLinks frozenRootLinks;
+        sourcep->addNextHere(clonep);
+        clonep->unlinkFrBack();
+    }
+    sourcep->checkTree();
+    clonep->checkTree();
+    childp->frozenOwnerp(nullptr);
+    sourcep->frozenOwnerp(nullptr);
+    clonep->deleteTree();
+    sourcep->deleteTree();
+}
+#endif
 
 // To allow for fast clearing of all user pointers, we keep a "timestamp"
 // along with each userp, and thus by bumping this count we can make it look
@@ -421,6 +474,10 @@ AstNode* AstNode::addNext<AstNode, AstNode>(AstNode* nodep, AstNode* newp) {
         }
     }
     // Link it in
+    oldtailp->frozenCheckLink("addNext");
+    newp->frozenCheckLink("addNext");
+    newp->m_headtailp->frozenCheckLink("addNext");
+    oldtailp->m_headtailp->frozenCheckLink("addNext");
     oldtailp->m_nextp = newp;
     newp->m_backp = oldtailp;
     // New tail needs the head
@@ -453,6 +510,11 @@ void AstNode::addNextHere(AstNode* newp) {
 
     // Forward links
     AstNode* const oldnextp = this->m_nextp;
+    frozenCheckLink("addNextHere");
+    newp->frozenCheckLink("addNextHere");
+    addlastp->frozenCheckLink("addNextHere");
+    if (oldnextp) oldnextp->frozenCheckLink("addNextHere");
+    if (m_headtailp) m_headtailp->frozenCheckLink("addNextHere");
     this->m_nextp = newp;
     addlastp->m_nextp = oldnextp;  // Perhaps null if 'this' is not list
 
@@ -488,7 +550,9 @@ void AstNode::addNextHere(AstNode* newp) {
 }
 
 void AstNode::setOp1p(AstNode* newp) {
+    frozenCheck("setOp1p");
     UASSERT(newp, "Null item passed to setOp1p");
+    newp->frozenCheckLink("setOp1p back");
     UDEBUGONLY(UASSERT_OBJ(!m_op1p, this, "Adding to non-empty, non-list op1"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_nextp, newp, "Adding list to non-list op1"););
@@ -501,7 +565,9 @@ void AstNode::setOp1p(AstNode* newp) {
 }
 
 void AstNode::setOp2p(AstNode* newp) {
+    frozenCheck("setOp2p");
     UASSERT(newp, "Null item passed to setOp2p");
+    newp->frozenCheckLink("setOp2p back");
     UDEBUGONLY(UASSERT_OBJ(!m_op2p, this, "Adding to non-empty, non-list op2"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_nextp, newp, "Adding list to non-list op2"););
@@ -514,7 +580,9 @@ void AstNode::setOp2p(AstNode* newp) {
 }
 
 void AstNode::setOp3p(AstNode* newp) {
+    frozenCheck("setOp3p");
     UASSERT(newp, "Null item passed to setOp3p");
+    newp->frozenCheckLink("setOp3p back");
     UDEBUGONLY(UASSERT_OBJ(!m_op3p, this, "Adding to non-empty, non-list op3"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_nextp, newp, "Adding list to non-list op3"););
@@ -527,7 +595,9 @@ void AstNode::setOp3p(AstNode* newp) {
 }
 
 void AstNode::setOp4p(AstNode* newp) {
+    frozenCheck("setOp4p");
     UASSERT(newp, "Null item passed to setOp4p");
+    newp->frozenCheckLink("setOp4p back");
     UDEBUGONLY(UASSERT_OBJ(!m_op4p, this, "Adding to non-empty, non-list op4"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     UDEBUGONLY(UASSERT_OBJ(!newp->m_nextp, newp, "Adding list to non-list op4"););
@@ -540,6 +610,7 @@ void AstNode::setOp4p(AstNode* newp) {
 }
 
 void AstNode::addOp1p(AstNode* newp) {
+    frozenCheck("addOp1p");
     UASSERT(newp, "Null item passed to addOp1p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op1p) {
@@ -550,6 +621,7 @@ void AstNode::addOp1p(AstNode* newp) {
 }
 
 void AstNode::addOp2p(AstNode* newp) {
+    frozenCheck("addOp2p");
     UASSERT(newp, "Null item passed to addOp2p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op2p) {
@@ -560,6 +632,7 @@ void AstNode::addOp2p(AstNode* newp) {
 }
 
 void AstNode::addOp3p(AstNode* newp) {
+    frozenCheck("addOp3p");
     UASSERT(newp, "Null item passed to addOp3p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op3p) {
@@ -570,6 +643,7 @@ void AstNode::addOp3p(AstNode* newp) {
 }
 
 void AstNode::addOp4p(AstNode* newp) {
+    frozenCheck("addOp4p");
     UASSERT(newp, "Null item passed to addOp4p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op4p) {
@@ -580,6 +654,7 @@ void AstNode::addOp4p(AstNode* newp) {
 }
 
 void AstNode::prependOp1p(AstNode* newp) {
+    frozenCheck("prependOp1p");
     UASSERT(newp, "Null item passed to prependOp1p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op1p) {
@@ -590,6 +665,7 @@ void AstNode::prependOp1p(AstNode* newp) {
 }
 
 void AstNode::prependOp2p(AstNode* newp) {
+    frozenCheck("prependOp2p");
     UASSERT(newp, "Null item passed to prependOp2p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op2p) {
@@ -600,6 +676,7 @@ void AstNode::prependOp2p(AstNode* newp) {
 }
 
 void AstNode::prependOp3p(AstNode* newp) {
+    frozenCheck("prependOp3p");
     UASSERT(newp, "Null item passed to prependOp3p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op3p) {
@@ -610,6 +687,7 @@ void AstNode::prependOp3p(AstNode* newp) {
 }
 
 void AstNode::prependOp4p(AstNode* newp) {
+    frozenCheck("prependOp4p");
     UASSERT(newp, "Null item passed to prependOp4p");
     UDEBUGONLY(UASSERT_OBJ(!newp->m_backp, newp, "Adding already linked node"););
     if (!m_op4p) {
@@ -620,6 +698,8 @@ void AstNode::prependOp4p(AstNode* newp) {
 }
 
 void AstNode::replaceWith(AstNode* newp) {
+    newp->frozenCheckLink("replaceWith");
+    newp->m_headtailp->frozenCheckLink("replaceWith");
     // Replace oldp with this
     // Unlike a unlink/relink, children are changed to point to the new node.
     VNRelinker repHandle;
@@ -627,8 +707,10 @@ void AstNode::replaceWith(AstNode* newp) {
     repHandle.relink(newp);
 }
 void AstNode::replaceWithKeepDType(AstNode* newp) {
-    newp->dtypeFrom(this);
+    AstNodeDType* const oldDTypep = dtypep();
+    newp->frozenCheck("replaceWithKeepDType");
     replaceWith(newp);
+    newp->dtypep(oldDTypep);
 }
 
 void VNRelinker::dump(std::ostream& str) const {
@@ -648,6 +730,21 @@ AstNode* AstNode::unlinkFrBackWithNext(VNRelinker* linkerp) {
     oldp->editCountInc();
     // cppcheck-suppress shadowFunction
     AstNode* const backp = oldp->m_backp;
+#ifdef VL_DEBUG
+    oldp->frozenCheckLink("unlinkFrBackWithNext");
+    if (backp->m_nextp == oldp) {
+        backp->frozenCheckLink("unlinkFrBackWithNext");
+        AstNode* tailp = backp->m_headtailp;
+        if (!tailp) {
+            tailp = oldp;
+            while (tailp->m_nextp) tailp = tailp->m_nextp;
+        }
+        tailp->frozenCheckLink("unlinkFrBackWithNext");
+        tailp->m_headtailp->frozenCheckLink("unlinkFrBackWithNext");
+    } else {
+        backp->frozenCheck("unlinkFrBackWithNext child");
+    }
+#endif
     if (linkerp) {
         linkerp->m_oldp = oldp;
         linkerp->m_backp = backp;
@@ -714,6 +811,14 @@ AstNode* AstNode::unlinkFrBack(VNRelinker* linkerp) {
     oldp->editCountInc();
     // cppcheck-suppress shadowFunction
     AstNode* const backp = oldp->m_backp;
+    oldp->frozenCheckLink("unlinkFrBack");
+    if (backp->m_nextp == oldp) {
+        backp->frozenCheckLink("unlinkFrBack");
+    } else {
+        backp->frozenCheck("unlinkFrBack child");
+    }
+    if (oldp->m_nextp) oldp->m_nextp->frozenCheckLink("unlinkFrBack");
+    if (oldp->m_headtailp) oldp->m_headtailp->frozenCheckLink("unlinkFrBack");
     if (linkerp) {
         linkerp->m_oldp = oldp;
         linkerp->m_backp = backp;
@@ -796,6 +901,8 @@ void AstNode::relink(VNRelinker* linkerp) {
 
     // cppcheck-suppress shadowFunction
     AstNode* const backp = linkerp->m_backp;
+    newp->frozenCheckLink("relink");
+    if (linkerp->m_chg != VNRelinker::RELINK_NEXT) backp->frozenCheck("relink child");
     debugTreeChange(this, "-relinkNew: ", __LINE__, true);
     debugTreeChange(backp, "-relinkTre: ", __LINE__, true);
 
@@ -827,6 +934,12 @@ void AstNode::relink(VNRelinker* linkerp) {
 
 void AstNode::relinkOneLink(AstNode*& pointpr,  // Ref to pointer that gets set to newp
                             AstNode* newp) {
+    newp->frozenCheckLink("relinkOneLink");
+    if (pointpr) {
+        pointpr->frozenCheckLink("relinkOneLink");
+        newp->m_headtailp->frozenCheckLink("relinkOneLink");
+        pointpr->m_headtailp->frozenCheckLink("relinkOneLink");
+    }
     if (pointpr) {
         // We know there will be at least two elements when we are done,
         //    (newp & the old list).
@@ -861,6 +974,15 @@ void AstNode::addHereThisAsNext(AstNode* newp) {
     // cppcheck-suppress shadowFunction
     AstNode* const backp = this->m_backp;
     AstNode* const newLastp = newp->m_headtailp;
+    frozenCheckLink("addHereThisAsNext");
+    newp->frozenCheckLink("addHereThisAsNext");
+    newLastp->frozenCheckLink("addHereThisAsNext");
+    if (backp->m_nextp == this) {
+        backp->frozenCheckLink("addHereThisAsNext");
+    } else {
+        backp->frozenCheck("addHereThisAsNext child");
+        m_headtailp->frozenCheckLink("addHereThisAsNext");
+    }
     //
     this->editCountInc();
     // Common linkage
@@ -913,6 +1035,7 @@ AstNode* AstNode::cloneTreeIter(bool needPure) {
     // private: Clone single node and children
     if (needPure) purityCheck();
     AstNode* const newp = this->clone();
+    newp->frozenOwnerp(nullptr);
     if (this->m_op1p) newp->op1p(this->m_op1p->cloneTreeIterList(needPure));
     if (this->m_op2p) newp->op2p(this->m_op2p->cloneTreeIterList(needPure));
     if (this->m_op3p) newp->op3p(this->m_op3p->cloneTreeIterList(needPure));
@@ -972,6 +1095,7 @@ void AstNode::purityCheck() {
 // Delete
 
 void AstNode::deleteNode() {
+    frozenCheck("deleteNode");
     // private: Delete single node. Publicly call deleteTree() instead.
     UASSERT(!m_backp, "Delete called on node with backlink still set");
     editCountInc();
@@ -1001,6 +1125,7 @@ void AstNode::deleteTreeIter() {
     // private: Delete list of nodes. Publicly call deleteTree() instead.
     // Audited to make sure this is never nullptr
     for (AstNode *nodep = this, *nnextp; nodep; nodep = nnextp) {
+        nodep->frozenCheck("deleteTree");
         nnextp = nodep->m_nextp;
         // MUST be depth first!
         if (nodep->m_op1p) nodep->m_op1p->deleteTreeIter();
@@ -1014,6 +1139,10 @@ void AstNode::deleteTreeIter() {
 }
 
 void AstNode::deleteTree() {
+    frozenCheck("deleteTree");
+#ifdef VL_DEBUG
+    foreachAndNext([](AstNode* nodep) { nodep->frozenCheck("deleteTree"); });
+#endif
     // deleteTree always deletes the next link, because you must have called
     // unlinkFromBack or unlinkFromBackWithNext as appropriate before calling this.
     UASSERT(!m_backp, "Delete called on node with backlink still set");
@@ -1234,6 +1363,7 @@ void AstNode::cloneRelinkTree() {
     // private: Cleanup clone() operation on whole tree. Publicly call cloneTree() instead.
     for (AstNode* nodep = this; nodep; nodep = nodep->m_nextp) {
         if (nodep->m_dtypep && nodep->m_dtypep->clonep()) {
+            nodep->frozenCheck("cloneRelinkTree dtypep");
             nodep->m_dtypep = nodep->m_dtypep->clonep();
         }
         nodep->cloneRelink();

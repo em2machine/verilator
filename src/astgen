@@ -1058,7 +1058,10 @@ def write_ast_impl(filename):
                     emitBlock("    Ast{base}::cloneRelinkGen();\n", base=node.superClass.name)
                 for ptr in node.ptrs:
                     emitBlock(
-                        "    if (m_{name} && m_{name}->clonep()) m_{name} = m_{name}->clonep();\n",
+                        "    if (m_{name} && m_{name}->clonep()) {{\n"
+                        "        frozenCheck(\"cloneRelinkGen {name}\");\n"
+                        "        m_{name} = m_{name}->clonep();\n"
+                        "    }}\n",
                         name=ptr['name'],
                         kind=ptr['kind'])
 

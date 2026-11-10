@@ -1461,6 +1461,11 @@ void V3Options::parseOptsList(FileLine* fl, const string& optdir, int argc,
     DECL_OPTION("-debug-protect", OnOff, &m_debugProtect).undocumented();
     DECL_OPTION("-debug-runtime-timeout", Set, &m_debugRuntimeTimeout).undocumented();
     DECL_OPTION("-debug-self-test", OnOff, &m_debugSelfTest).undocumented();
+#ifdef VL_DEBUG
+    DECL_OPTION("-debug-template-protect", OnOff, &m_debugTemplateProtect).undocumented();
+    DECL_OPTION("-debug-template-protect-test-write", OnOff, &m_debugTemplateProtectTestWrite)
+        .undocumented();
+#endif
     DECL_OPTION("-debug-sigsegv", CbCall, throwSigsegv).undocumented();  // See also --debug-abort
     DECL_OPTION("-debug-stack-check", OnOff, &m_debugStackCheck).undocumented();
     DECL_OPTION("-debug-width", OnOff, &m_debugWidth).undocumented();

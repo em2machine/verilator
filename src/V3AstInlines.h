@@ -25,6 +25,35 @@
 //######################################################################
 // Inline METHODS
 
+#ifdef VL_DEBUG
+AstNode::FrozenRootLinks::FrozenRootLinks() { ++s_frozenRootLinks; }
+AstNode::FrozenRootLinks::~FrozenRootLinks() { --s_frozenRootLinks; }
+AstNodeModule* AstNode::frozenOwnerp() const { return m_frozenOwnerp; }
+void AstNode::frozenOwnerp(AstNodeModule* ownerp) { m_frozenOwnerp = ownerp; }
+void AstNode::frozenCheck(const char* operation) const {
+    if (VL_UNLIKELY(m_frozenOwnerp)) frozenWrite(operation);
+}
+void AstNode::frozenCheckLink(const char* operation) const {
+    if (VL_UNLIKELY(m_frozenOwnerp)) frozenCheckLinkSlow(operation);
+}
+#else
+AstNode::FrozenRootLinks::FrozenRootLinks() = default;
+AstNode::FrozenRootLinks::~FrozenRootLinks() = default;
+AstNodeModule* AstNode::frozenOwnerp() const { return nullptr; }
+void AstNode::frozenOwnerp(AstNodeModule*) {}
+void AstNode::frozenCheck(const char*) const {}
+void AstNode::frozenCheckLink(const char*) const {}
+#endif
+
+// Selection tracking may mark a protected definition root, but never clear it.
+void AstNodeModule::parameterizedTemplate(bool flag) {
+#ifdef VL_DEBUG
+    if (m_parameterizedTemplate == flag) return;
+    if (!flag || frozenOwnerp() != this) frozenCheck("parameterizedTemplate");
+#endif
+    m_parameterizedTemplate = flag;
+}
+
 int AstNode::width() const VL_MT_STABLE { return dtypep() ? dtypep()->width() : 0; }
 int AstNode::widthMin() const VL_MT_STABLE { return dtypep() ? dtypep()->widthMin() : 0; }
 bool AstNode::width1() const {  // V3Const uses to know it can optimize

@@ -274,6 +274,50 @@ public:
 //######################################################################
 // Remove parameters from cells and build new modules
 
+#ifdef VL_DEBUG
+class ParamFrozenTemplates final {
+    std::unordered_map<AstNodeModule*, std::vector<AstNode*>> m_nodes;
+    const bool m_enabled = v3Global.opt.debugTemplateProtect();
+
+public:
+    void freeze(AstNodeModule* modp) {
+        if (!m_enabled || modp->frozenOwnerp() || modp->dead() || modp->recursiveClone()) return;
+        if (!(VN_IS(modp, Module) || VN_IS(modp, Iface) || VN_IS(modp, Class))) return;
+        if (!VN_IS(modp, Class)
+            && (VN_IS(modp, Package) || modp->isTop() || modp->hierBlock())) {
+            return;
+        }
+        std::vector<AstNode*>& nodes = m_nodes[modp];
+        modp->foreach([&](AstNode* nodep) {
+            if (nodep->frozenOwnerp()) return;
+            nodep->frozenOwnerp(modp);
+            nodes.push_back(nodep);
+        });
+    }
+
+    void freezeInputs(AstNetlist* netlistp) {
+        if (!m_enabled) return;
+        netlistp->foreach([&](AstNodeModule* modp) { freeze(modp); });
+    }
+
+    void thaw(AstNodeModule* modp) {
+        const auto it = m_nodes.find(modp);
+        if (it == m_nodes.end()) return;
+        for (AstNode* const nodep : it->second) nodep->frozenOwnerp(nullptr);
+        m_nodes.erase(it);
+    }
+
+    ~ParamFrozenTemplates() {
+        // Recorded identities remain valid until their definition retires.
+        for (const auto& definition : m_nodes) {
+            for (AstNode* const nodep : definition.second) nodep->frozenOwnerp(nullptr);
+        }
+    }
+    VL_UNCOPYABLE(ParamFrozenTemplates);
+    ParamFrozenTemplates() = default;
+};
+#endif
+
 class ParamProcessor final {
     // NODE STATE - Local
     //   AstVar::user3()        // int    Global parameter number (for naming new module)
@@ -325,6 +369,9 @@ class ParamProcessor final {
 
     // Database to get lib-create wrapper that matches parameters in hierarchical Verilation
     ParameterizedHierBlocks m_hierBlocks;
+#ifdef VL_DEBUG
+    ParamFrozenTemplates* m_frozenTemplates = nullptr;
+#endif
     // Default parameter values key:parameter name, value:default value (can be nullptr)
     using DefaultValueMap = std::map<std::string, AstNode*>;
     // Default parameter values of hierarchical blocks
@@ -1060,6 +1107,9 @@ class ParamProcessor final {
         // know up front how recursive modules are expanded, and a later expansion might re-use an
         // earlier expansion (see t_recursive_module_bug_2).
         if (defaultClone) {
+#ifdef VL_DEBUG
+            const AstNode::FrozenRootLinks frozenRootLinks;
+#endif
             // Keep the default clone beside its definition to preserve module order.
             srcModp->addNextHere(newModp);
         } else {
@@ -1068,6 +1118,9 @@ class ParamProcessor final {
                    && VN_AS(insertp->nextp(), NodeModule)->level() <= newModp->level()) {
                 insertp = insertp->nextp();
             }
+#ifdef VL_DEBUG
+            const AstNode::FrozenRootLinks frozenRootLinks;
+#endif
             insertp->addNextHere(newModp);
         }
 
@@ -1175,6 +1228,18 @@ class ParamProcessor final {
         return findSpecialization(name);
     }
 public:
+#ifdef VL_DEBUG
+    void frozenTemplates(ParamFrozenTemplates& templates) { m_frozenTemplates = &templates; }
+
+    void freezeSource(AstNodeModule* modp) {
+        if (!v3Global.opt.debugTemplateProtect()) return;
+        UASSERT_OBJ(m_frozenTemplates, modp, "Missing template protection lifetime");
+        if (isSpecialization(modp)) return;
+        if (VN_IS(modp, Class) && !modp->hasGParam() && insideSelectedBody(modp)) return;
+        m_frozenTemplates->freeze(modp);
+    }
+#endif
+
     // True when this node sits inside an already selected clone body.
     bool insideSelectedBody(const AstNodeModule* modp) const {
         for (AstNode* ap = modp->aboveLoopp(); ap; ap = ap->aboveLoopp()) {
@@ -1187,6 +1252,9 @@ public:
     }
     // Obtain the shared default specialization of a referenced class definition.
     AstClass* classDefaultSpecialization(AstClass* defp, AstNode* ifErrorp) {
+#ifdef VL_DEBUG
+        freezeSource(defp);
+#endif
         if (AstClass* const existingp = VN_CAST(defp->user4p(), Class)) return existingp;
         const ModInfo* const modInfop = moduleFindOrClone(defp, ifErrorp, nullptr, defp->name(),
                                                           IfaceRefRefs{}, true);
@@ -2088,6 +2156,9 @@ private:
     AstNodeModule* nodeDeparamCommon(AstNode* nodep, AstNodeModule* srcModp, AstPin* paramsp,
                                      AstPin* pinsp, bool any_overrides) {
         // Returns new or reused module
+#ifdef VL_DEBUG
+        freezeSource(srcModp);
+#endif
         // Reuse an already selected interface specialization instead of cloning it again.
         if (VN_IS(srcModp, Iface) && isSpecialization(srcModp)) {
             UINFO(9, "nodeDeparamCommon: consumed interface request " << srcModp);
@@ -2417,6 +2488,9 @@ public:
                                const string& someInstanceName) {
         // Return new or reused de-parameterized module
         m_modp = modp;
+#ifdef VL_DEBUG
+        freezeSource(srcModp);
+#endif
         // Cell: Check for parameters in the instantiation.
         // We always run this, even if no parameters, as need to look for interfaces,
         // and remove any recursive references
@@ -2785,6 +2859,9 @@ public:
 class ParamState final {
 public:
     // STATE - across all visitors
+#ifdef VL_DEBUG
+    ParamFrozenTemplates m_frozenTemplates;
+#endif
     std::vector<AstClass*> m_paramClasses;  // Parameterized classes
     std::vector<AstDot*> m_dots;  // Dot references to process
     // Work queue keyed by (!isIface, level) so interfaces are always processed
@@ -3236,6 +3313,9 @@ class ParamVisitor final : public VNVisitor {
         if (AstClass* const classp = VN_CAST(nodep, Class)) {
             if (!m_processor.isSpecialization(classp)
                 && (classp->hasGParam() || !m_processor.insideSelectedBody(classp))) {
+#ifdef VL_DEBUG
+                m_state.m_frozenTemplates.freeze(classp);
+#endif
                 // A plain source root takes one default clone; generic nodes stay definitions.
                 if (!classp->hasGParam()) m_processor.classDefaultSpecialization(classp, classp);
                 m_state.m_paramClasses.push_back(classp);
@@ -3833,6 +3913,9 @@ public:
     explicit ParamVisitor(ParamState& state, AstNetlist* netlistp)
         : m_state{state}
         , m_processor{netlistp} {
+#ifdef VL_DEBUG
+        m_processor.frozenTemplates(m_state.m_frozenTemplates);
+#endif
 
         // Relies on modules already being in top-down-order
         iterate(netlistp);
@@ -3884,6 +3967,9 @@ class ParamTop final : VNDeleter {
     }
 
     void resortNetlistModules(AstNetlist* netlistp) {
+#ifdef VL_DEBUG
+        const AstNode::FrozenRootLinks frozenRootLinks;
+#endif
         // Re-sort module list to be in topological order and fix-up incorrect levels. We need to
         // do this globally at the end due to the presence of recursive modules, which might be
         // expanded in orders that reuse earlier specializations later at a lower level.
@@ -3910,6 +3996,9 @@ class ParamTop final : VNDeleter {
             // Retire cloned definitions so only their specializations reach later passes.
             if ((VN_IS(modp, Module) || VN_IS(modp, Iface)) && modp->parameterizedTemplate()
                 && !modp->dead()) {
+#ifdef VL_DEBUG
+                m_state.m_frozenTemplates.thaw(modp);
+#endif
                 modp->name(modp->name() + "__Vtpl");
                 modp->dead(true);
             }
@@ -3919,6 +4008,9 @@ class ParamTop final : VNDeleter {
 public:
     // CONSTRUCTORS
     explicit ParamTop(AstNetlist* netlistp) {
+#ifdef VL_DEBUG
+        m_state.m_frozenTemplates.freezeInputs(netlistp);
+#endif
         // Relies on modules already being in top-down-order
         const ParamVisitor paramVisitor{m_state /*ref*/, netlistp};
 
@@ -4024,6 +4116,10 @@ public:
             // If there was an error, keep classes as they may still be referenced.
             if (V3Error::errorCount()) continue;
             removedClassps.emplace(classp);
+#ifdef VL_DEBUG
+            m_state.m_frozenTemplates.thaw(classp);
+            const AstNode::FrozenRootLinks frozenRootLinks;
+#endif
             VL_DO_DANGLING(pushDeletep(classp->unlinkFrBack()), classp);
         }
         // Remove references to defaulted classes
@@ -4042,6 +4138,7 @@ public:
             nodep->foreachLink([&](AstNode** const linkpp, const char* namep) {
                 if (*linkpp && (*linkpp)->user3()) {
                     UINFO(9, "clear   link " << namep << " on " << nodep);
+                    nodep->frozenCheck("clear retired class reference");
                     *linkpp = nullptr;
                     UINFO(9, "cleared link " << namep << " on " << nodep);
                 }

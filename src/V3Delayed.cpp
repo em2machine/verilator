@@ -587,7 +587,7 @@ class DelayedVisitor final : public VNVisitor {
         AstVarScope* const tp = m_dlyTmps.make(flp, scopep, dtypep, name);
         // Zero it
         AstConst* const zerop = new AstConst{flp, AstConst::DTyped{}, dtypep};
-        zerop->num().setAllBits0();
+        zerop->numMutate().setAllBits0();
         insertp->addHereThisAsNext(
             new AstAssign{flp, new AstVarRef{flp, tp, VAccess::WRITE}, zerop});
         // Set the selected bits to 'valuep'
@@ -698,7 +698,7 @@ class DelayedVisitor final : public VNVisitor {
         });
         FileLine* const flp = nodep->fileline();
         AstConst* const onesp = new AstConst{flp, AstConst::DTyped{}, lhsClonep->dtypep()};
-        onesp->num().setAllBits1();
+        onesp->numMutate().setAllBits1();
         nodep->addNextHere(new AstAssign{flp, lhsClonep, onesp});
     }
 
@@ -938,13 +938,13 @@ class DelayedVisitor final : public VNVisitor {
                     // Constant mask we can compute here
                     if (const AstConst* const cLsbp = VN_CAST(sLsbp, Const)) {
                         AstConst* const cp = new AstConst{flp, AstConst::DTyped{}, eDTypep};
-                        cp->num().setMask(sWidth, cLsbp->toSInt());
+                        cp->numMutate().setMask(sWidth, cLsbp->toSInt());
                         return cp;
                     }
 
                     // A non-constant mask we must compute at run-time.
                     AstConst* const onesp = new AstConst{flp, AstConst::WidthedValue{}, sWidth, 0};
-                    onesp->num().setAllBits1();
+                    onesp->numMutate().setAllBits1();
                     return createWidened(flp, scopep, eDTypep, sLsbp, sWidth, "Mask" + baseName,
                                          onesp, nodep);
                 }();
@@ -955,8 +955,8 @@ class DelayedVisitor final : public VNVisitor {
                     if (AstConst* const cValuep = VN_CAST(valuep, Const)) {
                         if (const AstConst* const cLsbp = VN_CAST(sLsbp, Const)) {
                             AstConst* const cp = new AstConst{flp, AstConst::DTyped{}, eDTypep};
-                            cp->num().setAllBits0();
-                            cp->num().opSelInto(cValuep->num(), cLsbp->toSInt(), sWidth);
+                            cp->numMutate().setAllBits0();
+                            cp->numMutate().opSelInto(cValuep->num(), cLsbp->toSInt(), sWidth);
                             VL_DO_DANGLING(valuep->deleteTree(), valuep);
                             return cp;
                         }
@@ -969,7 +969,7 @@ class DelayedVisitor final : public VNVisitor {
             } else {
                 // If this assignment is not partial, set mask to ones and we are done
                 AstConst* const onesp = new AstConst{flp, AstConst::DTyped{}, eDTypep};
-                onesp->num().setAllBits1();
+                onesp->numMutate().setAllBits1();
                 maskp = onesp;
             }
         }

@@ -672,6 +672,7 @@ void AstAttrOf::dumpJson(std::ostream& str) const {
 }
 void AstBasicDType::cvtRangeConst() {
     if (rangep() && VN_IS(rangep()->leftp(), Const) && VN_IS(rangep()->rightp(), Const)) {
+        frozenCheck("cvtRangeConst");
         m.m_nrange = VNumRange{rangep()->leftConst(), rangep()->rightConst()};
         rangep()->unlinkFrBackWithNext()->deleteTree();
         rangep(nullptr);
@@ -1374,6 +1375,7 @@ const char* AstConsArray::broken() const {
     return nullptr;
 }
 void AstConsArray::cloneRelink() {
+    frozenCheck("cloneRelink");
     cloneRelinkGen();
     // The copied map has the indices of the cloned items, in the same order
     AstConsArrayItem* itemp = itemsp();
@@ -1384,6 +1386,10 @@ void AstConsArray::cloneRelink() {
     }
 }
 void AstConsArray::spliceValues(uint64_t index, AstNodeExpr* arrayp) {
+    frozenCheck("spliceValues");
+#ifdef VL_DEBUG
+    arrayp->foreachAndNext([](AstNode* nodep) { nodep->frozenCheck("spliceValues consume"); });
+#endif
     const bool ascending = VN_AS(dtypep()->skipRefp(), UnpackArrayDType)->declRange().ascending();
     const AstUnpackArrayDType* const srcp = VN_AS(arrayp->dtypep()->skipRefp(), UnpackArrayDType);
     const int elements = srcp->elementsConst();
@@ -1408,9 +1414,21 @@ AstNodeExpr* AstConsArray::valuep(uint64_t index) const {
     return it == m_itemps.end() ? defaultp() : it->second->valuep();
 }
 void AstConsArray::valuep(uint64_t index, AstNodeExpr* newp) {
+    frozenCheck("valuep");
+    newp->frozenCheckLink("valuep back");
     const auto it = m_itemps.lower_bound(index);
     UASSERT_OBJ(it == m_itemps.end() || it->first != index, this,
                 "Array value element already given " << index);
+#ifdef VL_DEBUG
+    if (AstConsArrayItem* const headp = itemsp()) {
+        headp->frozenCheckLink("valuep");
+        headp->lastp()->frozenCheckLink("valuep");
+        if (it != m_itemps.end()) {
+            it->second->frozenCheckLink("valuep");
+            if (it->second->backp() != this) it->second->backp()->frozenCheckLink("valuep");
+        }
+    }
+#endif
     AstConsArrayItem* const itemp = new AstConsArrayItem{fileline(), index, newp};
     if (it == m_itemps.end()) {
         addNOp2p(itemp);
@@ -1472,6 +1490,7 @@ void AstConsStructItem::dump(std::ostream& str) const {
     memberp()->dump(str);
 }
 void AstConst::cloneRelink() {
+    frozenCheck("cloneRelink");
     // Preserve parameter-origin metadata across AST clones; the side-table key must be this
     // new AstConst, not the original node.
     if (const AstConst* const oldp = clonep()) {
@@ -1496,6 +1515,7 @@ string AstConst::origParamName() const {
     return v3Global.rootp()->astConstOrigParamName(this);
 }
 void AstConst::origParamName(const string& name) {
+    frozenCheck("origParamName");
     UASSERT(!name.empty(), "Empty originating parameter name");
     v3Global.rootp()->astConstOrigParamName(this, name);
     m_num.hasOrigParamName(true);
@@ -4463,6 +4483,7 @@ const char* AstVar::cannotSplitKindReason() const {
     return nullptr;
 }
 void AstVar::combineType(VVarType type) {
+    frozenCheck("combineType");
     // These flags get combined with the existing settings of the flags.
     // We don't test varType for certain types, instead set flags since
     // when we combine wires cross-hierarchy we need a union of all characteristics.
@@ -4476,6 +4497,7 @@ void AstVar::combineType(VVarType type) {
     if (type.isParam()) m_isConst = true;
 }
 void AstVar::combineType(const AstVar* otherp) {
+    frozenCheck("combineType");
     // "this" is the port var. otherp is the reg var, or vice-versa
     propagateAttrFrom(otherp);
     combineType(otherp->varType());

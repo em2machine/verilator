@@ -698,7 +698,7 @@ class CaseVisitor final : public VNVisitor {
                 AstConst* const rhsp = VN_AS(lhsRecord.preDefaultp->rhsp(), Const);
                 for (uint32_t index = 0; index < tableEntries; ++index) {
                     const uint32_t tableOffset = index * entryWidth + lhsOffset;
-                    tablep->num().opSelInto(rhsp->num(), tableOffset, lhsWidth);
+                    tablep->numMutate().opSelInto(rhsp->num(), tableOffset, lhsWidth);
                 }
             }
 
@@ -719,7 +719,7 @@ class CaseVisitor final : public VNVisitor {
                 if (cip->isDefault()) {
                     for (uint32_t index = 0; index < tableEntries; ++index) {
                         const uint32_t tableOffset = index * entryWidth + lhsOffset;
-                        tablep->num().opSelInto(rhsp->num(), tableOffset, lhsWidth);
+                        tablep->numMutate().opSelInto(rhsp->num(), tableOffset, lhsWidth);
                     }
                     continue;
                 }
@@ -737,7 +737,7 @@ class CaseVisitor final : public VNVisitor {
                     for (uint32_t i = inverseMask; true; i = (i - 1) & inverseMask) {
                         const uint32_t index = i | matchBits;
                         const uint32_t tableOffset = index * entryWidth + lhsOffset;
-                        tablep->num().opSelInto(rhsp->num(), tableOffset, lhsWidth);
+                        tablep->numMutate().opSelInto(rhsp->num(), tableOffset, lhsWidth);
                         if (!i) break;
                     }
                 }
@@ -810,15 +810,15 @@ class CaseVisitor final : public VNVisitor {
             // If the entry has a condition, use it's match bits and mask
             if (AstConst* const condp = clauses[i].first) {
                 const auto& match = matchPattern(nodep, condp);
-                matchp->num().opSelInto(match.first, entryLsb, condWidth);
-                matchp->num().opSelInto(match.second, entryLsb + matchWidth / 2, condWidth);
+                matchp->numMutate().opSelInto(match.first, entryLsb, condWidth);
+                matchp->numMutate().opSelInto(match.second, entryLsb + matchWidth / 2, condWidth);
                 continue;
             }
 
             // Otherwise use zero for mask and bits, which matches anything
             V3Number numZero{flp, condWidth, 0};
-            matchp->num().opSelInto(numZero, entryLsb, condWidth);
-            matchp->num().opSelInto(numZero, entryLsb + matchWidth / 2, condWidth);
+            matchp->numMutate().opSelInto(numZero, entryLsb, condWidth);
+            matchp->numMutate().opSelInto(numZero, entryLsb + matchWidth / 2, condWidth);
         }
 
         // Create the table initializer
@@ -852,7 +852,7 @@ class CaseVisitor final : public VNVisitor {
                                 "Decoder LHS unassigned in case item without a pre-default");
                     valConstp = VN_AS(lhsRecord.preDefaultp->rhsp(), Const);
                 }
-                entryp->num().opSelInto(valConstp->num(), lhsRecord.offset, lhsp->width());
+                entryp->numMutate().opSelInto(valConstp->num(), lhsRecord.offset, lhsp->width());
             }
             tablep->valuep(i, entryp);
         }

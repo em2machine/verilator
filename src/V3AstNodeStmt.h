@@ -87,7 +87,7 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Block name
-    void name(const string& name) override { m_name = name; }
+    void name(const string& name) override { frozenCheck("name"); m_name = name; }
     bool unnamed() const { return m_unnamed; }
 };
 class AstNodeCoverOrAssert VL_NOT_FINAL : public AstNodeStmt {
@@ -121,7 +121,7 @@ public:
     ASTGEN_MEMBERS_AstNodeCoverOrAssert;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     bool sameNode(const AstNode* samep) const override { return samep->name() == name(); }
-    void name(const string& name) override { m_name = name; }
+    void name(const string& name) override { frozenCheck("name"); m_name = name; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     string type() { return ""; }
@@ -445,18 +445,18 @@ public:
     bool caseInside() const { return m_caseType == VCaseType::CT_CASEINSIDE; }
     bool caseMatches() const { return m_caseType == VCaseType::CT_CASEMATCHES; }
     bool caseSimple() const { return m_caseType == VCaseType::CT_CASE; }
-    void caseInsideSet() { m_caseType = VCaseType::CT_CASEINSIDE; }
-    void caseMatchesSet() { m_caseType = VCaseType::CT_CASEMATCHES; }
+    void caseInsideSet() { frozenCheck("caseInsideSet"); m_caseType = VCaseType::CT_CASEINSIDE; }
+    void caseMatchesSet() { frozenCheck("caseMatchesSet"); m_caseType = VCaseType::CT_CASEMATCHES; }
     bool fullPragma() const { return m_fullPragma; }
-    void fullPragma(bool flag) { m_fullPragma = flag; }
+    void fullPragma(bool flag) { frozenCheck("fullPragma"); m_fullPragma = flag; }
     bool parallelPragma() const { return m_parallelPragma; }
-    void parallelPragma(bool flag) { m_parallelPragma = flag; }
+    void parallelPragma(bool flag) { frozenCheck("parallelPragma"); m_parallelPragma = flag; }
     bool uniquePragma() const { return m_uniquePragma; }
-    void uniquePragma(bool flag) { m_uniquePragma = flag; }
+    void uniquePragma(bool flag) { frozenCheck("uniquePragma"); m_uniquePragma = flag; }
     bool unique0Pragma() const { return m_unique0Pragma; }
-    void unique0Pragma(bool flag) { m_unique0Pragma = flag; }
+    void unique0Pragma(bool flag) { frozenCheck("unique0Pragma"); m_unique0Pragma = flag; }
     bool priorityPragma() const { return m_priorityPragma; }
-    void priorityPragma(bool flag) { m_priorityPragma = flag; }
+    void priorityPragma(bool flag) { frozenCheck("priorityPragma"); m_priorityPragma = flag; }
     string pragmaString() const;
 };
 class AstComment final : public AstNodeStmt {
@@ -507,9 +507,9 @@ public:
     bool isPredictOptimizable() const override { return false; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
     bool isDisableSoft() const { return m_isDisableSoft; }
-    void isDisableSoft(bool flag) { m_isDisableSoft = flag; }
+    void isDisableSoft(bool flag) { frozenCheck("isDisableSoft"); m_isDisableSoft = flag; }
     bool isSoft() const { return m_isSoft; }
-    void isSoft(bool flag) { m_isSoft = flag; }
+    void isSoft(bool flag) { frozenCheck("isSoft"); m_isSoft = flag; }
 };
 class AstConstraintUnique final : public AstNodeStmt {
     // Constraint unique statement
@@ -1008,7 +1008,7 @@ public:
         const AstPrintTimeScale* const sp = VN_DBG_AS(samep, PrintTimeScale);
         return name() == sp->name() && timeunit() == sp->timeunit();
     }
-    void name(const string& name) override { m_name = name; }
+    void name(const string& name) override { frozenCheck("name"); m_name = name; }
     string name() const override VL_MT_STABLE { return m_name; }  // * = Var name
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
@@ -1133,7 +1133,7 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     string name() const override VL_MT_STABLE { return m_name; }  // * = Block name
-    void name(const string& name) override { m_name = name; }
+    void name(const string& name) override { frozenCheck("name"); m_name = name; }
     string start() const VL_MT_STABLE { return m_start; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     AstRSProd* prodp() const { return m_prodp; }

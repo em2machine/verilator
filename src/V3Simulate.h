@@ -117,7 +117,7 @@ private:
                     new AstConst{nodep->fileline(), AstConst::DTyped{}, nodep->dtypep()});
             }
             AstConst* const constp = m_constps[m_nextFree++];
-            constp->num().nodep(nodep);
+            constp->numMutate().nodep(nodep);
             return constp;
         }
 
@@ -269,7 +269,7 @@ private:
 public:
     void newValue(AstNode* nodep, const AstNodeExpr* valuep) {
         if (const AstConst* const constp = VN_CAST(valuep, Const)) {
-            newConst(nodep)->num().opAssign(constp->num());
+            newConst(nodep)->numMutate().opAssign(constp->num());
             UINFO(9, "     new val " << valuep->name() << " on " << nodep);
         } else if (fetchValueNull(nodep) != valuep) {
             // const_cast, as clonep() is set on valuep, but nothing should care
@@ -278,7 +278,7 @@ public:
     }
     void newOutValue(AstNode* nodep, const AstNodeExpr* valuep) {
         if (const AstConst* const constp = VN_CAST(valuep, Const)) {
-            newOutConst(nodep)->num().opAssign(constp->num());
+            newOutConst(nodep)->numMutate().opAssign(constp->num());
             UINFO(9, "     new oval " << valuep->name() << " on " << nodep);
         } else if (fetchOutValueNull(nodep) != valuep) {
             // const_cast, as clonep() is set on valuep, but nothing should care
@@ -339,12 +339,12 @@ private:
     }
 
 public:
-    V3Number* fetchNumberNull(AstNode* nodep) {
+    const V3Number* fetchNumberNull(AstNode* nodep) {
         AstConst* const constp = fetchConstNull(nodep);
         if (constp) return &constp->num();
         return nullptr;
     }
-    V3Number* fetchOutNumberNull(AstNode* nodep) {
+    const V3Number* fetchOutNumberNull(AstNode* nodep) {
         AstConst* const constp = fetchOutConstNull(nodep);
         if (constp) return &constp->num();
         return nullptr;
@@ -479,9 +479,9 @@ private:
             AstConst* const constp
                 = new AstConst{nodep->fileline(), AstConst::WidthedValue{}, basicp->widthMin(), 0};
             if (basicp->isZeroInit()) {
-                constp->num() = V3Number{nodep, basicp};
+                constp->numMutate() = V3Number{nodep, basicp};
             } else {
-                constp->num().setAllBitsX();
+                constp->numMutate().setAllBitsX();
             }
             return constp;
         }
@@ -708,7 +708,7 @@ private:
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
         if (m_checkOnly || !optimizable()) return;
-        nodep->numberOperate(newConst(nodep)->num(), fetchConst(nodep->lhsp())->num());
+        nodep->numberOperate(newConst(nodep)->numMutate(), fetchConst(nodep->lhsp())->num());
     }
     // Set resultr to whether the aggregate values are equal, like a logical and of comparing
     // each element or member. V3Width allows comparing only values of matching types, so the
@@ -752,7 +752,7 @@ private:
         const bool caseEq = VN_IS(nodep, EqCase) || VN_IS(nodep, NeqCase);
         const bool neq = VN_IS(nodep, Neq) || VN_IS(nodep, NeqCase);
         UASSERT_OBJ(caseEq || neq || VN_IS(nodep, Eq), nodep, "Unexpected operator on aggregate");
-        V3Number& resultr = newConst(nodep)->num();
+        V3Number& resultr = newConst(nodep)->numMutate();
         resultr.setAllBits1();
         aggregateEqRecurse(resultr, nodep, caseEq, fetchValue(nodep->lhsp()),
                            fetchValue(nodep->rhsp()));
@@ -773,14 +773,14 @@ private:
             return;
         }
         AstConst* const valuep = newConst(nodep);
-        nodep->numberOperate(newConst(nodep)->num(), fetchConst(nodep->lhsp())->num(),
+        nodep->numberOperate(newConst(nodep)->numMutate(), fetchConst(nodep->lhsp())->num(),
                              fetchConst(nodep->rhsp())->num());
         // See #5490. 'numberOperate' on partially out of range select yields 'x' bits,
         // but in reality it would yield '0's without V3Table, so force 'x' bits to '0',
         // to ensure the result is the same with and without V3Table.
         if (!m_params && VN_IS(nodep, Sel) && valuep->num().isAnyX()) {
             const V3Number num{valuep, valuep->width(), valuep->num()};
-            valuep->num().opBitsOne(num);
+            valuep->numMutate().opBitsOne(num);
         }
     }
     void visit(AstNodeTriop* nodep) override {
@@ -788,7 +788,7 @@ private:
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
         if (m_checkOnly || !optimizable()) return;
-        nodep->numberOperate(newConst(nodep)->num(), fetchConst(nodep->lhsp())->num(),
+        nodep->numberOperate(newConst(nodep)->numMutate(), fetchConst(nodep->lhsp())->num(),
                              fetchConst(nodep->rhsp())->num(), fetchConst(nodep->thsp())->num());
     }
     void visit(AstNodeQuadop* nodep) override {
@@ -796,7 +796,7 @@ private:
         checkNodeInfo(nodep);
         iterateChildrenConst(nodep);
         if (m_checkOnly || !optimizable()) return;
-        nodep->numberOperate(newConst(nodep)->num(), fetchConst(nodep->lhsp())->num(),
+        nodep->numberOperate(newConst(nodep)->numMutate(), fetchConst(nodep->lhsp())->num(),
                              fetchConst(nodep->rhsp())->num(), fetchConst(nodep->thsp())->num(),
                              fetchConst(nodep->fhsp())->num());
     }
@@ -955,13 +955,13 @@ private:
             outconstp = new AstConst{nodep->fileline(), AstConst::WidthedValue{},
                                      varrefp->varp()->widthMin(), 0};
             if (varrefp->varp()->basicp() && varrefp->varp()->basicp()->isZeroInit()) {
-                outconstp->num().setAllBits0();
+                outconstp->numMutate().setAllBits0();
             } else {
-                outconstp->num().setAllBitsX();
+                outconstp->numMutate().setAllBitsX();
             }
             m_reclaimValuesp.emplace_back(outconstp);
         }
-        outconstp->num().opSelInto(fetchConst(valueFromp)->num(), lsb, selp->widthConst());
+        outconstp->numMutate().opSelInto(fetchConst(valueFromp)->num(), lsb, selp->widthConst());
         assignOutValue(nodep, vscp, outconstp);
     }
     void handleAssignSelRecurse(AstNodeAssign* nodep, AstSel* selp, AstVarRef*& outVarrefpRef,
@@ -1006,7 +1006,7 @@ private:
                     AstConst* const outconstp
                         = new AstConst{selp->lhsp()->fileline(), AstConst::WidthedValue{},
                                        selp->lhsp()->width(), 0};
-                    outconstp->num().opSel(fetchConst(valueFromp)->num(),
+                    outconstp->numMutate().opSel(fetchConst(valueFromp)->num(),
                                            selp->lhsp()->width() + selp->rhsp()->width() + 1,
                                            selp->rhsp()->width());
                     newValue(selp->lhsp(), outconstp);
@@ -1016,7 +1016,7 @@ private:
                     AstConst* const outconstp
                         = new AstConst{selp->rhsp()->fileline(), AstConst::WidthedValue{},
                                        selp->rhsp()->widthMin(), 0};
-                    outconstp->num().opSel(fetchConst(valueFromp)->num(),
+                    outconstp->numMutate().opSel(fetchConst(valueFromp)->num(),
                                            selp->rhsp()->width() - 1, 0);
                     newValue(selp->rhsp(), outconstp);
                     VL_DO_DANGLING(outconstp->deleteTree(), outconstp);

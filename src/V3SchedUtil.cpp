@@ -62,7 +62,7 @@ AstNodeStmt* setVar(AstVarScope* vscp, uint32_t val) {
     FileLine* const flp = vscp->fileline();
     AstVarRef* const refp = new AstVarRef{flp, vscp, VAccess::WRITE};
     AstConst* const valp = new AstConst{flp, AstConst::DTyped{}, vscp->dtypep()};
-    valp->num().setLong(val);
+    valp->numMutate().setLong(val);
     return new AstAssign{flp, refp, valp};
 }
 
@@ -71,7 +71,7 @@ AstNodeStmt* incrementVar(AstVarScope* vscp) {
     AstVarRef* const wrefp = new AstVarRef{flp, vscp, VAccess::WRITE};
     AstVarRef* const rrefp = new AstVarRef{flp, vscp, VAccess::READ};
     AstConst* const onep = new AstConst{flp, AstConst::DTyped{}, vscp->dtypep()};
-    onep->num().setLong(1);
+    onep->numMutate().setLong(1);
     return new AstAssign{flp, wrefp, new AstAdd{flp, rrefp, onep}};
 }
 

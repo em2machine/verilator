@@ -235,7 +235,7 @@ static bool hasPropertyControlConjunction(const AstNodeExpr* nodep) {
 static AstConst* newTypedConstp(FileLine* const flp, const AstNodeDType* const dtypep,
                                 const uint32_t value) {
     AstConst* const constp = new AstConst{flp, AstConst::DTyped{}, dtypep};
-    constp->num().setLong(value);
+    constp->numMutate().setLong(value);
     return constp;
 }
 

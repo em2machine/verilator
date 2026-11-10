@@ -314,7 +314,7 @@ private:
             // Build output value tables and the assigned flags table
             V3Number outputAssignedMask{nodep, static_cast<int>(m_outVarps.size()), 0};
             for (TableOutputVar& tov : m_outVarps) {
-                if (V3Number* const outnump = simvis.fetchOutNumberNull(tov.varScopep())) {
+                if (const V3Number* const outnump = simvis.fetchOutNumberNull(tov.varScopep())) {
                     UINFO(8, "   Output " << tov.name() << " = " << *outnump);
                     UASSERT_OBJ(!outnump->isAnyXZ(), outnump, "Table should not contain X/Z");
                     outputAssignedMask.setBit(tov.ord(), 1);  // Mark output as assigned
