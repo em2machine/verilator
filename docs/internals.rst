@@ -64,6 +64,8 @@ The main flow of Verilator can be followed by reading the Verilator.cpp
    or semantic edits. Visitor slots, clone correspondence, edit counters, and
    diagnostic instance names remain bookkeeping. New semantic mutators must call
    ``frozenCheck`` before their first write.
+   Virtual-interface usage affects optimization and is protected state.
+   Check the interface being changed, not just a referring dtype.
 
    This is API-level checking, not memory protection: unguarded handwritten
    setters, direct writes through ``foreachLink`` slots, and mutable constant

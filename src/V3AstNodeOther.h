@@ -3419,7 +3419,7 @@ public:
     // get false warnings if we enable this
     bool timescaleMatters() const override { return false; }
     bool hasVirtualRef() const { return m_hasVirtualRef; }
-    void setHasVirtualRef() { m_hasVirtualRef = true; }
+    void setHasVirtualRef() { frozenCheck("setHasVirtualRef"); m_hasVirtualRef = true; }
     // Name of the interface as a data type, with the values of its parameters, e.g. 'ifc#(8)'
     string dtypeName(bool full) const;
     // Fix dtypeName(), as V3WidthCommit moves parameter types to the type table
