@@ -155,9 +155,32 @@ void AstNode::frozenUnregister(const AstNodeModule* modp) {
 
 void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 
+void AstNode::frozenVerifyOne(const AstNodeModule* modp, const char* boundary) {
+    for (FrozenTemplateRecord& record : s_frozenTemplates) {
+        if (record.modp != modp) continue;
+        const V3Hash now = moduleFingerprint(record.modp);
+        if (now == record.hash) return;
+        if (frozenWatch()) {
+            FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
+                    record.name.c_str(), static_cast<int>(record.modp->dead()),
+                    static_cast<int>(record.modp->parameterizedTemplate()), record.hash.value(),
+                    now.value());
+            fflush(fhp);
+            record.hash = now;
+        } else {
+            record.modp->v3fatalSrc("Protected template changed: "
+                                    << record.name << " before " << boundary << "; fingerprint "
+                                    << record.hash.value() << " -> " << now.value());
+        }
+        return;
+    }
+}
+
 void AstNode::frozenRefresh(AstNetlist* netlistp) {
-    // Param's own postprocessing may still write to definitions it retired; the invariant starts when
-    // Param returns. Re-take the fingerprints for every retired template at that point.
+    // Everything still registered survived Param unthawed: it must be untouched. Then re-take the
+    // fingerprints for retired templates, since Param's own postprocessing may still write to them.
+    frozenVerify("paramEnd");
     for (AstNodeModule* modp = netlistp->modulesp(); modp; modp = VN_AS(modp->nextp(), NodeModule)) {
         if (modp->dead() && modp->parameterizedTemplate()) frozenRegister(modp);
     }
@@ -199,6 +222,7 @@ void AstNode::frozenUnregister(const AstNodeModule*) {}
 void AstNode::frozenVerify(const char*) {}
 void AstNode::frozenForget() {}
 void AstNode::frozenRefresh(AstNetlist*) {}
+void AstNode::frozenVerifyOne(const AstNodeModule*, const char*) {}
 #endif
 
 bool AstNode::frozenWatch() {

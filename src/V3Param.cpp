@@ -293,6 +293,7 @@ public:
             nodep->frozenOwnerp(modp);
             nodes.push_back(nodep);
         });
+        AstNode::frozenRegister(modp);  // signature while the definition is still an unspecialized input
     }
 
     void freezeInputs(AstNetlist* netlistp) {
@@ -301,6 +302,8 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
+        // It may only be specialized, not changed behind our back: check it before letting go.
+        AstNode::frozenVerifyOne(modp, "preThaw");
         AstNode::frozenUnregister(modp);
         if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
