@@ -666,7 +666,6 @@ public:
 
 void V3WidthCommit::widthCommit(AstNetlist* nodep) {
 #ifdef VL_DEBUG
-    AstNode::frozenVerify("width");
     AstNode::frozenPhase("widthCommit");
 #endif
     UINFO(2, __FUNCTION__ << ":");

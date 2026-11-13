@@ -864,6 +864,11 @@ public:
 // Dead class functions
 
 void V3Dead::deadifyModules(AstNetlist* nodep) {
+#ifdef VL_DEBUG
+    // Last checkpoint before retired templates are deleted.
+    AstNode::frozenVerify("ifaceCapture");
+    AstNode::frozenForget();
+#endif
     UINFO(2, __FUNCTION__ << ":");
     {  // node, elimUserVars, elimDTypes, elimScopes, elimCells, elimTasks
         DeadVisitor{nodep, false, false, false, false, false};
@@ -885,8 +890,6 @@ void V3Dead::deadifyDTypesScoped(AstNetlist* nodep) {
 
 void V3Dead::deadifyAll(AstNetlist* nodep) {
 #ifdef VL_DEBUG
-    AstNode::frozenVerify("widthCommit");
-    AstNode::frozenForget();
     AstNode::frozenPhase("dead");
 #endif
     UINFO(2, __FUNCTION__ << ":");

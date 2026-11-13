@@ -69,35 +69,80 @@ struct FrozenTemplateRecord final {
     const AstNodeModule* modp;
     std::string name;
     V3Hash hash;
+    std::vector<V3Hash> childHashes;
+    std::vector<std::string> childLabels;
 };
 std::vector<FrozenTemplateRecord> s_frozenTemplates;
 }  // namespace
 
 namespace {
-// V3Hasher deliberately hashes modules by name only (V3Hasher.cpp: hashChildren=false), so it does not
-// see a definition's body. The fingerprint needs the body: hash the module's own identity plus every
-// operand list, each subtree hashed recursively.
-V3Hash moduleFingerprint(const AstNodeModule* modp) {
-    V3Hash hash{V3Hash{modp->type().hash()} + V3Hash{modp->name()}};
-    for (const AstNode* listp : {modp->op1p(), modp->op2p(), modp->op3p(), modp->op4p()}) {
+// Structural hash of one node and its children. Deliberately not V3Hasher: that follows dtypep, which
+// can leave the definition and loop through shared dtype nodes, and it hashes modules by name only.
+bool plausible(const AstNode* nodep) {
+    return reinterpret_cast<uintptr_t>(nodep) > 0x1000;  // deleteNode poisons links with 0x1
+}
+
+V3Hash nodeHash(const AstNode* nodep) {
+    V3Hash hash{V3Hash{nodep->type().hash()} + V3Hash{nodep->name()}};
+    for (const AstNode* listp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+        if (!plausible(listp) && listp) {
+            fprintf(stderr, "FPBAD under %s %s: poisoned operand link\n",
+                    nodep->typeName(), nodep->name().c_str());
+            fflush(stderr);
+            continue;
+        }
         for (const AstNode* childp = listp; childp; childp = childp->nextp()) {
-            hash += V3Hasher::uncachedHash(childp);
+            if (!plausible(childp)) {
+                fprintf(stderr, "FPBAD under %s %s: poisoned next link\n",
+                        nodep->typeName(), nodep->name().c_str());
+                fflush(stderr);
+                break;
+            }
+            hash += nodeHash(childp);
         }
     }
+    return hash;
+}
+
+void collectChildHashes(const AstNodeModule* modp, std::vector<V3Hash>& hashes,
+                        std::vector<std::string>& labels) {
+    hashes.clear();
+    labels.clear();
+    for (const AstNode* listp : {modp->op1p(), modp->op2p(), modp->op3p(), modp->op4p()}) {
+        for (const AstNode* childp = listp; childp; childp = childp->nextp()) {
+            hashes.push_back(nodeHash(childp));
+            labels.push_back(std::string{childp->typeName()} + " " + childp->name());
+        }
+    }
+}
+
+V3Hash moduleFingerprint(const AstNodeModule* modp, std::vector<V3Hash>* hashesp = nullptr,
+                         std::vector<std::string>* labelsp = nullptr) {
+    V3Hash hash{V3Hash{modp->type().hash()} + V3Hash{modp->name()}};
+    std::vector<V3Hash> hashes;
+    std::vector<std::string> labels;
+    collectChildHashes(modp, hashes, labelsp ? *labelsp : labels);
+    for (const V3Hash& childHash : hashes) hash += childHash;
+    if (hashesp) *hashesp = std::move(hashes);
     return hash;
 }
 }  // namespace
 
 void AstNode::frozenRegister(AstNodeModule* modp) {
     if (!modp) return;
-    const V3Hash hash = moduleFingerprint(modp);
+
+    std::vector<V3Hash> hashes;
+    std::vector<std::string> labels;
+    const V3Hash hash = moduleFingerprint(modp, &hashes, &labels);
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
         if (record.modp == modp) {
             record.hash = hash;
+            record.childHashes = std::move(hashes);
+            record.childLabels = std::move(labels);
             return;
         }
     }
-    s_frozenTemplates.push_back({modp, modp->prettyName(), hash});
+    s_frozenTemplates.push_back({modp, modp->prettyName(), hash, std::move(hashes), std::move(labels)});
 }
 
 void AstNode::frozenUnregister(const AstNodeModule* modp) {
@@ -113,16 +158,26 @@ void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 void AstNode::frozenVerify(const char* boundary) {
     if (s_frozenTemplates.empty()) return;
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
-        const V3Hash now = moduleFingerprint(record.modp);
+        std::vector<V3Hash> hashes;
+        std::vector<std::string> labels;
+        const V3Hash now = moduleFingerprint(record.modp, &hashes, &labels);
         if (now == record.hash) continue;
+        std::string changed{"(child list length changed)"};
+        for (size_t i = 0; i < hashes.size() && i < record.childHashes.size(); ++i) {
+            if (hashes[i] == record.childHashes[i]) continue;
+            changed = (i < labels.size() ? labels[i] : std::string{"?"});
+            break;
+        }
         if (frozenWatch()) {
             FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
-            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
-                    record.name.c_str(), static_cast<int>(record.modp->dead()),
-                    static_cast<int>(record.modp->parameterizedTemplate()), record.hash.value(),
-                    now.value());
+            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d child=%s old=%u new=%u\n",
+                    boundary, record.name.c_str(), static_cast<int>(record.modp->dead()),
+                    static_cast<int>(record.modp->parameterizedTemplate()), changed.c_str(),
+                    record.hash.value(), now.value());
             fflush(fhp);
             record.hash = now;
+            record.childHashes = std::move(hashes);
+            record.childLabels = std::move(labels);
         } else {
             record.modp->v3fatalSrc("Protected template changed: "
                                     << record.name << " before " << boundary << "; fingerprint "
