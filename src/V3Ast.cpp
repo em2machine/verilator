@@ -73,9 +73,24 @@ struct FrozenTemplateRecord final {
 std::vector<FrozenTemplateRecord> s_frozenTemplates;
 }  // namespace
 
+namespace {
+// V3Hasher deliberately hashes modules by name only (V3Hasher.cpp: hashChildren=false), so it does not
+// see a definition's body. The fingerprint needs the body: hash the module's own identity plus every
+// operand list, each subtree hashed recursively.
+V3Hash moduleFingerprint(const AstNodeModule* modp) {
+    V3Hash hash{V3Hash{modp->type().hash()} + V3Hash{modp->name()}};
+    for (const AstNode* listp : {modp->op1p(), modp->op2p(), modp->op3p(), modp->op4p()}) {
+        for (const AstNode* childp = listp; childp; childp = childp->nextp()) {
+            hash += V3Hasher::uncachedHash(childp);
+        }
+    }
+    return hash;
+}
+}  // namespace
+
 void AstNode::frozenRegister(AstNodeModule* modp) {
     if (!modp) return;
-    const V3Hash hash = V3Hasher::uncachedHash(modp);
+    const V3Hash hash = moduleFingerprint(modp);
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
         if (record.modp == modp) {
             record.hash = hash;
@@ -98,7 +113,7 @@ void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 void AstNode::frozenVerify(const char* boundary) {
     if (s_frozenTemplates.empty()) return;
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
-        const V3Hash now = V3Hasher::uncachedHash(record.modp);
+        const V3Hash now = moduleFingerprint(record.modp);
         if (now == record.hash) continue;
         if (frozenWatch()) {
             FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;

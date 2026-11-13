@@ -69,9 +69,11 @@ The main flow of Verilator can be followed by reading the Verilator.cpp
    ``VL_TEMPLATE_WATCH=1`` is a measurement mode in debug builds: it keeps
    definitions frozen past V3Param, logs each protected write with its pass and
    caller instead of aborting, and leaves teardown exempt.
-   Separately, each retired definition carries a structural fingerprint
-   (``V3Hasher::uncachedHash``) taken when it retires; later passes recompute it
-   and a changed value is an error. Mutation is therefore detected by comparison
+   Separately, each retired definition carries a structural fingerprint taken
+   when it retires; later passes recompute it and a changed value is an error.
+   The fingerprint hashes the module identity plus every operand list, each
+   subtree recursive - ``V3Hasher`` alone hashes modules by name only and would
+   never see a definition's body. Mutation is therefore detected by comparison
    rather than by deciding, setter by setter, which writes are legitimate.
    The per-setter checks remain for state the hash does not see - semantic flags
    such as virtual-interface usage - and to name the operation and caller when a
