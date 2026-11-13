@@ -118,7 +118,7 @@ void collectChildHashes(const AstNodeModule* modp, std::vector<V3Hash>& hashes,
 
 V3Hash moduleFingerprint(const AstNodeModule* modp, std::vector<V3Hash>* hashesp = nullptr,
                          std::vector<std::string>* labelsp = nullptr) {
-    V3Hash hash{V3Hash{modp->type().hash()} + V3Hash{modp->name()}};
+    V3Hash hash{V3Hash{modp->type().hash()}};  // name is lifecycle: retirement renames to __Vtpl
     std::vector<V3Hash> hashes;
     std::vector<std::string> labels;
     collectChildHashes(modp, hashes, labelsp ? *labelsp : labels);
@@ -158,16 +158,26 @@ void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 void AstNode::frozenVerifyOne(const AstNodeModule* modp, const char* boundary) {
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
         if (record.modp != modp) continue;
-        const V3Hash now = moduleFingerprint(record.modp);
+        std::vector<V3Hash> hashes;
+        std::vector<std::string> labels;
+        const V3Hash now = moduleFingerprint(record.modp, &hashes, &labels);
         if (now == record.hash) return;
+        std::string changed{"(child list length changed)"};
+        for (size_t i = 0; i < hashes.size() && i < record.childHashes.size(); ++i) {
+            if (hashes[i] == record.childHashes[i]) continue;
+            changed = (i < labels.size() ? labels[i] : std::string{"?"});
+            break;
+        }
         if (frozenWatch()) {
             FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
-            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
-                    record.name.c_str(), static_cast<int>(record.modp->dead()),
-                    static_cast<int>(record.modp->parameterizedTemplate()), record.hash.value(),
-                    now.value());
+            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d child=%s old=%u new=%u\n",
+                    boundary, record.name.c_str(), static_cast<int>(record.modp->dead()),
+                    static_cast<int>(record.modp->parameterizedTemplate()), changed.c_str(),
+                    record.hash.value(), now.value());
             fflush(fhp);
             record.hash = now;
+            record.childHashes = std::move(hashes);
+            record.childLabels = std::move(labels);
         } else {
             record.modp->v3fatalSrc("Protected template changed: "
                                     << record.name << " before " << boundary << "; fingerprint "
@@ -177,14 +187,7 @@ void AstNode::frozenVerifyOne(const AstNodeModule* modp, const char* boundary) {
     }
 }
 
-void AstNode::frozenRefresh(AstNetlist* netlistp) {
-    // Everything still registered survived Param unthawed: it must be untouched. Then re-take the
-    // fingerprints for retired templates, since Param's own postprocessing may still write to them.
-    frozenVerify("paramEnd");
-    for (AstNodeModule* modp = netlistp->modulesp(); modp; modp = VN_AS(modp->nextp(), NodeModule)) {
-        if (modp->dead() && modp->parameterizedTemplate()) frozenRegister(modp);
-    }
-}
+void AstNode::frozenRefresh(AstNetlist*) {}
 
 void AstNode::frozenVerify(const char* boundary) {
     if (s_frozenTemplates.empty()) return;

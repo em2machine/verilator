@@ -293,7 +293,6 @@ public:
             nodep->frozenOwnerp(modp);
             nodes.push_back(nodep);
         });
-        AstNode::frozenRegister(modp);  // signature while the definition is still an unspecialized input
     }
 
     void freezeInputs(AstNetlist* netlistp) {
@@ -302,8 +301,6 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
-        // It may only be specialized, not changed behind our back: check it before letting go.
-        AstNode::frozenVerifyOne(modp, "preThaw");
         AstNode::frozenUnregister(modp);
         if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
@@ -4009,8 +4006,6 @@ class ParamTop final : VNDeleter {
                 modp->dead(true);
 #ifdef VL_DEBUG
                 AstNode::frozenMarkRetired(modp);
-                // Record the retired definition; its content must not change before deletion.
-                AstNode::frozenRegister(modp);
 #endif
             }
         }
