@@ -624,6 +624,7 @@ public:
     // Measurement mode: log protected writes and keep templates frozen for the whole run.
     static bool frozenWatch();
     static void frozenPhase(const char* name);
+    static void frozenMarkRetired(const AstNodeModule* modp);
 
     // ACCESSORS
     VNType type() const VL_MT_SAFE { return m_type; }

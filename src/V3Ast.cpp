@@ -44,6 +44,16 @@ void AstNode::frozenPhase(const char* name) { s_frozenPhase = name; }
 void AstNode::frozenPhase(const char*) {}
 #endif
 
+#ifdef VL_DEBUG
+namespace {
+// Pointer identity only; never dereferenced, so a retired owner cannot be read after teardown.
+std::unordered_set<const AstNodeModule*> s_frozenRetired;
+}  // namespace
+void AstNode::frozenMarkRetired(const AstNodeModule* modp) { s_frozenRetired.insert(modp); }
+#else
+void AstNode::frozenMarkRetired(const AstNodeModule*) {}
+#endif
+
 bool AstNode::frozenWatch() {
 #ifdef VL_DEBUG
     static const bool watch = std::getenv("VL_TEMPLATE_WATCH") != nullptr;
@@ -55,21 +65,23 @@ bool AstNode::frozenWatch() {
 
 #ifdef VL_DEBUG
 namespace {
-void frozenWatchLog(const AstNode* nodep, const char* operation, void* caller0) {
+void frozenWatchLog(const AstNode* nodep, const char* operation, void* caller0,
+                    bool ownerRetired) {
     const char* symbol0 = "?";
 #ifdef __APPLE__
     Dl_info info;
     if (dladdr(caller0, &info) && info.dli_sname) symbol0 = info.dli_sname;
 #endif
-    fprintf(stderr, "PROTWRITE %s phase=%s target=%s caller=%s\n", operation,
-            s_frozenPhase, nodep->prettyTypeName().c_str(), symbol0);
+    fprintf(stderr, "PROTWRITE %s phase=%s retired=%d target=%s caller=%s\n", operation,
+            s_frozenPhase, ownerRetired ? 1 : 0, nodep->prettyTypeName().c_str(), symbol0);
     fflush(stderr);
 }
 }  // namespace
 
 void AstNode::frozenWrite(const char* operation) const {
     if (frozenWatch()) {
-        frozenWatchLog(this, operation, __builtin_return_address(0));
+        frozenWatchLog(this, operation, __builtin_return_address(0),
+                       m_frozenOwnerp && s_frozenRetired.count(m_frozenOwnerp));
         return;
     }
     v3fatalSrc("Protected template write: " << operation << "; owner "

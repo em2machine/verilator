@@ -4003,6 +4003,9 @@ class ParamTop final : VNDeleter {
 #endif
                 modp->name(modp->name() + "__Vtpl");
                 modp->dead(true);
+#ifdef VL_DEBUG
+                AstNode::frozenMarkRetired(modp);
+#endif
             }
         }
     }
