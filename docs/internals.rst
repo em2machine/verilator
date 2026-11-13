@@ -73,6 +73,9 @@ The main flow of Verilator can be followed by reading the Verilator.cpp
    (``V3Hasher::uncachedHash``) taken when it retires; later passes recompute it
    and a changed value is an error. Mutation is therefore detected by comparison
    rather than by deciding, setter by setter, which writes are legitimate.
+   The per-setter checks remain for state the hash does not see - semantic flags
+   such as virtual-interface usage - and to name the operation and caller when a
+   write is refused; their coverage is not the guarantee.
 
    This is API-level checking, not memory protection: unguarded handwritten
    setters, direct writes through ``foreachLink`` slots, and mutable constant

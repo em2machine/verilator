@@ -47,6 +47,14 @@ void AstNode::frozenPhase(const char*) {}
 
 #ifdef VL_DEBUG
 namespace {
+// Watch output goes to stderr by default; tests that compare their compile log set a file instead.
+FILE* frozenWatchFh() {
+    static FILE* fh = []() -> FILE* {
+        const char* const path = std::getenv("VL_TEMPLATE_WATCH_LOG");
+        return path ? fopen(path, "a") : nullptr;
+    }();
+    return fh;
+}
 // Pointer identity only; never dereferenced, so a retired owner cannot be read after teardown.
 std::unordered_set<const AstNodeModule*> s_frozenRetired;
 }  // namespace
@@ -93,11 +101,12 @@ void AstNode::frozenVerify(const char* boundary) {
         const V3Hash now = V3Hasher::uncachedHash(record.modp);
         if (now == record.hash) continue;
         if (frozenWatch()) {
-            fprintf(stderr, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
+            FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
                     record.name.c_str(), static_cast<int>(record.modp->dead()),
                     static_cast<int>(record.modp->parameterizedTemplate()), record.hash.value(),
                     now.value());
-            fflush(stderr);
+            fflush(fhp);
             record.hash = now;
         } else {
             record.modp->v3fatalSrc("Protected template changed: "
@@ -131,9 +140,10 @@ void frozenWatchLog(const AstNode* nodep, const char* operation, void* caller0,
     Dl_info info;
     if (dladdr(caller0, &info) && info.dli_sname) symbol0 = info.dli_sname;
 #endif
-    fprintf(stderr, "PROTWRITE %s phase=%s retired=%d target=%s caller=%s\n", operation,
+    FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+    fprintf(fhp, "PROTWRITE %s phase=%s retired=%d target=%s caller=%s\n", operation,
             s_frozenPhase, ownerRetired ? 1 : 0, nodep->prettyTypeName().c_str(), symbol0);
-    fflush(stderr);
+    fflush(fhp);
 }
 }  // namespace
 
