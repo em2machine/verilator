@@ -155,6 +155,14 @@ void AstNode::frozenUnregister(const AstNodeModule* modp) {
 
 void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 
+void AstNode::frozenRefresh(AstNetlist* netlistp) {
+    // Param's own postprocessing may still write to definitions it retired; the invariant starts when
+    // Param returns. Re-take the fingerprints for every retired template at that point.
+    for (AstNodeModule* modp = netlistp->modulesp(); modp; modp = VN_AS(modp->nextp(), NodeModule)) {
+        if (modp->dead() && modp->parameterizedTemplate()) frozenRegister(modp);
+    }
+}
+
 void AstNode::frozenVerify(const char* boundary) {
     if (s_frozenTemplates.empty()) return;
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
@@ -190,6 +198,7 @@ void AstNode::frozenRegister(AstNodeModule*) {}
 void AstNode::frozenUnregister(const AstNodeModule*) {}
 void AstNode::frozenVerify(const char*) {}
 void AstNode::frozenForget() {}
+void AstNode::frozenRefresh(AstNetlist*) {}
 #endif
 
 bool AstNode::frozenWatch() {

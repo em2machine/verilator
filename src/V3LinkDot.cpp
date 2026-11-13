@@ -6892,6 +6892,7 @@ void V3LinkDot::linkDotPrimary(AstNetlist* nodep) {
 
 void V3LinkDot::linkDotParamed(AstNetlist* nodep) {
 #ifdef VL_DEBUG
+    AstNode::frozenRefresh(v3Global.rootp());
     AstNode::frozenVerify("param");
     AstNode::frozenPhase("linkDotParamed");
 #endif

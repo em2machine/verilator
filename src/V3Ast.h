@@ -629,6 +629,7 @@ public:
     static void frozenRegister(AstNodeModule* modp);
     static void frozenUnregister(const AstNodeModule* modp);
     static void frozenVerify(const char* boundary);
+    static void frozenRefresh(AstNetlist* netlistp);
     static void frozenForget();
 
     // ACCESSORS
