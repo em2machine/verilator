@@ -252,13 +252,13 @@ public:
     AstCFunc* funcp() const { return m_funcp; }
     void funcp(AstCFunc* funcp) { frozenCheck("funcp"); m_funcp = funcp; }
     string argTypes() const { return m_argTypes; }
-    void argTypes(const string& str) { frozenCheck("argTypes"); m_argTypes = str; }
+    void argTypes(const string& str) { m_argTypes = str; }
     bool isUnlikely() const override { return m_funcp && m_funcp->isUnlikely(); }
     string emitVerilog() final override { V3ERROR_NA_RETURN(""); }
     string emitC() final override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const final override { return true; }
     bool superReference() const { return m_superReference; }
-    void superReference(bool flag) { frozenCheck("superReference"); m_superReference = flag; }
+    void superReference(bool flag) { m_superReference = flag; }
 };
 class AstNodeCons VL_NOT_FINAL : public AstNodeExpr {
     // Construct a value of an aggregate type
@@ -636,10 +636,10 @@ public:
     }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
-    void restricted(bool flag) { frozenCheck("restricted"); m_restricted = flag; }
+    void restricted(bool flag) { m_restricted = flag; }
     bool restricted() const { return m_restricted; }
     bool validated() const { return m_validated; }
-    void validated(bool flag) { frozenCheck("validated"); m_validated = flag; }
+    void validated(bool flag) { m_validated = flag; }
     void addRestrictedName(const std::string& name) { m_restrictedNames.insert(name); }
     const std::set<std::string>& restrictedNames() const { return m_restrictedNames; }
     // True if 'name' binds into the randomize() target class.
@@ -858,9 +858,9 @@ public:
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return m_method.isClean(); }
     bool usePtr() const { return m_usePtr; }
-    void usePtr(bool flag) { frozenCheck("usePtr"); m_usePtr = flag; }
+    void usePtr(bool flag) { m_usePtr = flag; }
     VCMethod method() const VL_MT_STABLE { return m_method; }
-    void method(VCMethod value) { frozenCheck("method"); m_method = value; }
+    void method(VCMethod value) { m_method = value; }
 
 private:
     bool getPurity();
@@ -1214,7 +1214,7 @@ public:
     ASTGEN_MEMBERS_AstConstraintRef;
     string name() const override VL_MT_STABLE;
     AstConstraint* constrp() const VL_MT_STABLE { return m_constrp; }
-    void constrp(AstConstraint* nodep) { frozenCheck("constrp"); m_constrp = nodep; }
+    void constrp(AstConstraint* nodep) { m_constrp = nodep; }
     AstNodeModule* classOrPackagep() const VL_MT_STABLE { return m_classOrPackagep; }
     // TODO: this setter is unused
     void classOrPackagep(AstNodeModule* nodep) { frozenCheck("classOrPackagep"); m_classOrPackagep = nodep; }
@@ -1380,7 +1380,7 @@ public:
     string emitVerilog() override { return "%l "s + (m_isWhole ? ":/" : ":=") + " %r"; }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return false; }  // NA
-    void isWhole(bool flag) { frozenCheck("isWhole"); m_isWhole = flag; }
+    void isWhole(bool flag) { m_isWhole = flag; }
     bool isWhole() const { return m_isWhole; }
 };
 class AstDot final : public AstNodeExpr {
@@ -1488,7 +1488,7 @@ public:
     }
     bool sameNode(const AstNode*) const override { return true; }
     bool hasResult() const { return m_hasResult; }
-    void hasResult(bool flag) { frozenCheck("hasResult"); m_hasResult = flag; }
+    void hasResult(bool flag) { m_hasResult = flag; }
 };
 class AstFError final : public AstNodeExpr {
     // @astgen op1 := filep : AstNodeExpr
@@ -1635,7 +1635,7 @@ public:
         return text() == VN_DBG_AS(samep, FScanF)->text();
     }
     string text() const { return m_text; }  // * = Text to display
-    void text(const string& text) { frozenCheck("text"); m_text = text; }
+    void text(const string& text) { m_text = text; }
     bool isSystemFunc() const override { return true; }
 };
 class AstFSeek final : public AstNodeExpr {
@@ -2089,9 +2089,9 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     bool isConcat() const { return m_isConcat; }
-    void isConcat(bool flag) { frozenCheck("isConcat"); m_isConcat = flag; }
+    void isConcat(bool flag) { m_isConcat = flag; }
     bool isDefault() const { return m_isDefault; }
-    void isDefault(bool flag) { frozenCheck("isDefault"); m_isDefault = flag; }
+    void isDefault(bool flag) { m_isDefault = flag; }
     AstNodeExpr* keyExprp() const { return varrefp() ? varrefp() : VN_CAST(keyp(), NodeExpr); }
 };
 class AstPattern final : public AstNodeExpr {
@@ -2406,10 +2406,7 @@ public:
         return nullptr;
     }
     VFormatAttr formatAttr() const { return m_formatAttr; }
-    void formatAttr(const VFormatAttr& formatAttr) {
-        frozenCheck("formatAttr");
-        m_formatAttr = formatAttr;
-    }
+    void formatAttr(const VFormatAttr& formatAttr) { m_formatAttr = formatAttr; }
     static VFormatAttr formatAttrDefauled(const AstSFormatArg* nodep, const AstNodeDType* dtypep);
 };
 class AstSFormatF final : public AstNodeExpr {
@@ -2583,7 +2580,7 @@ public:
     }
     string text() const { return m_text; }  // * = Text to display
     VTimescale timeunit() const { return m_timeunit; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     bool isSystemFunc() const override { return true; }
 };
 class AstSampled final : public AstNodeExpr {
@@ -2645,13 +2642,13 @@ public:
     void dumpJson(std::ostream& str = std::cout) const override;
     // ACCESSORS
     const std::string& scopeAttr() const { return m_scopeAttr; }
-    void scopeAttr(const std::string& val) { frozenCheck("scopeAttr"); m_scopeAttr = val; }
+    void scopeAttr(const std::string& val) { m_scopeAttr = val; }
     const std::string& scopeEntr() const { return m_scopeEntr; }
-    void scopeEntr(const std::string& val) { frozenCheck("scopeEntr"); m_scopeEntr = val; }
+    void scopeEntr(const std::string& val) { m_scopeEntr = val; }
     bool dpiExport() const { return m_dpiExport; }
-    void dpiExport(bool flag) { frozenCheck("dpiExport"); m_dpiExport = flag; }
+    void dpiExport(bool flag) { m_dpiExport = flag; }
     bool selfRelative() const { return m_selfRelative; }
-    void selfRelative(bool flag) { frozenCheck("selfRelative"); m_selfRelative = flag; }
+    void selfRelative(bool flag) { m_selfRelative = flag; }
     bool forFormat() const { return m_forFormat; }
     // Name for __Vscopep variable including children
     string scopeSymName() const { return scopeNameFormatter(m_scopeAttr); }
@@ -2899,7 +2896,7 @@ public:
     int instrCount() const override { return widthInstrs(); }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
     VTimescale timeunit() const { return m_timeunit; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
 };
 class AstTriggered final : public AstNodeExpr {
     // True if any of the triggers at 'm_indices' are set in 'trigRefp'.
@@ -3031,7 +3028,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
     bool restricted() const { return m_restricted; }
-    void restricted(bool flag) { frozenCheck("restricted"); m_restricted = flag; }
+    void restricted(bool flag) { m_restricted = flag; }
 
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
@@ -4185,7 +4182,7 @@ public:
         return widthInstrs() * (VN_CAST(lsbp(), Const) ? 3 : 10) + 1;
     }
     int widthConst() const { return m_widthConst; }
-    void widthConst(int value) { frozenCheck("widthConst"); m_widthConst = value; }
+    void widthConst(int value) { m_widthConst = value; }
     int lsbConst() const { return VN_AS(lsbp(), Const)->toSInt(); }
     int msbConst() const { return lsbConst() + widthConst() - 1; }
     const VNumRange& declRange() const VL_MT_STABLE { return m_declRange; }
@@ -5245,9 +5242,9 @@ public:
     void dumpJson(std::ostream& str = std::cout) const override;
     int instrCount() const override { return widthInstrs(); }
     bool isImplicit() const { return m_isImplicit; }
-    void isImplicit(bool flag) { frozenCheck("isImplicit"); m_isImplicit = flag; }
+    void isImplicit(bool flag) { m_isImplicit = flag; }
     bool isScoped() const { return m_isScoped; }
-    void isScoped(bool flag) { frozenCheck("isScoped"); m_isScoped = flag; }
+    void isScoped(bool flag) { m_isScoped = flag; }
     bool isPure() override { return false; }
 };
 class AstTaskRef final : public AstNodeFTaskRef {
@@ -5384,7 +5381,7 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     VTimescale timeunit() const { return m_timeunit; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
 };
 class AstTimeD final : public AstNodeTermop {
     VTimescale m_timeunit;  // Parent module time unit
@@ -5408,7 +5405,7 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     VTimescale timeunit() const { return m_timeunit; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
 };
 
 // === AstNodeTriop ===
@@ -6268,7 +6265,7 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     VTimescale timeunit() const { return m_timeunit; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
 };
 class AstToLowerN final : public AstNodeUniop {
     // string.tolower()
@@ -6588,14 +6585,11 @@ public:
     string dotted() const { return m_dotted; }
     void dotted(const string& dotted) { frozenCheck("dotted"); m_dotted = dotted; }
     string inlinedDots() const { return m_inlinedDots; }
-    void inlinedDots(const string& flag) { frozenCheck("inlinedDots"); m_inlinedDots = flag; }
+    void inlinedDots(const string& flag) { m_inlinedDots = flag; }
     bool containsGenBlock() const { return m_containsGenBlock; }
     void containsGenBlock(const bool flag) { frozenCheck("containsGenBlock"); m_containsGenBlock = flag; }
     bool readOnlyModport() const { return m_readOnlyModport; }
-    void readOnlyModport(const bool flag) {
-        frozenCheck("readOnlyModport");
-        m_readOnlyModport = flag;
-    }
+    void readOnlyModport(const bool flag) { m_readOnlyModport = flag; }
     string emitVerilog() override { V3ERROR_NA_RETURN(""); }
     string emitC() override { V3ERROR_NA_RETURN(""); }
     bool cleanOut() const override { return true; }

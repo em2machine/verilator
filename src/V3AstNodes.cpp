@@ -3581,7 +3581,6 @@ void AstPackageImport::dump(std::ostream& str) const {
 }
 void AstPackageImport::dumpJson(std::ostream& str) const { dumpJsonGen(str); }
 void AstPackageImport::pkgNameFrom() {
-    frozenCheck("pkgNameFrom");
     if (packagep()) m_pkgName = packagep()->name();
 }
 void AstParamTypeDType::dump(std::ostream& str) const {

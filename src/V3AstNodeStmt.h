@@ -128,9 +128,9 @@ public:
     VAssertType userType() const VL_MT_SAFE { return m_userType; }
     VAssertDirectiveType directive() const { return m_directive; }
     bool immediate() const { return m_immediate; }
-    void immediate(bool flag) { frozenCheck("immediate"); m_immediate = flag; }
+    void immediate(bool flag) { m_immediate = flag; }
     bool senFromAlways() const VL_MT_STABLE { return m_senFromAlways; }
-    void senFromAlways(bool flag) { frozenCheck("senFromAlways"); m_senFromAlways = flag; }
+    void senFromAlways(bool flag) { m_senFromAlways = flag; }
 };
 class AstNodeForeach VL_NOT_FINAL : public AstNodeStmt {
     // @astgen op1 := headerp : AstForeachHeader
@@ -169,9 +169,9 @@ public:
     bool isGateDedupable() const override { return true; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
-    void branchPred(VBranchPred flag) { frozenCheck("branchPred"); m_branchPred = flag; }
+    void branchPred(VBranchPred flag) { m_branchPred = flag; }
     VBranchPred branchPred() const { return m_branchPred; }
-    void isBoundsCheck(bool flag) { frozenCheck("isBoundsCheck"); m_isBoundsCheck = flag; }
+    void isBoundsCheck(bool flag) { m_isBoundsCheck = flag; }
     bool isBoundsCheck() const { return m_isBoundsCheck; }
 };
 class AstNodeReadWriteMem VL_NOT_FINAL : public AstNodeStmt {
@@ -270,14 +270,11 @@ public:
     bool isPure() override { return false; }
     bool isOutputter() override { return true; }
     VAssertCtlType ctlType() const { return m_ctlType; }
-    void ctlType(int32_t type) { frozenCheck("ctlType"); m_ctlType = VAssertCtlType{type}; }
+    void ctlType(int32_t type) { m_ctlType = VAssertCtlType{type}; }
     VAssertType assertTypes() const { return m_assertTypes; }
-    void assertTypes(VAssertType types) { frozenCheck("assertTypes"); m_assertTypes = types; }
+    void assertTypes(VAssertType types) { m_assertTypes = types; }
     VAssertDirectiveType directiveTypes() const { return m_directiveTypes; }
-    void directiveTypes(VAssertDirectiveType types) {
-        frozenCheck("directiveTypes");
-        m_directiveTypes = types;
-    }
+    void directiveTypes(VAssertDirectiveType types) { m_directiveTypes = types; }
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
 };
@@ -308,7 +305,7 @@ public:
     const char* broken() const override;
     bool isTimingControl() const override { return true; }
     AstSenTree* sentreep() const { return m_sentreep; }
-    void clearSentreep() { frozenCheck("clearSentreep"); m_sentreep = nullptr; }
+    void clearSentreep() { m_sentreep = nullptr; }
 };
 class AstCLocalScope final : public AstNodeStmt {
     // Pack statements into an unnamed scope when generating C++
@@ -563,7 +560,7 @@ public:
     bool isOutputter() override { return true; }
     bool isPure() override { return false; }
     AstNodeCoverDecl* declp() const { return m_declp; }  // Where defined
-    void declp(AstNodeCoverDecl* nodep) { frozenCheck("declp"); m_declp = nodep; }
+    void declp(AstNodeCoverDecl* nodep) { m_declp = nodep; }
     bool isDuplicate() const { return m_isDuplicate; }
 };
 class AstDeassign final : public AstNodeStmt {
@@ -595,7 +592,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     bool isTimingControl() const override { return true; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     VTimescale timeunit() const { return m_timeunit; }
     bool isCycleDelay() const { return m_isCycleDelay; }
     bool isRangeDelay() const { return m_isCycleDelay && rhsp(); }
@@ -614,7 +611,7 @@ public:
     ASTGEN_MEMBERS_AstDisable;
     const char* broken() const override;
     void dump(std::ostream& str) const override;
-    void targetp(AstNode* nodep) { frozenCheck("targetp"); m_targetp = nodep; }
+    void targetp(AstNode* nodep) { m_targetp = nodep; }
     AstNode* targetp() const { return m_targetp; }
     bool isBrancher() const override { V3ERROR_NA_RETURN(true); }  // Node removed early
 };
@@ -671,7 +668,7 @@ public:
     }
     int instrCount() const override { return INSTR_COUNT_PLI; }
     VDisplayType displayType() const { return m_displayType; }
-    void displayType(VDisplayType type) { frozenCheck("displayType"); m_displayType = type; }
+    void displayType(VDisplayType type) { m_displayType = type; }
     // * = Add a newline for $display
     bool addNewline() const { return displayType().addNewline(); }
 };
@@ -748,7 +745,7 @@ public:
     V3Graph* depGraphp() { return m_depGraphp; }
     const V3Graph* depGraphp() const { return m_depGraphp; }
     AstCFunc* runfuncp() const { return m_runfuncp; }
-    void runfuncp(AstCFunc* funcp) { frozenCheck("runfuncp"); m_runfuncp = funcp; }
+    void runfuncp(AstCFunc* funcp) { m_runfuncp = funcp; }
 };
 class AstFClose final : public AstNodeStmt {
     // Parents: stmtlist
@@ -936,7 +933,7 @@ public:
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
     // ACCESSORS
     VOptionBool unroll() const { return m_unroll; }
-    void unroll(const VOptionBool flag) { frozenCheck("unroll"); m_unroll = flag; }
+    void unroll(const VOptionBool flag) { m_unroll = flag; }
 };
 class AstLoopTest final : public AstNodeStmt {
     // The condition test inside an AstLoop. If the condition is true,
@@ -1021,7 +1018,7 @@ public:
     bool isPure() override { return false; }
     bool isOutputter() override { return true; }
     int instrCount() const override { return INSTR_COUNT_PLI; }
-    void timeunit(const VTimescale& flag) { frozenCheck("timeunit"); m_timeunit = flag; }
+    void timeunit(const VTimescale& flag) { m_timeunit = flag; }
     VTimescale timeunit() const { return m_timeunit; }
 };
 class AstRSBreak final : public AstNodeStmt {
@@ -1066,7 +1063,7 @@ public:
     string name() const override VL_MT_STABLE { return m_name; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     AstRSProd* prodp() const { return m_prodp; }
-    void prodp(AstRSProd* nodep) { frozenCheck("prodp"); m_prodp = nodep; }
+    void prodp(AstRSProd* nodep) { m_prodp = nodep; }
 };
 class AstRSProdList final : public AstNodeStmt {
     // randomsquence production list
@@ -1084,7 +1081,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     bool randJoin() const { return m_randJoin; }
-    void randJoin(bool flag) { frozenCheck("randJoin"); m_randJoin = flag; }
+    void randJoin(bool flag) { m_randJoin = flag; }
 };
 class AstRSReturn final : public AstNodeStmt {
     // randsequence return
@@ -1140,7 +1137,7 @@ public:
     string start() const VL_MT_STABLE { return m_start; }
     int instrCount() const override { return INSTR_COUNT_BRANCH; }
     AstRSProd* prodp() const { return m_prodp; }
-    void prodp(AstRSProd* nodep) { frozenCheck("prodp"); m_prodp = nodep; }
+    void prodp(AstRSProd* nodep) { m_prodp = nodep; }
 };
 class AstRelease final : public AstNodeStmt {
     // Procedural 'release' statement
@@ -1370,11 +1367,11 @@ public:
     string showname() const { return m_showname; }  // * = Var name
     // Details on what we're tracing
     uint32_t code() const { return m_code; }
-    void code(uint32_t code) { frozenCheck("code"); m_code = code; }
+    void code(uint32_t code) { m_code = code; }
     bool codeAssigned() const { return m_code != std::numeric_limits<uint32_t>::max(); }
     uint32_t fidx() const { return m_fidx; }
-    void fidx(uint32_t fidx) { frozenCheck("fidx"); m_fidx = fidx; }
-    void codeInc(uint32_t codeInc) { frozenCheck("codeInc"); m_codeInc = codeInc; }
+    void fidx(uint32_t fidx) { m_fidx = fidx; }
+    void codeInc(uint32_t codeInc) { m_codeInc = codeInc; }
     uint32_t codeInc() const {
         if (m_codeInc) { return m_codeInc; }
         return (m_arrayRange.ranged() ? m_arrayRange.elements() : 1)
@@ -1386,9 +1383,9 @@ public:
     VVarType varType() const { return m_varType; }
     VDirection declDirection() const { return m_declDirection; }
     AstCCall* dtypeCallp() const { return m_dtypeCallp; }
-    void dtypeCallp(AstCCall* const callp) { frozenCheck("dtypeCallp"); m_dtypeCallp = callp; }
+    void dtypeCallp(AstCCall* const callp) { m_dtypeCallp = callp; }
     AstTraceDecl* dtypeDeclp() const { return m_dtypeDeclp; }
-    void dtypeDeclp(AstTraceDecl* const declp) { frozenCheck("dtypeDeclp"); m_dtypeDeclp = declp; }
+    void dtypeDeclp(AstTraceDecl* const declp) { m_dtypeDeclp = declp; }
     bool inDtypeFunc() const { return m_inDtypeFunc; }
 };
 class AstTraceInc final : public AstNodeStmt {
@@ -1602,7 +1599,7 @@ public:
     ASTGEN_MEMBERS_AstBegin;
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
-    void setNeedProcess() { frozenCheck("setNeedProcess"); m_needProcess = true; }
+    void setNeedProcess() { m_needProcess = true; }
     bool needProcess() const { return m_needProcess; }
     bool implied() const { return m_implied; }
 };
@@ -1633,7 +1630,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     VJoinType joinType() const { return m_joinType; }
     bool immediateStart() const { return m_immediateStart; }
-    void immediateStart(bool flag) { frozenCheck("immediateStart"); m_immediateStart = flag; }
+    void immediateStart(bool flag) { m_immediateStart = flag; }
 };
 
 // === AstNodeCoverOrAssert ===
@@ -1680,9 +1677,9 @@ public:
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
     bool isCoverSeq() const { return m_isCoverSeq; }
-    void isCoverSeq(bool flag) { frozenCheck("isCoverSeq"); m_isCoverSeq = flag; }
+    void isCoverSeq(bool flag) { m_isCoverSeq = flag; }
     bool isSeqEvent() const { return m_isSeqEvent; }
-    void isSeqEvent(bool flag) { frozenCheck("isSeqEvent"); m_isSeqEvent = flag; }
+    void isSeqEvent(bool flag) { m_isSeqEvent = flag; }
 };
 class AstRestrict final : public AstNodeCoverOrAssert {
 public:
@@ -1732,11 +1729,11 @@ public:
         : ASTGEN_SUPER_If(fl, condp, thensp, elsesp) {}
     ASTGEN_MEMBERS_AstIf;
     bool uniquePragma() const { return m_uniquePragma; }
-    void uniquePragma(bool flag) { frozenCheck("uniquePragma"); m_uniquePragma = flag; }
+    void uniquePragma(bool flag) { m_uniquePragma = flag; }
     bool unique0Pragma() const { return m_unique0Pragma; }
-    void unique0Pragma(bool flag) { frozenCheck("unique0Pragma"); m_unique0Pragma = flag; }
+    void unique0Pragma(bool flag) { m_unique0Pragma = flag; }
     bool priorityPragma() const { return m_priorityPragma; }
-    void priorityPragma(bool flag) { frozenCheck("priorityPragma"); m_priorityPragma = flag; }
+    void priorityPragma(bool flag) { m_priorityPragma = flag; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
 };

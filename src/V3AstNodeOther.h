@@ -81,17 +81,17 @@ public:
     int instrCount() const override { return 1 + 2 * INSTR_COUNT_LD; }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
     int binNum() const { return m_binNum; }
-    void binNum(int flag) { frozenCheck("binNum"); m_binNum = flag; }
+    void binNum(int flag) { m_binNum = flag; }
     int localBinNum() const { return m_localBinNum; }
-    void localBinNum(int flag) { frozenCheck("localBinNum"); m_localBinNum = flag; }
+    void localBinNum(int flag) { m_localBinNum = flag; }
     bool perInstance() const { return m_perInstance; }
-    void perInstance(bool flag) { frozenCheck("perInstance"); m_perInstance = flag; }
+    void perInstance(bool flag) { m_perInstance = flag; }
     virtual int size() const = 0;
     const string& comment() const { return m_text; }  // text to insert in code
     const string& page() const { return m_page; }
     const string& hier() const { return m_hier; }
-    void hier(const string& flag) { frozenCheck("hier"); m_hier = flag; }
-    void comment(const string& flag) { frozenCheck("comment"); m_text = flag; }
+    void hier(const string& flag) { m_hier = flag; }
+    void comment(const string& flag) { m_text = flag; }
     bool sameNode(const AstNode* samep) const override {
         const AstNodeCoverDecl* const asamep = VN_DBG_AS(samep, NodeCoverDecl);
         return (fileline() == asamep->fileline() && hier() == asamep->hier()
@@ -99,7 +99,7 @@ public:
                 && perInstance() == asamep->perInstance());
     }
     bool isPredictOptimizable() const override { return false; }
-    void dataDeclp(AstNodeCoverDecl* nodep) { frozenCheck("dataDeclp"); m_dataDeclp = nodep; }
+    void dataDeclp(AstNodeCoverDecl* nodep) { m_dataDeclp = nodep; }
     // dataDecl nullptr means "use this one", but often you want "this" to
     // indicate to get data from here
     AstNodeCoverDecl* dataDeclNullp() const { return m_dataDeclp; }
@@ -200,8 +200,8 @@ public:
     void cname(const string& cname) { frozenCheck("cname"); m_cname = cname; }
     bool isFunction() const { return fvarp() != nullptr; }
     // MORE ACCESSORS
-    void dpiOpenParentInc() { frozenCheck("dpiOpenParentInc"); ++m_dpiOpenParent; }
-    void dpiOpenParentClear() { frozenCheck("dpiOpenParentClear"); m_dpiOpenParent = 0; }
+    void dpiOpenParentInc() { ++m_dpiOpenParent; }
+    void dpiOpenParentClear() { m_dpiOpenParent = 0; }
     uint64_t dpiOpenParent() const { return m_dpiOpenParent; }
     bool taskPublic() const { return m_taskPublic; }
     void taskPublic(bool flag) { frozenCheck("taskPublic"); m_taskPublic = flag; }
@@ -315,7 +315,7 @@ public:
     void name(const string& name) override { frozenCheck("name"); m_name = name; }
     bool maybePointedTo() const override { return true; }
     AstFunc* instCoveragep() const { return m_instCoveragep; }
-    void instCoveragep(AstFunc* funcp) { frozenCheck("instCoveragep"); m_instCoveragep = funcp; }
+    void instCoveragep(AstFunc* funcp) { m_instCoveragep = funcp; }
 };
 class AstNodeGen VL_NOT_FINAL : public AstNode {
     // Generate construct
@@ -467,9 +467,9 @@ public:
     void dumpJson(std::ostream& str) const override;
     bool isJustOneBodyStmt() const { return stmtsp() && !stmtsp()->nextp(); }
     bool isSuspendable() const { return m_suspendable; }
-    void setSuspendable() { frozenCheck("setSuspendable"); m_suspendable = true; }
+    void setSuspendable() { m_suspendable = true; }
     bool needProcess() const { return m_needProcess; }
-    void setNeedProcess() { frozenCheck("setNeedProcess"); m_needProcess = true; }
+    void setNeedProcess() { m_needProcess = true; }
 };
 class AstNodeRange VL_NOT_FINAL : public AstNode {
     // A range, sized or unsized
@@ -507,7 +507,7 @@ public:
     void dumpJson(std::ostream& str = std::cout) const override;
     string name() const override VL_MT_STABLE { return m_name; }
     // Statements are broken into pieces, as some must come before others.
-    void sentreep(AstSenTree* nodep) { frozenCheck("sentreep"); m_sentreep = nodep; }
+    void sentreep(AstSenTree* nodep) { m_sentreep = nodep; }
     AstSenTree* sentreep() const { return m_sentreep; }
     // METHODS
     inline bool hasClocked() const;
@@ -654,82 +654,73 @@ public:
     int instrCount() const override { return m_cost; }
     VBoolOrUnknown isConst() const { return m_isConst; }
     void isConst(bool flag) { m_isConst.setTrueOrFalse(flag); }
-    void isConst(VBoolOrUnknown flag) { frozenCheck("isConst"); m_isConst = flag; }
+    void isConst(VBoolOrUnknown flag) { m_isConst = flag; }
     bool isStatic() const { return m_isStatic; }
-    void isStatic(bool flag) { frozenCheck("isStatic"); m_isStatic = flag; }
+    void isStatic(bool flag) { m_isStatic = flag; }
     bool isTrace() const VL_MT_SAFE { return m_isTrace; }
-    void isTrace(bool flag) { frozenCheck("isTrace"); m_isTrace = flag; }
-    void cname(const string& name) { frozenCheck("cname"); m_cname = name; }
+    void isTrace(bool flag) { m_isTrace = flag; }
+    void cname(const string& name) { m_cname = name; }
     string cname() const { return m_cname; }
     AstScope* scopep() const { return m_scopep; }
     void scopep(AstScope* nodep) { frozenCheck("scopep"); m_scopep = nodep; }
     string rtnTypeVoid() const { return ((m_rtnType == "") ? "void" : m_rtnType); }
-    void rtnType(const string& rtnType) { frozenCheck("rtnType"); m_rtnType = rtnType; }
+    void rtnType(const string& rtnType) { m_rtnType = rtnType; }
     bool dontCombine() const { return m_dontCombine || isTrace() || entryPoint(); }
-    void dontCombine(bool flag) { frozenCheck("dontCombine"); m_dontCombine = flag; }
+    void dontCombine(bool flag) { m_dontCombine = flag; }
     bool declPrivate() const { return m_declPrivate; }
-    void declPrivate(bool flag) { frozenCheck("declPrivate"); m_declPrivate = flag; }
+    void declPrivate(bool flag) { m_declPrivate = flag; }
     bool keepIfEmpty() const VL_MT_SAFE { return m_keepIfEmpty; }
-    void keepIfEmpty(bool flag) { frozenCheck("keepIfEmpty"); m_keepIfEmpty = flag; }
+    void keepIfEmpty(bool flag) { m_keepIfEmpty = flag; }
     bool slow() const VL_MT_SAFE { return m_slow; }
-    void slow(bool flag) { frozenCheck("slow"); m_slow = flag; }
+    void slow(bool flag) { m_slow = flag; }
     bool funcPublic() const { return m_funcPublic; }
-    void funcPublic(bool flag) { frozenCheck("funcPublic"); m_funcPublic = flag; }
-    void argTypes(const string& str) { frozenCheck("argTypes"); m_argTypes = str; }
+    void funcPublic(bool flag) { m_funcPublic = flag; }
+    void argTypes(const string& str) { m_argTypes = str; }
     string argTypes() const { return m_argTypes; }
-    void ifdef(const string& str) { frozenCheck("ifdef"); m_ifdef = str; }
+    void ifdef(const string& str) { m_ifdef = str; }
     string ifdef() const { return m_ifdef; }
     bool isConstructor() const { return m_isConstructor; }
-    void isConstructor(bool flag) { frozenCheck("isConstructor"); m_isConstructor = flag; }
+    void isConstructor(bool flag) { m_isConstructor = flag; }
     bool isDestructor() const { return m_isDestructor; }
-    void isDestructor(bool flag) { frozenCheck("isDestructor"); m_isDestructor = flag; }
+    void isDestructor(bool flag) { m_isDestructor = flag; }
     bool isMethod() const { return m_isMethod; }
-    void isMethod(bool flag) { frozenCheck("isMethod"); m_isMethod = flag; }
+    void isMethod(bool flag) { m_isMethod = flag; }
     bool isLoose() const { return m_isLoose; }
-    void isLoose(bool flag) { frozenCheck("isLoose"); m_isLoose = flag; }
+    void isLoose(bool flag) { m_isLoose = flag; }
     bool isProperMethod() const { return isMethod() && !isLoose(); }
     bool isVirtual() const { return m_isVirtual; }
-    void isVirtual(bool flag) { frozenCheck("isVirtual"); m_isVirtual = flag; }
+    void isVirtual(bool flag) { m_isVirtual = flag; }
     bool needProcess() const { return m_needProcess; }
-    void setNeedProcess() { frozenCheck("setNeedProcess"); m_needProcess = true; }
+    void setNeedProcess() { m_needProcess = true; }
     bool entryPoint() const { return m_entryPoint; }
-    void entryPoint(bool flag) { frozenCheck("entryPoint"); m_entryPoint = flag; }
+    void entryPoint(bool flag) { m_entryPoint = flag; }
     bool dpiPure() const { return m_dpiPure; }
-    void dpiPure(bool flag) { frozenCheck("dpiPure"); m_dpiPure = flag; }
+    void dpiPure(bool flag) { m_dpiPure = flag; }
     bool dpiContext() const { return m_dpiContext; }
-    void dpiContext(bool flag) { frozenCheck("dpiContext"); m_dpiContext = flag; }
+    void dpiContext(bool flag) { m_dpiContext = flag; }
     bool dpiExportDispatcher() const VL_MT_SAFE { return m_dpiExportDispatcher; }
-    void dpiExportDispatcher(bool flag) {
-        frozenCheck("dpiExportDispatcher");
-        m_dpiExportDispatcher = flag;
-    }
+    void dpiExportDispatcher(bool flag) { m_dpiExportDispatcher = flag; }
     bool dpiExportImpl() const { return m_dpiExportImpl; }
-    void dpiExportImpl(bool flag) { frozenCheck("dpiExportImpl"); m_dpiExportImpl = flag; }
+    void dpiExportImpl(bool flag) { m_dpiExportImpl = flag; }
     bool dpiImportPrototype() const VL_MT_SAFE { return m_dpiImportPrototype; }
-    void dpiImportPrototype(bool flag) {
-        frozenCheck("dpiImportPrototype");
-        m_dpiImportPrototype = flag;
-    }
+    void dpiImportPrototype(bool flag) { m_dpiImportPrototype = flag; }
     bool dpiImportWrapper() const { return m_dpiImportWrapper; }
-    void dpiImportWrapper(bool flag) { frozenCheck("dpiImportWrapper"); m_dpiImportWrapper = flag; }
+    void dpiImportWrapper(bool flag) { m_dpiImportWrapper = flag; }
     bool dpiCDeclOverride() const { return !m_dpiCDecl.empty(); }
     const string& dpiCDecl() const { return m_dpiCDecl; }
-    void dpiCDecl(const string& cDecl) { frozenCheck("dpiCDecl"); m_dpiCDecl = cDecl; }
+    void dpiCDecl(const string& cDecl) { m_dpiCDecl = cDecl; }
     bool isCoroutine() const { return m_rtnType == "VlCoroutine"; }
-    void recursive(bool flag) { frozenCheck("recursive"); m_recursive = flag; }
+    void recursive(bool flag) { m_recursive = flag; }
     bool recursive() const { return m_recursive; }
-    void unlikely(bool flag) { frozenCheck("unlikely"); m_unlikely = flag; }
+    void unlikely(bool flag) { m_unlikely = flag; }
     bool isUnlikely() const override { return m_unlikely; }  // Note virtual override
-    void noLife(bool flag) { frozenCheck("noLife"); m_noLife = flag; }
+    void noLife(bool flag) { m_noLife = flag; }
     bool noLife() const { return m_noLife; }
     bool isCovergroupSample() const { return m_isCovergroupSample; }
-    void isCovergroupSample(bool flag) {
-        frozenCheck("isCovergroupSample");
-        m_isCovergroupSample = flag;
-    }
+    void isCovergroupSample(bool flag) { m_isCovergroupSample = flag; }
     bool voidSelf() const { return m_voidSelf; }
-    void voidSelf(bool flag) { frozenCheck("voidSelf"); m_voidSelf = flag; }
-    void cost(int cost) { frozenCheck("cost"); m_cost = cost; }
+    void voidSelf(bool flag) { m_voidSelf = flag; }
+    void cost(int cost) { m_cost = cost; }
     // Special methods
     bool emptyBody() const {
         return !keepIfEmpty() && !argsp() && !varsp() && !stmtsp() && !scopeNamep() && !isVirtual()
@@ -804,12 +795,12 @@ public:
     AstNodeModule* modp() const { return m_modp; }  // [AfterLink] = Pointer to module instantiated
     void modp(AstNodeModule* nodep) { frozenCheck("modp"); m_modp = nodep; }
     int arrayIdx() const { return m_arrayIdx; }
-    void arrayIdx(int idx) { frozenCheck("arrayIdx"); m_arrayIdx = idx; }
+    void arrayIdx(int idx) { m_arrayIdx = idx; }
     bool hasIfaceVar() const { return m_hasIfaceVar; }
-    void hasIfaceVar(bool flag) { frozenCheck("hasIfaceVar"); m_hasIfaceVar = flag; }
-    void trace(bool flag) { frozenCheck("trace"); m_trace = flag; }
+    void hasIfaceVar(bool flag) { m_hasIfaceVar = flag; }
+    void trace(bool flag) { m_trace = flag; }
     bool isTrace() const { return m_trace; }
-    void recursive(bool flag) { frozenCheck("recursive"); m_recursive = flag; }
+    void recursive(bool flag) { m_recursive = flag; }
     bool recursive() const { return m_recursive; }
 };
 class AstCellInline final : public AstNode {
@@ -899,7 +890,7 @@ public:
     AstClass* classOrNullp() const;
     AstClass* classp() const;  // Like above, but throws error if nulll
     bool isImplements() const { return m_isImplements; }
-    void parameterized(bool flag) { frozenCheck("parameterized"); m_parameterized = flag; }
+    void parameterized(bool flag) { m_parameterized = flag; }
     bool parameterized() const { return m_parameterized; }
 };
 class AstClocking final : public AstNode {
@@ -930,7 +921,7 @@ public:
     bool isDefault() const { return m_isDefault; }
     bool isGlobal() const { return m_isGlobal; }
     AstVar* ensureEventp(bool childDType = false);
-    void makeDefault() { frozenCheck("makeDefault"); m_isDefault = true; }
+    void makeDefault() { m_isDefault = true; }
 };
 class AstClockingItem final : public AstNode {
     // Parents:  CLOCKING
@@ -958,7 +949,7 @@ public:
     void dumpJson(std::ostream& str) const override;
     VDirection direction() const { return m_direction; }
     AstClockingItem* outputp() const { return m_outputp; }
-    void outputp(AstClockingItem* outputp) { frozenCheck("outputp"); m_outputp = outputp; }
+    void outputp(AstClockingItem* outputp) { m_outputp = outputp; }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
 };
 class AstConfig final : public AstNode {
@@ -1063,20 +1054,17 @@ public:
     bool isPredictOptimizable() const override { return false; }
     bool maybePointedTo() const override VL_MT_SAFE { return true; }
     bool sameNode(const AstNode* /*samep*/) const override { return true; }
-    void baseOverride(const VBaseOverride& flag) {
-        frozenCheck("baseOverride");
-        m_baseOverride = flag;
-    }
+    void baseOverride(const VBaseOverride& flag) { m_baseOverride = flag; }
     VBaseOverride baseOverride() const { return m_baseOverride; }
     bool isExternDef() const { return m_isExternDef; }
-    void isExternDef(bool flag) { frozenCheck("isExternDef"); m_isExternDef = flag; }
-    void isExternExplicit(bool flag) { frozenCheck("isExternExplicit"); m_isExternExplicit = flag; }
+    void isExternDef(bool flag) { m_isExternDef = flag; }
+    void isExternExplicit(bool flag) { m_isExternExplicit = flag; }
     bool isExternExplicit() const { return m_isExternExplicit; }
-    void isExternProto(bool flag) { frozenCheck("isExternProto"); m_isExternProto = flag; }
+    void isExternProto(bool flag) { m_isExternProto = flag; }
     bool isExternProto() const { return m_isExternProto; }
-    void isKwdPure(bool flag) { frozenCheck("isKwdPure"); m_isKwdPure = flag; }
+    void isKwdPure(bool flag) { m_isKwdPure = flag; }
     bool isKwdPure() const { return m_isKwdPure; }
-    void isStatic(bool flag) { frozenCheck("isStatic"); m_isStatic = flag; }
+    void isStatic(bool flag) { m_isStatic = flag; }
     bool isStatic() const { return m_isStatic; }
 };
 class AstCoverBin final : public AstNode {
@@ -1136,9 +1124,9 @@ public:
     VCoverBinsType binsType() const { return m_binsType; }
     bool isWildcard() const { return m_isWildcard; }
     bool isArray() const { return m_isArray; }
-    void isArray(bool flag) { frozenCheck("isArray"); m_isArray = flag; }
+    void isArray(bool flag) { m_isArray = flag; }
     bool isSetExpr() const { return m_isSetExpr; }
-    void isSetExpr(bool flag) { frozenCheck("isSetExpr"); m_isSetExpr = flag; }
+    void isSetExpr(bool flag) { m_isSetExpr = flag; }
 };
 class AstCoverBinsof final : public AstNode {
     // A binsof selection of a coverpoint or one of its named bins
@@ -1433,7 +1421,7 @@ public:
     string name() const override VL_MT_STABLE { return m_name; }
     void name(const string& name) override { frozenCheck("name"); m_name = name; }
     string cname() const { return m_cname; }
-    void cname(const string& cname) { frozenCheck("cname"); m_cname = cname; }
+    void cname(const string& cname) { m_cname = cname; }
 };
 class AstElabDisplay final : public AstNode {
     // Parents: stmtlist
@@ -1460,7 +1448,7 @@ public:
     }
     int instrCount() const override { return INSTR_COUNT_PLI; }
     VDisplayType displayType() const { return m_displayType; }
-    void displayType(VDisplayType type) { frozenCheck("displayType"); m_displayType = type; }
+    void displayType(VDisplayType type) { m_displayType = type; }
 };
 class AstEmpty final : public AstNode {
     // Represents something missing, e.g. a missing argument in FOREACH
@@ -1565,7 +1553,7 @@ public:
     AstClocking* clockingp() const VL_MT_STABLE {
         return m_clockingp;
     }  // [After Link] Pointer to clocking block
-    void clockingp(AstClocking* clockingp) { frozenCheck("clockingp"); m_clockingp = clockingp; }
+    void clockingp(AstClocking* clockingp) { m_clockingp = clockingp; }
 };
 class AstModportFTaskRef final : public AstNode {
     // An import/export referenced under a modport
@@ -1588,7 +1576,7 @@ public:
     bool isImport() const { return !m_export; }
     bool isExport() const { return m_export; }
     AstNodeFTask* ftaskp() const { return m_ftaskp; }  // [After Link] Pointer to variable
-    void ftaskp(AstNodeFTask* ftaskp) { frozenCheck("ftaskp"); m_ftaskp = ftaskp; }
+    void ftaskp(AstNodeFTask* ftaskp) { m_ftaskp = ftaskp; }
 };
 class AstModportVarRef final : public AstNode {
     // A input/output/etc variable referenced under a modport
@@ -1820,13 +1808,13 @@ public:
     AstParamTypeDType* modPTypep() const { return m_modPTypep; }
     void modPTypep(AstParamTypeDType* nodep) { frozenCheck("modPTypep"); m_modPTypep = nodep; }
     bool param() const { return m_param; }
-    void param(bool flag) { frozenCheck("param"); m_param = flag; }
+    void param(bool flag) { m_param = flag; }
     const string& paramPath() const { return m_paramPath; }
-    void paramPath(const string& path) { frozenCheck("paramPath"); m_paramPath = path; }
+    void paramPath(const string& path) { m_paramPath = path; }
     bool svDotName() const { return m_svDotName; }
-    void svDotName(bool flag) { frozenCheck("svDotName"); m_svDotName = flag; }
+    void svDotName(bool flag) { m_svDotName = flag; }
     bool svImplicit() const { return m_svImplicit; }
-    void svImplicit(bool flag) { frozenCheck("svImplicit"); m_svImplicit = flag; }
+    void svImplicit(bool flag) { m_svImplicit = flag; }
 };
 class AstPort final : public AstNode {
     // A port (in/out/inout) on a module
@@ -1954,9 +1942,9 @@ public:
     AstActive* comboActivep(bool create);
     //
     AstScope* aboveScopep() const VL_MT_SAFE { return m_aboveScopep; }
-    void aboveScopep(AstScope* nodep) { frozenCheck("aboveScopep"); m_aboveScopep = nodep; }
+    void aboveScopep(AstScope* nodep) { m_aboveScopep = nodep; }
     AstCell* aboveCellp() const { return m_aboveCellp; }
-    void aboveCellp(AstCell* nodep) { frozenCheck("aboveCellp"); m_aboveCellp = nodep; }
+    void aboveCellp(AstCell* nodep) { m_aboveCellp = nodep; }
     bool isTop() const VL_MT_SAFE { return aboveScopep() == nullptr; }  // At top of hierarchy
 };
 class AstSenItem final : public AstNode {
@@ -2070,7 +2058,7 @@ public:
     ASTGEN_MEMBERS_AstSystemCSection;
     VSystemCSectionType sectionType() const { return m_sectionType; }
     const std::string& text() const { return m_text; }
-    void text(const std::string& value) { frozenCheck("text"); m_text = value; }
+    void text(const std::string& value) { m_text = value; }
     void dump(std::ostream&) const override;
     void dumpJson(std::ostream&) const override;
     bool sameNode(const AstNode*) const override { return false; }
@@ -2227,7 +2215,6 @@ public:
     // METHODS
     uint32_t declTokenNum() const override { return m_declTokenNum; }
     void declTokenNumSetMin(uint32_t tokenNum) override {
-        frozenCheck("declTokenNumSetMin");
         m_declTokenNum = std::min(m_declTokenNum, tokenNum);
     }
     string name() const override VL_MT_STABLE { return m_name; }
@@ -2235,14 +2222,14 @@ public:
     bool hasDType() const override VL_MT_SAFE { return true; }
     void name(const string& flag) override { frozenCheck("name"); m_name = flag; }
     bool attrPublic() const { return m_attrPublic; }
-    void attrPublic(bool flag) { frozenCheck("attrPublic"); m_attrPublic = flag; }
+    void attrPublic(bool flag) { m_attrPublic = flag; }
     bool isHideLocal() const { return m_isHideLocal; }
-    void isHideLocal(bool flag) { frozenCheck("isHideLocal"); m_isHideLocal = flag; }
+    void isHideLocal(bool flag) { m_isHideLocal = flag; }
     bool isHideProtected() const { return m_isHideProtected; }
-    void isHideProtected(bool flag) { frozenCheck("isHideProtected"); m_isHideProtected = flag; }
+    void isHideProtected(bool flag) { m_isHideProtected = flag; }
     bool isUnderClass() const { return m_isUnderClass; }
-    void isUnderClass(bool flag) { frozenCheck("isUnderClass"); m_isUnderClass = flag; }
-    void tag(const string& text) override { frozenCheck("tag"); m_tag = text; }
+    void isUnderClass(bool flag) { m_isUnderClass = flag; }
+    void tag(const string& text) override { m_tag = text; }
     string tag() const override { return m_tag; }
 };
 class AstTypedefFwd final : public AstNode {
@@ -2542,9 +2529,9 @@ public:
     void declDirection(const VDirection& flag) { frozenCheck("declDirection"); m_declDirection = flag; }
     VDirection declDirection() const { return m_declDirection; }
     int libInoutId() const { return m_libInoutId; }
-    void libInoutId(int id) { frozenCheck("libInoutId"); m_libInoutId = id; }
+    void libInoutId(int id) { m_libInoutId = id; }
     bool libInoutEnable() const { return m_libInoutEnable; }
-    void libInoutEnable(bool flag) { frozenCheck("libInoutEnable"); m_libInoutEnable = flag; }
+    void libInoutEnable(bool flag) { m_libInoutEnable = flag; }
     void varType(VVarType type) { frozenCheck("varType"); m_varType = type; }
     void varType2Out() {
         frozenCheck("varType2Out");
@@ -2594,7 +2581,7 @@ public:
         m_attrFsmStateExpand = flag;
     }
     bool constPoolEntry() const { return m_constPoolEntry; }
-    void setConstPoolEntry() { frozenCheck("setConstPoolEntry"); m_constPoolEntry = true; }
+    void setConstPoolEntry() { m_constPoolEntry = true; }
     bool covergroupRefMember() const { return m_covergroupRefMember; }
     void covergroupRefMember(bool flag) {
         frozenCheck("covergroupRefMember");
@@ -2605,8 +2592,8 @@ public:
     bool embeddedCovergroup() const { return m_embeddedCovergroup; }
     void embeddedCovergroup(bool flag) { frozenCheck("embeddedCovergroup"); m_embeddedCovergroup = flag; }
     void rand(const VRandAttr flag) { frozenCheck("rand"); m_rand = flag; }
-    void usedParam(bool flag) { frozenCheck("usedParam"); m_usedParam = flag; }
-    void usedLoopIdx(bool flag) { frozenCheck("usedLoopIdx"); m_usedLoopIdx = flag; }
+    void usedParam(bool flag) { m_usedParam = flag; }
+    void usedLoopIdx(bool flag) { m_usedLoopIdx = flag; }
     void sigPublic(bool flag) { frozenCheck("sigPublic"); m_sigPublic = flag; }
     void sigModPublic(bool flag) { frozenCheck("sigModPublic"); m_sigModPublic = flag; }
     void sigUserRdPublic(bool flag) {
@@ -2643,7 +2630,7 @@ public:
     }
     bool hasUserInit() const { return m_hasUserInit; }
     void hasUserInit(bool flag) { frozenCheck("hasUserInit"); m_hasUserInit = flag; }
-    void icoMaybeWritten(bool flag) { frozenCheck("icoMaybeWritten"); m_icoMaybeWritten = flag; }
+    void icoMaybeWritten(bool flag) { m_icoMaybeWritten = flag; }
     bool icoMaybeWritten() const { return m_icoMaybeWritten; }
     bool isDpiOpenArray() const VL_MT_SAFE { return m_isDpiOpenArray; }
     void isDpiOpenArray(bool flag) { frozenCheck("isDpiOpenArray"); m_isDpiOpenArray = flag; }
@@ -2656,13 +2643,13 @@ public:
     bool noReset() const { return m_noReset; }
     void noReset(bool flag) { frozenCheck("noReset"); m_noReset = flag; }
     bool noSubst() const { return m_noSubst; }
-    void noSubst(bool flag) { frozenCheck("noSubst"); m_noSubst = flag; }
+    void noSubst(bool flag) { m_noSubst = flag; }
     bool processQueue() const { return m_processQueue; }
-    void processQueue(bool flag) { frozenCheck("processQueue"); m_processQueue = flag; }
+    void processQueue(bool flag) { m_processQueue = flag; }
     bool sampled() const { return m_sampled; }
-    void sampled(bool flag) { frozenCheck("sampled"); m_sampled = flag; }
+    void sampled(bool flag) { m_sampled = flag; }
     bool substConstOnly() const { return m_substConstOnly; }
-    void substConstOnly(bool flag) { frozenCheck("substConstOnly"); m_substConstOnly = flag; }
+    void substConstOnly(bool flag) { m_substConstOnly = flag; }
     bool overriddenParam() const { return m_overriddenParam; }
     void overriddenParam(bool flag) { frozenCheck("overriddenParam"); m_overriddenParam = flag; }
     bool untypedParam() const { return m_untypedParam; }
@@ -2670,38 +2657,32 @@ public:
     void trace(bool flag) { frozenCheck("trace"); m_trace = flag; }
     void isLatched(bool flag) { frozenCheck("isLatched"); m_isLatched = flag; }
     bool isForceable() const { return m_isForceable; }
-    void setForceable() { frozenCheck("setForceable"); m_isForceable = true; }
-    void setForcedByCode() { frozenCheck("setForcedByCode"); m_isForcedByCode = true; }
+    void setForceable() { m_isForceable = true; }
+    void setForcedByCode() { m_isForcedByCode = true; }
     bool isForced() const { return m_isForceable || m_isForcedByCode; }
     bool isReadByDpi() const { return m_isReadByDpi; }
-    void setReadByDpi() { frozenCheck("setReadByDpi"); m_isReadByDpi = true; }
+    void setReadByDpi() { m_isReadByDpi = true; }
     bool isWrittenByDpi() const { return m_isWrittenByDpi; }
-    void setWrittenByDpi() { frozenCheck("setWrittenByDpi"); m_isWrittenByDpi = true; }
+    void setWrittenByDpi() { m_isWrittenByDpi = true; }
     bool isWrittenBySuspendable() const { return m_isWrittenBySuspendable; }
-    void setWrittenBySuspendable() {
-        frozenCheck("setWrittenBySuspendable");
-        m_isWrittenBySuspendable = true;
-    }
+    void setWrittenBySuspendable() { m_isWrittenBySuspendable = true; }
     bool ignorePostRead() const { return m_ignorePostRead; }
-    void setIgnorePostRead() { frozenCheck("setIgnorePostRead"); m_ignorePostRead = true; }
+    void setIgnorePostRead() { m_ignorePostRead = true; }
     bool ignorePostWrite() const { return m_ignorePostWrite; }
-    void setIgnorePostWrite() { frozenCheck("setIgnorePostWrite"); m_ignorePostWrite = true; }
+    void setIgnorePostWrite() { m_ignorePostWrite = true; }
     bool ignoreSchedWrite() const { return m_ignoreSchedWrite; }
-    void setIgnoreSchedWrite() { frozenCheck("setIgnoreSchedWrite"); m_ignoreSchedWrite = true; }
+    void setIgnoreSchedWrite() { m_ignoreSchedWrite = true; }
     bool dfgTriLowered() const { return m_dfgTriLowered; }
-    void setDfgTriLowered() { frozenCheck("setDfgTriLowered"); m_dfgTriLowered = true; }
+    void setDfgTriLowered() { m_dfgTriLowered = true; }
     bool dfgAllowMultidriveTri() const { return m_dfgAllowMultidriveTri; }
-    void setDfgAllowMultidriveTri() {
-        frozenCheck("setDfgAllowMultidriveTri");
-        m_dfgAllowMultidriveTri = true;
-    }
+    void setDfgAllowMultidriveTri() { m_dfgAllowMultidriveTri = true; }
     void globalConstrained(bool flag) { frozenCheck("globalConstrained"); m_globalConstrained = flag; }
     bool globalConstrained() const { return m_globalConstrained; }
     bool isStdRandomizeArg() const { return m_isStdRandomizeArg; }
-    void setStdRandomizeArg() { frozenCheck("setStdRandomizeArg"); m_isStdRandomizeArg = true; }
+    void setStdRandomizeArg() { m_isStdRandomizeArg = true; }
     // METHODS
     void name(const string& name) override { frozenCheck("name"); m_name = name; }
-    void tag(const string& text) override { frozenCheck("tag"); m_tag = text; }
+    void tag(const string& text) override { m_tag = text; }
     string tag() const override { return m_tag; }
     bool isAnsi() const { return m_ansi; }
     bool isContinuously() const { return m_isContinuously; }
@@ -2718,10 +2699,9 @@ public:
     bool isPrimaryIO() const VL_MT_SAFE { return m_primaryIO; }
     bool isPrimaryInish() const { return isPrimaryIO() && isNonOutput(); }
     bool isPrimaryClock() const VL_MT_SAFE { return m_primaryClock; }
-    void setPrimaryClock() { frozenCheck("setPrimaryClock"); m_primaryClock = true; }
+    void setPrimaryClock() { m_primaryClock = true; }
     bool isIfaceRef() const { return varType() == VVarType::IFACEREF; }
     void setIfaceRef() {
-        frozenCheck("setIfaceRef");
         m_direction = VDirection::NONE;
         m_varType = VVarType::IFACEREF;
     }
@@ -2761,10 +2741,7 @@ public:
     bool isUsedParam() const { return m_usedParam; }
     bool isUsedLoopIdx() const { return m_usedLoopIdx; }
     bool mtaskCacheLineAlign() const { return m_mtaskCacheLineAlign; }
-    void mtaskCacheLineAlign(bool flag) {
-        frozenCheck("mtaskCacheLineAlign");
-        m_mtaskCacheLineAlign = flag;
-    }
+    void mtaskCacheLineAlign(bool flag) { m_mtaskCacheLineAlign = flag; }
     bool isSc() const VL_MT_SAFE { return m_sc; }
     bool isScQuad() const;
     bool isScBv() const VL_MT_STABLE;
@@ -2797,9 +2774,9 @@ public:
     AstIface* sensIfacep() const { return m_sensIfacep; }
     VRandAttr rand() const { return m_rand; }
     string verilogKwd() const override;
-    void lifetime(const VLifetime& flag) { frozenCheck("lifetime"); m_lifetime = flag; }
+    void lifetime(const VLifetime& flag) { m_lifetime = flag; }
     VLifetime lifetime() const { return m_lifetime; }
-    void pinNum(int id) { frozenCheck("pinNum"); m_pinNum = id; }
+    void pinNum(int id) { m_pinNum = id; }
     int pinNum() const { return m_pinNum; }
     void propagateAttrFrom(const AstVar* fromp) {
         // This is getting connected to fromp; keep attributes
@@ -2874,11 +2851,11 @@ public:
     AstScope* scopep() const VL_MT_STABLE { return m_scopep; }  // Pointer to scope it's under
     void scopep(AstScope* nodep) { frozenCheck("scopep"); m_scopep = nodep; }
     bool isTrace() const { return m_trace; }
-    void trace(bool flag) { frozenCheck("trace"); m_trace = flag; }
+    void trace(bool flag) { m_trace = flag; }
     bool optimizeLifePost() const { return m_optimizeLifePost; }
-    void optimizeLifePost(bool flag) { frozenCheck("optimizeLifePost"); m_optimizeLifePost = flag; }
+    void optimizeLifePost(bool flag) { m_optimizeLifePost = flag; }
     bool forkByValue() const { return m_forkByValue; }
-    void forkByValue(bool flag) { frozenCheck("forkByValue"); m_forkByValue = flag; }
+    void forkByValue(bool flag) { m_forkByValue = flag; }
 };
 
 // === AstNodeConsItem ===
@@ -3113,7 +3090,7 @@ public:
     }
     string verilogKwd() const override { return "sequence"; }
     bool isReferenced() const { return m_referenced; }
-    void isReferenced(bool flag) { frozenCheck("isReferenced"); m_referenced = flag; }
+    void isReferenced(bool flag) { m_referenced = flag; }
 };
 class AstTask final : public AstNodeFTask {
     // A task inside a module
@@ -3145,16 +3122,13 @@ public:
     void dump(std::ostream& str = std::cout) const override;
     void dumpJson(std::ostream& str = std::cout) const override;
     uint64_t complexityScore() const { return m_complexityScore; }
-    void complexityScore(uint64_t newScore) {
-        frozenCheck("complexityScore");
-        m_complexityScore = newScore;
-    }
+    void complexityScore(uint64_t newScore) { m_complexityScore = newScore; }
     bool slow() const { return m_slow; }
-    void slow(bool flag) { frozenCheck("slow"); m_slow = flag; }
+    void slow(bool flag) { m_slow = flag; }
     bool source() const { return m_source; }
-    void source(bool flag) { frozenCheck("source"); m_source = flag; }
+    void source(bool flag) { m_source = flag; }
     bool support() const { return m_support; }
-    void support(bool flag) VL_MT_SAFE { frozenCheck("support"); m_support = flag; }
+    void support(bool flag) VL_MT_SAFE { m_support = flag; }
 };
 class AstVFile final : public AstNodeFile {
     // Verilog output file
@@ -3229,10 +3203,7 @@ public:
     bool unnamed() const { return m_unnamed; }
     bool implied() const { return m_implied; }
     AstDefaultDisable* defaultDisablep() const { return m_defaultDisablep; }
-    void defaultDisablep(AstDefaultDisable* nodep) {
-        frozenCheck("defaultDisablep");
-        m_defaultDisablep = nodep;
-    }
+    void defaultDisablep(AstDefaultDisable* nodep) { m_defaultDisablep = nodep; }
     // As AstNodeModule::dtypeNameInnerScope(), e.g. 'top.gen[0].'
     string dtypeNameInnerScope(const string& outer) const;
 };
@@ -3327,28 +3298,22 @@ public:
     AstClass* covergroupEnclosingClassp() const VL_MT_STABLE {
         return m_covergroupEnclosingClassp;
     }
-    void covergroupEnclosingClassp(AstClass* classp) {
-        frozenCheck("covergroupEnclosingClassp");
-        m_covergroupEnclosingClassp = classp;
-    }
+    void covergroupEnclosingClassp(AstClass* classp) { m_covergroupEnclosingClassp = classp; }
     bool hasRandVarsUpdate() const { return m_hasRandVarsUpdate; }
-    void hasRandVarsUpdate(bool flag) {
-        frozenCheck("hasRandVarsUpdate");
-        m_hasRandVarsUpdate = flag;
-    }
+    void hasRandVarsUpdate(bool flag) { m_hasRandVarsUpdate = flag; }
     bool isCovergroup() const { return m_covergroup; }
-    void isCovergroup(bool flag) { frozenCheck("isCovergroup"); m_covergroup = flag; }
+    void isCovergroup(bool flag) { m_covergroup = flag; }
     bool isExtended() const { return m_extended; }
-    void isExtended(bool flag) { frozenCheck("isExtended"); m_extended = flag; }
+    void isExtended(bool flag) { m_extended = flag; }
     bool isInterfaceClass() const { return m_interfaceClass; }
-    void isInterfaceClass(bool flag) { frozenCheck("isInterfaceClass"); m_interfaceClass = flag; }
+    void isInterfaceClass(bool flag) { m_interfaceClass = flag; }
     bool isVirtual() const { return m_virtual; }
-    void isVirtual(bool flag) { frozenCheck("isVirtual"); m_virtual = flag; }
+    void isVirtual(bool flag) { m_virtual = flag; }
     bool needRNG() const { return m_needRNG; }
-    void needRNG(bool flag) { frozenCheck("needRNG"); m_needRNG = flag; }
+    void needRNG(bool flag) { m_needRNG = flag; }
     bool useVirtualPublic() const { return m_useVirtualPublic; }
-    void useVirtualPublic(bool flag) { frozenCheck("useVirtualPublic"); m_useVirtualPublic = flag; }
-    void markPrintedFrom() { frozenCheck("markPrintedFrom"); m_printedFrom = true; }
+    void useVirtualPublic(bool flag) { m_useVirtualPublic = flag; }
+    void markPrintedFrom() { m_printedFrom = true; }
     bool isPrintedFrom() const { return m_printedFrom; }
     // Name of the class as a data type, with the values of its parameters, e.g. 'Cls#(int,5)'.
     // With 'full', as for $typename (IEEE 1800-2023 20.6.1), prefixed with the scope declaring
@@ -3370,7 +3335,7 @@ public:
     string embeddedCovergroupName() const;
     // Covergroup options accessors
     int cgAutoBinMax() const { return m_cgAutoBinMax; }
-    void cgAutoBinMax(int value) { frozenCheck("cgAutoBinMax"); m_cgAutoBinMax = value; }
+    void cgAutoBinMax(int value) { m_cgAutoBinMax = value; }
     // Return true if this class is an extension of base class following all extends (SLOW)
     // Accepts nullptrs
     static bool isClassDerivedFrom(const AstClass* refClassp, const AstClass* baseClassp);
@@ -3379,13 +3344,9 @@ public:
     static bool isClassExtendedFrom(const AstClass* refClassp, const AstClass* baseClassp);
     uint32_t declTokenNum() const override { return m_declTokenNum; }
     void declTokenNumSetMin(uint32_t tokenNum) override {
-        frozenCheck("declTokenNumSetMin");
         m_declTokenNum = std::min(m_declTokenNum, tokenNum);
     }
-    void baseOverride(const VBaseOverride& flag) {
-        frozenCheck("baseOverride");
-        m_baseOverride = flag;
-    }
+    void baseOverride(const VBaseOverride& flag) { m_baseOverride = flag; }
     VBaseOverride baseOverride() const { return m_baseOverride; }
     // Return the lowest class extended from, or this class
     AstClass* baseMostClassp();
@@ -3493,10 +3454,7 @@ public:
     bool isChecker() const { return m_isChecker; }
     bool isProgram() const { return m_isProgram; }
     bool hasGenericIface() const { return m_hasGenericIface; }
-    void hasGenericIface(bool hasGenericIface) {
-        frozenCheck("hasGenericIface");
-        m_hasGenericIface = hasGenericIface;
-    }
+    void hasGenericIface(bool hasGenericIface) { m_hasGenericIface = hasGenericIface; }
     void dump(std::ostream& str) const override;
     void dumpJson(std::ostream& str) const override;
 };
