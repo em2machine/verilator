@@ -301,6 +301,7 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
+        AstNode::frozenUnregister(modp);
         if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
         if (it == m_nodes.end()) return;
@@ -4005,6 +4006,8 @@ class ParamTop final : VNDeleter {
                 modp->dead(true);
 #ifdef VL_DEBUG
                 AstNode::frozenMarkRetired(modp);
+                // Record the retired definition; its content must not change before deletion.
+                AstNode::frozenRegister(modp);
 #endif
             }
         }
@@ -4159,6 +4162,7 @@ public:
 
 void V3Param::param(AstNetlist* rootp) {
 #ifdef VL_DEBUG
+    AstNode::frozenVerify("preParam");
     AstNode::frozenPhase("param");
 #endif
     UINFO(2, __FUNCTION__ << ":");

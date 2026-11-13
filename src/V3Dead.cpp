@@ -885,6 +885,8 @@ void V3Dead::deadifyDTypesScoped(AstNetlist* nodep) {
 
 void V3Dead::deadifyAll(AstNetlist* nodep) {
 #ifdef VL_DEBUG
+    AstNode::frozenVerify("widthCommit");
+    AstNode::frozenForget();
     AstNode::frozenPhase("dead");
 #endif
     UINFO(2, __FUNCTION__ << ":");

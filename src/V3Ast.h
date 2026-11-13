@@ -625,6 +625,11 @@ public:
     static bool frozenWatch();
     static void frozenPhase(const char* name);
     static void frozenMarkRetired(const AstNodeModule* modp);
+    // Structural fingerprint of a frozen definition, checked at pass boundaries.
+    static void frozenRegister(AstNodeModule* modp);
+    static void frozenUnregister(const AstNodeModule* modp);
+    static void frozenVerify(const char* boundary);
+    static void frozenForget();
 
     // ACCESSORS
     VNType type() const VL_MT_SAFE { return m_type; }

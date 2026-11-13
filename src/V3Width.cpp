@@ -11653,6 +11653,7 @@ public:
 
 void V3Width::width(AstNetlist* nodep) {
 #ifdef VL_DEBUG
+    AstNode::frozenVerify("ifaceCapture");
     AstNode::frozenPhase("width");
 #endif
     UINFO(2, __FUNCTION__ << ":");

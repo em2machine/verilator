@@ -17,6 +17,7 @@
 #include "V3PchAstMT.h"
 
 #include "V3Broken.h"
+#include "V3Hasher.h"
 #include "V3File.h"
 
 #include <iomanip>
@@ -52,6 +53,64 @@ std::unordered_set<const AstNodeModule*> s_frozenRetired;
 void AstNode::frozenMarkRetired(const AstNodeModule* modp) { s_frozenRetired.insert(modp); }
 #else
 void AstNode::frozenMarkRetired(const AstNodeModule*) {}
+#endif
+
+#ifdef VL_DEBUG
+namespace {
+struct FrozenTemplateRecord final {
+    const AstNodeModule* modp;
+    std::string name;
+    V3Hash hash;
+};
+std::vector<FrozenTemplateRecord> s_frozenTemplates;
+}  // namespace
+
+void AstNode::frozenRegister(AstNodeModule* modp) {
+    if (!modp) return;
+    const V3Hash hash = V3Hasher::uncachedHash(modp);
+    for (FrozenTemplateRecord& record : s_frozenTemplates) {
+        if (record.modp == modp) {
+            record.hash = hash;
+            return;
+        }
+    }
+    s_frozenTemplates.push_back({modp, modp->prettyName(), hash});
+}
+
+void AstNode::frozenUnregister(const AstNodeModule* modp) {
+    for (size_t i = 0; i < s_frozenTemplates.size(); ++i) {
+        if (s_frozenTemplates[i].modp != modp) continue;
+        s_frozenTemplates.erase(s_frozenTemplates.begin() + i);
+        return;
+    }
+}
+
+void AstNode::frozenForget() { s_frozenTemplates.clear(); }
+
+void AstNode::frozenVerify(const char* boundary) {
+    if (s_frozenTemplates.empty()) return;
+    for (FrozenTemplateRecord& record : s_frozenTemplates) {
+        const V3Hash now = V3Hasher::uncachedHash(record.modp);
+        if (now == record.hash) continue;
+        if (frozenWatch()) {
+            fprintf(stderr, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d old=%u new=%u\n", boundary,
+                    record.name.c_str(), static_cast<int>(record.modp->dead()),
+                    static_cast<int>(record.modp->parameterizedTemplate()), record.hash.value(),
+                    now.value());
+            fflush(stderr);
+            record.hash = now;
+        } else {
+            record.modp->v3fatalSrc("Protected template changed: "
+                                    << record.name << " before " << boundary << "; fingerprint "
+                                    << record.hash.value() << " -> " << now.value());
+        }
+    }
+}
+#else
+void AstNode::frozenRegister(AstNodeModule*) {}
+void AstNode::frozenUnregister(const AstNodeModule*) {}
+void AstNode::frozenVerify(const char*) {}
+void AstNode::frozenForget() {}
 #endif
 
 bool AstNode::frozenWatch() {
