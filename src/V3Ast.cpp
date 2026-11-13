@@ -130,6 +130,11 @@ V3Hash moduleFingerprint(const AstNodeModule* modp, std::vector<V3Hash>* hashesp
 
 void AstNode::frozenRegister(AstNodeModule* modp) {
     if (!modp) return;
+    if (frozenWatch()) {
+        FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+        fprintf(fhp, "FPREG %s count=%zu\n", modp->prettyName().c_str(), s_frozenTemplates.size());
+        fflush(fhp);
+    }
 
     std::vector<V3Hash> hashes;
     std::vector<std::string> labels;
@@ -190,7 +195,12 @@ void AstNode::frozenVerifyOne(const AstNodeModule* modp, const char* boundary) {
 void AstNode::frozenRefresh(AstNetlist*) {}
 
 void AstNode::frozenVerify(const char* boundary) {
-    if (s_frozenTemplates.empty()) return;
+    if (s_frozenTemplates.empty()) {
+        FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+        fprintf(fhp, "FPEMPTY boundary=%s (no templates registered)\n", boundary);
+        fflush(fhp);
+        return;
+    }
     for (FrozenTemplateRecord& record : s_frozenTemplates) {
         std::vector<V3Hash> hashes;
         std::vector<std::string> labels;
@@ -1321,6 +1331,7 @@ void AstNode::deleteNode() {
 #ifdef VL_DEBUG
     // Teardown is not a template mutation; stop tracking the node before it goes away.
     if (frozenWatch()) m_frozenOwnerp = nullptr;
+    if (VN_IS(this, NodeModule)) frozenUnregister(VN_AS(this, NodeModule));
 #endif
     frozenCheck("deleteNode");
     // private: Delete single node. Publicly call deleteTree() instead.

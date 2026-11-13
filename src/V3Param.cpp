@@ -301,7 +301,8 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
-        AstNode::frozenUnregister(modp);
+        // Signatures are taken at clone time and never released here: specializing a definition does
+        // not make the template writable.
         if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
         if (it == m_nodes.end()) return;
@@ -1064,6 +1065,8 @@ class ParamProcessor final {
         // Deep clone of new module
         // Note all module internal variables will be re-linked to the new modules by clone
         // However links outside the module (like on the upper cells) will not.
+        // The definition becomes a template the moment it is cloned: sign it here, once.
+        AstNode::frozenRegister(srcModp);
         AstNodeModule* const newModp = srcModp->cloneTree(false);
         // AstPin normally retains links to external module formals across cloning. For a cloned
         // interface, relink pins whose formals were cloned with the interface while clonep() is

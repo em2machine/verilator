@@ -185,11 +185,20 @@ static void process() {
 
         V3LinkDot::linkDotParamed(v3Global.rootp());  // Cleanup as made new modules
         V3Param::finalizeDeferredParams(v3Global.rootp());
+#ifdef VL_DEBUG
+        AstNode::frozenVerify("finalizeDeferredParams");
+#endif
         V3LinkLValue::linkLValue(v3Global.rootp());  // Resolve new VarRefs
+#ifdef VL_DEBUG
+        AstNode::frozenVerify("linkLValue");
+#endif
 
         // Link cleanup of 'with' as final link phase before V3Width
         // (called only once, not when width a single params)
         V3LinkWith::linkWith(v3Global.rootp());
+#ifdef VL_DEBUG
+        AstNode::frozenVerify("linkWith");
+#endif
 
         V3Error::abortIfErrors();
 
