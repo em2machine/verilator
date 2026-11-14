@@ -160,39 +160,6 @@ void AstNode::frozenUnregister(const AstNodeModule* modp) {
 
 void AstNode::frozenForget() { s_frozenTemplates.clear(); }
 
-void AstNode::frozenVerifyOne(const AstNodeModule* modp, const char* boundary) {
-    for (FrozenTemplateRecord& record : s_frozenTemplates) {
-        if (record.modp != modp) continue;
-        std::vector<V3Hash> hashes;
-        std::vector<std::string> labels;
-        const V3Hash now = moduleFingerprint(record.modp, &hashes, &labels);
-        if (now == record.hash) return;
-        std::string changed{"(child list length changed)"};
-        for (size_t i = 0; i < hashes.size() && i < record.childHashes.size(); ++i) {
-            if (hashes[i] == record.childHashes[i]) continue;
-            changed = (i < labels.size() ? labels[i] : std::string{"?"});
-            break;
-        }
-        if (frozenWatch()) {
-            FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
-            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d child=%s old=%u new=%u\n",
-                    boundary, record.name.c_str(), static_cast<int>(record.modp->dead()),
-                    static_cast<int>(record.modp->parameterizedTemplate()), changed.c_str(),
-                    record.hash.value(), now.value());
-            fflush(fhp);
-            record.hash = now;
-            record.childHashes = std::move(hashes);
-            record.childLabels = std::move(labels);
-        } else {
-            record.modp->v3fatalSrc("Protected template changed: "
-                                    << record.name << " before " << boundary << "; fingerprint "
-                                    << record.hash.value() << " -> " << now.value());
-        }
-        return;
-    }
-}
-
-void AstNode::frozenRefresh(AstNetlist*) {}
 
 void AstNode::frozenVerify(const char* boundary) {
     if (s_frozenTemplates.empty()) {
@@ -234,8 +201,6 @@ void AstNode::frozenRegister(AstNodeModule*) {}
 void AstNode::frozenUnregister(const AstNodeModule*) {}
 void AstNode::frozenVerify(const char*) {}
 void AstNode::frozenForget() {}
-void AstNode::frozenRefresh(AstNetlist*) {}
-void AstNode::frozenVerifyOne(const AstNodeModule*, const char*) {}
 #endif
 
 bool AstNode::frozenWatch() {
