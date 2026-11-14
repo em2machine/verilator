@@ -537,6 +537,10 @@ void V3LinkDotIfaceCapture::verifyNoDeadRefs(const LiveNodes& liveNodes) {
 }
 
 void V3LinkDotIfaceCapture::finalizeIfaceCapture() {
+#ifdef VL_DEBUG
+    AstNode::frozenVerify("postParamLink");
+    AstNode::frozenPhase("ifaceCapture");
+#endif
     if (!s_enabled) return;
     UINFO(4, "finalizeIfaceCapture: fixing remaining cross-interface refs");
     if (!v3Global.rootp()) return;

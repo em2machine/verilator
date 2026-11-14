@@ -17,11 +17,16 @@
 #include "V3PchAstMT.h"
 
 #include "V3Broken.h"
+#include "V3Hasher.h"
 #include "V3File.h"
 
 #include <iomanip>
 #include <memory>
 #include <sstream>
+
+#ifdef __APPLE__
+#include <dlfcn.h>
+#endif
 
 VL_DEFINE_DEBUG_FUNCTIONS;
 
@@ -34,8 +39,201 @@ uint64_t AstNode::s_editCntLast = 0;
 uint64_t AstNode::s_editCntGbl = 0;  // Hot cache line
 #ifdef VL_DEBUG
 thread_local unsigned AstNode::s_frozenRootLinks = 0;
+static const char* s_frozenPhase = "pre";
+void AstNode::frozenPhase(const char* name) { s_frozenPhase = name; }
+#else
+void AstNode::frozenPhase(const char*) {}
+#endif
+
+#ifdef VL_DEBUG
+namespace {
+// Watch output goes to stderr by default; tests that compare their compile log set a file instead.
+FILE* frozenWatchFh() {
+    static FILE* fh = []() -> FILE* {
+        const char* const path = std::getenv("VL_TEMPLATE_WATCH_LOG");
+        return path ? fopen(path, "a") : nullptr;
+    }();
+    return fh;
+}
+// Pointer identity only; never dereferenced, so a retired owner cannot be read after teardown.
+std::unordered_set<const AstNodeModule*> s_frozenRetired;
+}  // namespace
+void AstNode::frozenMarkRetired(const AstNodeModule* modp) { s_frozenRetired.insert(modp); }
+#else
+void AstNode::frozenMarkRetired(const AstNodeModule*) {}
+#endif
+
+#ifdef VL_DEBUG
+namespace {
+struct FrozenTemplateRecord final {
+    const AstNodeModule* modp;
+    std::string name;
+    V3Hash hash;
+    std::vector<V3Hash> childHashes;
+    std::vector<std::string> childLabels;
+};
+std::vector<FrozenTemplateRecord> s_frozenTemplates;
+}  // namespace
+
+namespace {
+// Structural hash of one node and its children. Deliberately not V3Hasher: that follows dtypep, which
+// can leave the definition and loop through shared dtype nodes, and it hashes modules by name only.
+bool plausible(const AstNode* nodep) {
+    return reinterpret_cast<uintptr_t>(nodep) > 0x1000;  // deleteNode poisons links with 0x1
+}
+
+V3Hash nodeHash(const AstNode* nodep) {
+    V3Hash hash{V3Hash{nodep->type().hash()} + V3Hash{nodep->name()}};
+    for (const AstNode* listp : {nodep->op1p(), nodep->op2p(), nodep->op3p(), nodep->op4p()}) {
+        if (!plausible(listp) && listp) {
+            fprintf(stderr, "FPBAD under %s %s: poisoned operand link\n",
+                    nodep->typeName(), nodep->name().c_str());
+            fflush(stderr);
+            continue;
+        }
+        for (const AstNode* childp = listp; childp; childp = childp->nextp()) {
+            if (!plausible(childp)) {
+                fprintf(stderr, "FPBAD under %s %s: poisoned next link\n",
+                        nodep->typeName(), nodep->name().c_str());
+                fflush(stderr);
+                break;
+            }
+            hash += nodeHash(childp);
+        }
+    }
+    return hash;
+}
+
+void collectChildHashes(const AstNodeModule* modp, std::vector<V3Hash>& hashes,
+                        std::vector<std::string>& labels) {
+    hashes.clear();
+    labels.clear();
+    for (const AstNode* listp : {modp->op1p(), modp->op2p(), modp->op3p(), modp->op4p()}) {
+        for (const AstNode* childp = listp; childp; childp = childp->nextp()) {
+            hashes.push_back(nodeHash(childp));
+            labels.push_back(std::string{childp->typeName()} + " " + childp->name());
+        }
+    }
+}
+
+V3Hash moduleFingerprint(const AstNodeModule* modp, std::vector<V3Hash>* hashesp = nullptr,
+                         std::vector<std::string>* labelsp = nullptr) {
+    V3Hash hash{V3Hash{modp->type().hash()}};  // name is lifecycle: retirement renames to __Vtpl
+    std::vector<V3Hash> hashes;
+    std::vector<std::string> labels;
+    collectChildHashes(modp, hashes, labelsp ? *labelsp : labels);
+    for (const V3Hash& childHash : hashes) hash += childHash;
+    if (hashesp) *hashesp = std::move(hashes);
+    return hash;
+}
+}  // namespace
+
+void AstNode::frozenRegister(AstNodeModule* modp) {
+    if (!modp) return;
+    if (frozenWatch()) {
+        FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+        fprintf(fhp, "FPREG %s count=%zu\n", modp->prettyName().c_str(), s_frozenTemplates.size());
+        fflush(fhp);
+    }
+
+    std::vector<V3Hash> hashes;
+    std::vector<std::string> labels;
+    const V3Hash hash = moduleFingerprint(modp, &hashes, &labels);
+    for (FrozenTemplateRecord& record : s_frozenTemplates) {
+        if (record.modp == modp) {
+            record.hash = hash;
+            record.childHashes = std::move(hashes);
+            record.childLabels = std::move(labels);
+            return;
+        }
+    }
+    s_frozenTemplates.push_back({modp, modp->prettyName(), hash, std::move(hashes), std::move(labels)});
+}
+
+void AstNode::frozenUnregister(const AstNodeModule* modp) {
+    for (size_t i = 0; i < s_frozenTemplates.size(); ++i) {
+        if (s_frozenTemplates[i].modp != modp) continue;
+        s_frozenTemplates.erase(s_frozenTemplates.begin() + i);
+        return;
+    }
+}
+
+void AstNode::frozenForget() { s_frozenTemplates.clear(); }
+
+
+void AstNode::frozenVerify(const char* boundary) {
+    if (s_frozenTemplates.empty()) {
+        FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+        fprintf(fhp, "FPEMPTY boundary=%s (no templates registered)\n", boundary);
+        fflush(fhp);
+        return;
+    }
+    for (FrozenTemplateRecord& record : s_frozenTemplates) {
+        std::vector<V3Hash> hashes;
+        std::vector<std::string> labels;
+        const V3Hash now = moduleFingerprint(record.modp, &hashes, &labels);
+        if (now == record.hash) continue;
+        std::string changed{"(child list length changed)"};
+        for (size_t i = 0; i < hashes.size() && i < record.childHashes.size(); ++i) {
+            if (hashes[i] == record.childHashes[i]) continue;
+            changed = (i < labels.size() ? labels[i] : std::string{"?"});
+            break;
+        }
+        if (frozenWatch()) {
+            FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+            fprintf(fhp, "FPCHANGE boundary=%s module=%s dead=%d tpl=%d child=%s old=%u new=%u\n",
+                    boundary, record.name.c_str(), static_cast<int>(record.modp->dead()),
+                    static_cast<int>(record.modp->parameterizedTemplate()), changed.c_str(),
+                    record.hash.value(), now.value());
+            fflush(fhp);
+            record.hash = now;
+            record.childHashes = std::move(hashes);
+            record.childLabels = std::move(labels);
+        } else {
+            record.modp->v3fatalSrc("Protected template changed: "
+                                    << record.name << " before " << boundary << "; fingerprint "
+                                    << record.hash.value() << " -> " << now.value());
+        }
+    }
+}
+#else
+void AstNode::frozenRegister(AstNodeModule*) {}
+void AstNode::frozenUnregister(const AstNodeModule*) {}
+void AstNode::frozenVerify(const char*) {}
+void AstNode::frozenForget() {}
+#endif
+
+bool AstNode::frozenWatch() {
+#ifdef VL_DEBUG
+    static const bool watch = std::getenv("VL_TEMPLATE_WATCH") != nullptr;
+    return watch;
+#else
+    return false;
+#endif
+}
+
+#ifdef VL_DEBUG
+namespace {
+void frozenWatchLog(const AstNode* nodep, const char* operation, void* caller0,
+                    bool ownerRetired) {
+    const char* symbol0 = "?";
+#ifdef __APPLE__
+    Dl_info info;
+    if (dladdr(caller0, &info) && info.dli_sname) symbol0 = info.dli_sname;
+#endif
+    FILE* const fhp = frozenWatchFh() ? frozenWatchFh() : stderr;
+    fprintf(fhp, "PROTWRITE %s phase=%s retired=%d target=%s caller=%s\n", operation,
+            s_frozenPhase, ownerRetired ? 1 : 0, nodep->prettyTypeName().c_str(), symbol0);
+    fflush(fhp);
+}
+}  // namespace
 
 void AstNode::frozenWrite(const char* operation) const {
+    if (frozenWatch()) {
+        frozenWatchLog(this, operation, __builtin_return_address(0),
+                       m_frozenOwnerp && s_frozenRetired.count(m_frozenOwnerp));
+        return;
+    }
     v3fatalSrc("Protected template write: " << operation << "; owner "
                << m_frozenOwnerp->prettyTypeName() << "; target " << prettyTypeName());
 }
@@ -1095,6 +1293,11 @@ void AstNode::purityCheck() {
 // Delete
 
 void AstNode::deleteNode() {
+#ifdef VL_DEBUG
+    // Teardown is not a template mutation; stop tracking the node before it goes away.
+    if (frozenWatch()) m_frozenOwnerp = nullptr;
+    if (VN_IS(this, NodeModule)) frozenUnregister(VN_AS(this, NodeModule));
+#endif
     frozenCheck("deleteNode");
     // private: Delete single node. Publicly call deleteTree() instead.
     UASSERT(!m_backp, "Delete called on node with backlink still set");
@@ -1125,6 +1328,9 @@ void AstNode::deleteTreeIter() {
     // private: Delete list of nodes. Publicly call deleteTree() instead.
     // Audited to make sure this is never nullptr
     for (AstNode *nodep = this, *nnextp; nodep; nodep = nnextp) {
+#ifdef VL_DEBUG
+        if (frozenWatch()) nodep->m_frozenOwnerp = nullptr;
+#endif
         nodep->frozenCheck("deleteTree");
         nnextp = nodep->m_nextp;
         // MUST be depth first!
@@ -1139,6 +1345,9 @@ void AstNode::deleteTreeIter() {
 }
 
 void AstNode::deleteTree() {
+#ifdef VL_DEBUG
+    if (frozenWatch()) m_frozenOwnerp = nullptr;
+#endif
     frozenCheck("deleteTree");
 #ifdef VL_DEBUG
     foreachAndNext([](AstNode* nodep) { nodep->frozenCheck("deleteTree"); });

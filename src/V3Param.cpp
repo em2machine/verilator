@@ -301,6 +301,9 @@ public:
     }
 
     void thaw(AstNodeModule* modp) {
+        // Signatures are taken at clone time and never released here: specializing a definition does
+        // not make the template writable.
+        if (AstNode::frozenWatch()) return;  // measurement: keep definitions frozen
         const auto it = m_nodes.find(modp);
         if (it == m_nodes.end()) return;
         for (AstNode* const nodep : it->second) nodep->frozenOwnerp(nullptr);
@@ -308,6 +311,7 @@ public:
     }
 
     ~ParamFrozenTemplates() {
+        if (AstNode::frozenWatch()) return;  // measurement: markers persist to the end
         // Recorded identities remain valid until their definition retires.
         for (const auto& definition : m_nodes) {
             for (AstNode* const nodep : definition.second) nodep->frozenOwnerp(nullptr);
@@ -1061,6 +1065,8 @@ class ParamProcessor final {
         // Deep clone of new module
         // Note all module internal variables will be re-linked to the new modules by clone
         // However links outside the module (like on the upper cells) will not.
+        // The definition becomes a template the moment it is cloned: sign it here, once.
+        AstNode::frozenRegister(srcModp);
         AstNodeModule* const newModp = srcModp->cloneTree(false);
         // AstPin normally retains links to external module formals across cloning. For a cloned
         // interface, relink pins whose formals were cloned with the interface while clonep() is
@@ -4001,6 +4007,9 @@ class ParamTop final : VNDeleter {
 #endif
                 modp->name(modp->name() + "__Vtpl");
                 modp->dead(true);
+#ifdef VL_DEBUG
+                AstNode::frozenMarkRetired(modp);
+#endif
             }
         }
     }
@@ -4153,6 +4162,10 @@ public:
 // Param class functions
 
 void V3Param::param(AstNetlist* rootp) {
+#ifdef VL_DEBUG
+    AstNode::frozenVerify("preParam");
+    AstNode::frozenPhase("param");
+#endif
     UINFO(2, __FUNCTION__ << ":");
     rootp->clearDeferredParamVarps();  // Defensive: drop any stragglers from a prior invocation
 
